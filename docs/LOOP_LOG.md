@@ -14,6 +14,7 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 | S-3b Developer ID signing + notarization of the macOS wheel | BLOCKED (needs owner) | Needs an Apple Developer account and credentials. Re-run `tests/s3_macos_loading.sh --gui` with a signed and notarized `.so`. |
 | S-3c Windows SmartScreen / Mark-of-the-Web | BLOCKED (needs owner) | Needs a Windows machine. |
 | Local coverage-guided fuzzing (1.1.3c) | Needs owner OK | Installing a nightly toolchain is outside the loop's allowed installs. CI's `fuzz` job covers it once pushed. |
+| 1.4.2b / 1.4.3b iOS session endpoint, host selection + pairing UI + Keychain | BLOCKED (needs owner) | Needs Swift SRP pairing (1.1.4b), which waits on the owner's `swift-srp` decision. Discovery (1.4.3a) is done. |
 
 ---
 
@@ -1105,3 +1106,32 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** 1.4.2b (needs 1.1.4b / the `swift-srp` decision).
 - **Next task:** 1.4.3 — discovery (`NetworkBrowser`), pairing UI, Keychain, `NSLocalNetworkUsageDescription`, `NSBonjourServices` (FR-UX-001/002, C-4). Its pairing part is blocked like 1.4.2b, so start with 1.4.3a: Bonjour discovery plus the Info.plist keys. No second task started.
 - **Owner actions:** push (this commit makes 27 ahead). **Decide on `swift-srp`**: it now blocks the iPhone sending anything to Blender. Still pending: the `mdns-sd`/`getrandom` reviews, and a device run.
+
+## 2026-09-25 — Iteration 40 — 1.4.3a (FR-UX-001, NET-001, C-4) — done
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 27 ahead of `origin`. The existing Phase 1 owner waiver applies.
+- **Split of 1.4.3:**
+  - **1.4.3a (this iteration):** Bonjour discovery and the Info.plist keys.
+  - **1.4.3b:** selecting a listed host, connecting, pairing UI, Keychain. **BLOCKED** on Swift pairing (1.1.4b, the owner's `swift-srp` decision); added to the Blocked items table together with 1.4.2b.
+- **API checked in the iOS 27 SDK** (`Network.swiftmodule/arm64e-apple-ios.swiftinterface:137-160`, `:2357-2382`, `:2406`, `:2430`): `NetworkBrowser(for:using:)`, `onStateUpdate`, `run(_:)` (the handler gets the full endpoint list on each change), `.bonjour(_:domain:includeTxtRecord:)`, `Bonjour.Endpoint.{name,txtRecord}`, `NWTXTRecord.dictionary`. `NetworkBrowser.State` is non-frozen, so the switch needs `@unknown default` (first build failed on that).
+- **Change:**
+  - `VCamIOS/VCamIOS/HostDiscovery.swift` (new):
+    - `DiscoveredHost` parses the vcp.md §3 TXT: `host=` (falls back to the opaque instance name), `blend=` (empty = "Unsaved file"), `tcp=` (0 or invalid = nil), `vcp=` (compatible if ≥ 1, our `HELLO.proto_min`). `udp=` is ignored on purpose: the device takes the UDP port from `SESSION_CHALLENGE`.
+    - `list` deduplicates per-interface duplicates and sorts by machine, then file.
+    - `HostBrowser` (`@MainActor @Observable`): `run()` browses `_vcam-ctl._tcp` until its task is cancelled, then clears the list. `problem` reports waiting/failed states (for example, local-network permission denied).
+  - `ContentView`: a first section "Blender on this network" (machine + file per row, "unsupported VCP version" when incompatible, a "Searching…" hint, and the problem text), browsing via `.task`. Manual host entry stays (FR-UX-001). Rows aren't tappable yet; selection comes with connecting (1.4.3b).
+  - `VCamIOS/Info.plist` (new, outside the synchronized folder so it isn't copied as a resource; merged with the generated plist via `INFOPLIST_FILE`): `NSLocalNetworkUsageDescription` and `NSBonjourServices = [_vcam-ctl._tcp]`. `_vcam._udp` isn't listed because the device never browses it.
+  - `project.pbxproj`: `INFOPLIST_FILE = Info.plist` (Debug/Release app configs); `HostDiscovery.swift` added to the test target's membership.
+- **Files changed:** `VCamIOS/VCamIOS/{HostDiscovery.swift (new),ContentView.swift}`, `VCamIOS/Info.plist` (new), `VCamIOS/VCamIOS.xcodeproj/project.pbxproj`, `VCamIOS/VCamIOSTests/HostDiscoveryTests.swift` (new), `IMPLEMENTATION_PROGRESS.md` (FR-UX-001/002, NFR-SEC-003, iOS test row), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `xcodebuild test` (iPhone 17 Pro sim): `Executed 18 tests, with 1 test skipped and 0 failures (0 unexpected)`, `** TEST SUCCEEDED **`. New: 4 TXT/list unit tests, and a live browse against an `NWListener` advertising `_vcam-ctl._tcp` (found, TXT update seen, gone after withdrawal, list empty after the browse task is cancelled; 6.3 s). The skip is the opt-in interop test.
+  - **Interop with the real Rust advertiser:** `vcam_native` (wheel rebuilt with maturin for Blender's Python 3.13, run from Blender's `python3.13`) `Session.start(0, …)` + `advertise("Interop Mac 1.4.3a", "interop_shot.blend")`, then `TEST_RUNNER_VCAM_INTEROP_HOST=… TEST_RUNNER_VCAM_INTEROP_BLEND=… xcodebuild test -only-testing:…/testFindsTheRustHostAdvertiser`: `VCAM_INTEROP_FOUND id=vcam-e171…-62150 machine=Interop Mac 1.4.3a file=interop_shot.blend tcp=62150`, `** TEST SUCCEEDED **`. Repeated with `blend=""`: `file=Unsaved file`, passed. So mdns-sd's empty `blend=` reaches `NWTXTRecord.dictionary` as `""`.
+  - **Built Info.plist** (`plutil -p`): `NSBonjourServices => ["_vcam-ctl._tcp"]`, `NSLocalNetworkUsageDescription => "VCamIOS finds Blender on your local network, …"`, camera string unchanged.
+  - **Simulator smoke:** built, installed, launched (`kr8t0s.VCamIOS: 75546`); the screenshot shows "Blender on this network" listing "Studio Mac (Rust host) / shot_010.blend" from a live Rust host, plus the ones below.
+  - **Mutation check** (sequential, snapshot restored and `cmp`-verified): empty `blend=` kept (`XCTAssertNil failed: ""`), no dedupe (list order/ids), version `>` instead of `>=` (boundary test), list not cleared after stop (`a stopped browser keeps no stale hosts`), TXT not requested (live test: machine fell back to the instance name). 5/5 caught.
+  - `pytest BlenderAddOn/tests`: `19 passed`. `gen_testdata.py --check`: `testdata/ up to date (21 files)`. `cargo test` (in `native/`, no Rust change): 60 passed, 0 failed. No add-on change, so the Blender scripts weren't re-run.
+- **Finding (flag, not fixed):** the smoke list also showed the two interop hosts I had stopped with SIGKILL and six `owners-Mac.local / Unsaved file` hosts whose processes no longer exist (`dns-sd -B _vcam-ctl._tcp` listed 7 instances; only one advertiser was running). A host that dies without its goodbye stays in the Bonjour cache until the PTR/TXT TTL, which mdns-sd sets to 4500 s (`mdns-sd-0.21.4/src/service_info.rs:24`). Blender crashing or a headless test exiting without `Session.stop()` therefore leaves "ghost" Blenders on the iPhone for up to 75 min. Options for a later task: a shorter host TTL for our records, or have the device resolve/probe before listing. No requirement changed.
+- **Not verified:** the local-network permission prompt and browsing on a real iPhone over Wi-Fi (device, owner).
+- **Blocked:** 1.4.3b (with 1.4.2b), added to the table.
+- **Next task:** 1.4.4 — origin reset, scale/locks UI sent as `CONTROL_STATE`; LiDAR/plane detection when available (FR-TRK-003/004, FR-CTL-004). Sending needs a session endpoint (1.4.2b), so the state/encoding and UI parts come first. No second task started.
+- **Owner actions:** push (this commit makes 28 ahead). **Decide on `swift-srp`**: it blocks 1.4.2b/1.4.3b. Still pending: the `mdns-sd`/`getrandom` reviews, a device run.

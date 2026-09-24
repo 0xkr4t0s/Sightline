@@ -9,10 +9,30 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var controller: TrackingSessionController
+    @State private var browser = HostBrowser()
 
     var body: some View {
         NavigationStack {
             Form {
+                Section("Blender on this network") {
+                    ForEach(browser.hosts) { host in
+                        VStack(alignment: .leading) {
+                            Text(host.machine)
+                            Text(host.isCompatible ? host.fileLabel : "\(host.fileLabel) · unsupported VCP version")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if browser.hosts.isEmpty {
+                        Text("Searching… Start a VCam session in Blender's sidebar.")
+                            .foregroundStyle(.secondary)
+                    }
+                    if let problem = browser.problem {
+                        Text(problem)
+                            .foregroundStyle(.red)
+                    }
+                }
+
                 Section("Destination") {
                     TextField("Desktop receiver host", text: $controller.host)
                         .textInputAutocapitalization(.never)
@@ -55,6 +75,7 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("VCamIOS")
+            .task { await browser.run() }
         }
     }
 
