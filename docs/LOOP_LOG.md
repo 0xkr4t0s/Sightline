@@ -418,3 +418,45 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
   1. Push, so CI can confirm the clippy fix.
   2. Optional, to stop this class of surprise: run `rustup update stable` on this Mac, so local clippy matches CI's stable. The loop may not update global toolchains without asking. The alternative is pinning `native/rust-toolchain.toml` to an exact version, which would change the plan's "stable" choice (0.1.3) — owner's call.
 - **Next task:** read the next CI run once pushed. Otherwise 1.1.2: `testdata/vcp/` and `testdata/coords/` golden vectors from a committed generator script.
+
+## 2026-09-24 — Iteration 16 — 1.1.2 (NFR-QA-003, DM-004, PR-004) — done
+
+- **Orient:** `main` is 2 commits ahead of `origin`, so the iteration-15 clippy fix is unpushed and there's no new CI run to read. Local rustc is still 1.97.1.
+- **Work:**
+  - `tools/gen_testdata.py`: stdlib-only reference implementation of `vcp.md` Draft 1 and generator of `testdata/`. It refuses to write unless:
+    - its SRP-6a reproduces **RFC 5054 Appendix B** exactly (k, x, v, A, B, u, premaster; SHA-1, 1024-bit, same code path as VCP's SHA-256/3072);
+    - its HKDF reproduces **RFC 5869 A.1**;
+    - its bytes equal all **6** example blocks in `vcp.md`;
+    - its coordinate cases match hand-derived forward/up directions.
+
+    `--check` mode is for CI.
+  - `testdata/vcp/`:
+    - `messages.json` + 10 `.bin`: the 6 spec examples, plus a large-seq limited pose, an epoch-only `CONTROL_STATE`, a UTF-8 `STATUS`, and `ERROR`;
+    - `receive.json`: 26 §4.3/§6 cases, 5 accept, covering every §4.3 step, the size boundaries 1200/1201, reflection (wrong direction key), forward-compatible longer payload, non-finite floats, quaternion norm limits, `motion_scale` range, and absent-field bytes ignored;
+    - `freshness.json`: seq, state_seq, status_seq, origin_epoch wrap;
+    - `pairing.json`: fixed code `042917`, s, a, b; all SRP values; K, T_pair, M1, M2, PK; the 4 TCP messages; a wrong-code M1;
+    - `session.json`: T_sess, proofs, k_d2h/k_h2d, the 4 TCP messages, and a first POSE under the derived key;
+    - `srp-rfc5054-appendix-b.json`.
+  - `testdata/coords/arkit_to_canonical.json`: 9 DM-004 cases.
+  - `.github/workflows/ci.yml`: job `python` gains a step `python tools/gen_testdata.py --check`.
+- **Independent verification** (a separate script, not the generator's code):
+  - The 3072-bit N typed from RFC 5054 Appendix A equals `srp-0.6.0/src/groups/3072.bin`: `True`.
+  - A from-scratch §4.3/§6 receiver agreed with all 26 `receive.json` labels (mismatches: `[]`) and accepted all 7 valid UDP messages in `messages.json`.
+  - `.bin` files are identical to their hex.
+  - The session's first POSE verifies under `k_d2h`.
+  - Pairing TCP payloads: HELLO 43, CHALLENGE 416, PROOF 416, ACCEPT 32, as specified.
+  - Coordinates re-derived with rotation matrices (Ry·Rx·Rz, C = Rx(90°)): max difference 4.82e-10 against the 1e-6 tolerance.
+- **Commands run:**
+  - `python3 tools/gen_testdata.py` (Python 3.14.6): `wrote 17 files to testdata/`.
+  - `--check`: `testdata/ up to date (17 files)`, with both `python3` and `.venv.nosync/bin/python`.
+  - `.venv.nosync/bin/actionlint .github/workflows/ci.yml`: exit 0.
+  - `.venv.nosync/bin/pytest -q -p no:cacheprovider BlenderAddOn/tests`: `12 passed in 0.02s`.
+  - No Rust or Swift change, so cargo and xcodebuild weren't re-run. The consumers come in 1.1.3/1.1.4.
+- **Files changed:** `tools/gen_testdata.py` (new), `testdata/vcp/*` and `testdata/coords/*` (new, 17 files), `.github/workflows/ci.yml`, `IMPLEMENTATION_PROGRESS.md` (DM-004 Partial; PR-004 **Done**; PR-001..003/006 and NFR-QA-003 Partial), `docs/LOOP_LOG.md`.
+- **Owner action:** push; this and iteration 15's clippy fix are both waiting. Three commits are now ahead of `origin`.
+- **Next task:** 1.1.3, `vcam-protocol` types, encode/decode, HMAC, conversions, tests from `testdata/`, and fuzz targets. It's too big for one iteration, so split it:
+  - 1.1.3a: header + UDP messages + receive rules, against `messages.json`/`receive.json`/`freshness.json`;
+  - 1.1.3b: pairing/session crypto against `pairing.json`/`session.json`/RFC 5054;
+  - 1.1.3c: `native/fuzz/` targets.
+
+  Crypto crates (sha2/hmac/hkdf and an SRP bigint) will need pinning; the plan names HMAC and PAKE work but not specific crates, so pick RustCrypto and log it.

@@ -1,0 +1,207 @@
+{
+  "cases": [
+    {
+      "channel": "udp",
+      "description": "vcp.md §6.1 example",
+      "direction": "d2h",
+      "fields": {
+        "capture_time_ns": 1000000000,
+        "flags": 0,
+        "orientation": [
+          0.7071067690849304,
+          0.0,
+          0.0,
+          0.7071067690849304
+        ],
+        "position_m": [
+          0.5,
+          -1.25,
+          1.600000023841858
+        ],
+        "seq": 1,
+        "tracking_state": 5
+      },
+      "file": "pose_normal.bin",
+      "hex": "564350310101cdab34122a000100000000ca9a3b000000000000003f0000a0bfcdcccc3ff304353f0000000000000000f304353f050007e8fd155e7c875a",
+      "key": "d2h",
+      "name": "pose_normal",
+      "session_id": 305441741,
+      "type": 1
+    },
+    {
+      "channel": "udp",
+      "description": "large seq and timestamp, identity orientation, limited(relocalizing)",
+      "direction": "d2h",
+      "fields": {
+        "capture_time_ns": 123456789012345,
+        "flags": 0,
+        "orientation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "position_m": [
+          -3.0,
+          0.0,
+          12.75
+        ],
+        "seq": 4000000000,
+        "tracking_state": 4
+      },
+      "file": "pose_limited_relocalizing.bin",
+      "hex": "564350310101cdab34122a0000286bee79df0d8648700000000040c00000000000004c410000000000000000000000000000803f04002e81625111c5e52b",
+      "key": "d2h",
+      "name": "pose_limited_relocalizing",
+      "session_id": 305441741,
+      "type": 1
+    },
+    {
+      "channel": "udp",
+      "description": "vcp.md §6.2 example",
+      "direction": "d2h",
+      "fields": {
+        "fields": 7,
+        "lock_flags": 2,
+        "motion_scale": 10.0,
+        "origin_epoch": 3,
+        "state_seq": 7
+      },
+      "file": "control_state_full.bin",
+      "hex": "564350310102cdab341210000700000007000000000020410200030030d31c22a813fd2b",
+      "key": "d2h",
+      "name": "control_state_full",
+      "session_id": 305441741,
+      "type": 2
+    },
+    {
+      "channel": "udp",
+      "description": "only origin_epoch present; motion_scale/lock_flags bytes are present but must be ignored",
+      "direction": "d2h",
+      "fields": {
+        "fields": 4,
+        "lock_flags": 0,
+        "motion_scale": 0.0,
+        "origin_epoch": 65535,
+        "state_seq": 8
+      },
+      "file": "control_state_epoch_only.bin",
+      "hex": "564350310102cdab341210000800000004000000000000000000ffffccb6148e7319de4f",
+      "key": "d2h",
+      "name": "control_state_epoch_only",
+      "session_id": 305441741,
+      "type": 2
+    },
+    {
+      "channel": "udp",
+      "description": "vcp.md §6.3 request example",
+      "direction": "h2d",
+      "fields": {
+        "mode": 0,
+        "t1": 5000000000,
+        "t2": 0,
+        "t3": 0
+      },
+      "file": "clock_request.bin",
+      "hex": "564350310103cdab34121c000000000000f2052a0100000000000000000000000000000000000000c2edc7e91166520f",
+      "key": "h2d",
+      "name": "clock_request",
+      "session_id": 305441741,
+      "type": 3
+    },
+    {
+      "channel": "udp",
+      "description": "vcp.md §6.3 reply example; offset/delay per the §6.3 formulas with the given t4",
+      "direction": "d2h",
+      "fields": {
+        "expected_delay_ns": 950000,
+        "expected_offset_ns": -4000075000,
+        "mode": 1,
+        "t1": 5000000000,
+        "t2": 1000400000,
+        "t3": 1000450000,
+        "t4_host_on_receipt": 5001000000
+      },
+      "file": "clock_reply.bin",
+      "hex": "564350310103cdab34121c000100000000f2052a0100000080e4a03b00000000d0a7a13b00000000224eb235b63291db",
+      "key": "d2h",
+      "name": "clock_reply",
+      "session_id": 305441741,
+      "type": 3
+    },
+    {
+      "channel": "udp",
+      "description": "vcp.md §6.4 example",
+      "direction": "h2d",
+      "fields": {
+        "applied_pose_seq": 1,
+        "camera_name": "Camera",
+        "control_ack": 7,
+        "error_code": 0,
+        "flags": 3,
+        "status_seq": 2
+      },
+      "file": "status_camera.bin",
+      "hex": "564350310104cdab341216000200000001000000070000000000030643616d657261365eea92631acafe",
+      "key": "h2d",
+      "name": "status_camera",
+      "session_id": 305441741,
+      "type": 4
+    },
+    {
+      "channel": "udp",
+      "description": "error 1 (no camera), non-ASCII name (str8 counts bytes)",
+      "direction": "h2d",
+      "fields": {
+        "applied_pose_seq": 0,
+        "camera_name": "Kamera Ω",
+        "control_ack": 0,
+        "error_code": 1,
+        "flags": 1,
+        "status_seq": 3
+      },
+      "file": "status_no_camera_utf8.bin",
+      "hex": "564350310104cdab34121900030000000000000000000000010001094b616d65726120cea9c3dcd53857a58b29",
+      "key": "h2d",
+      "name": "status_no_camera_utf8",
+      "session_id": 305441741,
+      "type": 4
+    },
+    {
+      "channel": "tcp",
+      "description": "vcp.md §9.3 example",
+      "direction": "d2h",
+      "fields": {
+        "device_id": "00112233445566778899aabbccddeeff",
+        "device_name": "iPhone",
+        "mode": 0,
+        "nonce_d": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+        "proto_max": 1,
+        "proto_min": 1
+      },
+      "file": "hello_pair.bin",
+      "hex": "564350310140000000002b000001010000112233445566778899aabbccddeeffa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5066950686f6e65",
+      "key": null,
+      "name": "hello_pair",
+      "session_id": 0,
+      "type": 64
+    },
+    {
+      "channel": "tcp",
+      "description": "vcp.md §11",
+      "direction": "h2d",
+      "fields": {
+        "code": 3,
+        "message": "device not paired"
+      },
+      "file": "error_not_paired.bin",
+      "hex": "56435031014f0000000016000300000011646576696365206e6f7420706169726564",
+      "key": null,
+      "name": "error_not_paired",
+      "session_id": 0,
+      "type": 79
+    }
+  ],
+  "float_tolerance": 0.0,
+  "note": "floats in fields are the exact binary32 values on the wire"
+}
