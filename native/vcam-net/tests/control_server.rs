@@ -7,7 +7,8 @@ use std::net::{TcpStream, UdpSocket};
 use std::time::{Duration, Instant};
 
 use vcam_net::{
-    ControlEvent, ControlServer, FileStore, MemoryStore, PairedDevice, PairingStore, ServerConfig,
+    ControlEvent, ControlServer, FileStore, HostStatus, MemoryStore, PairedDevice, PairingStore,
+    ServerConfig,
 };
 use vcam_protocol::{
     ControlErrorMsg, ControlMessage, Endpoint, HEADER_LEN, Hello, Message, Pose, Role,
@@ -323,6 +324,31 @@ fn paired_session_drives_real_udp_and_disconnect_revokes_it() {
             _ => unreachable!(),
         }
     );
+
+    server
+        .update_status(
+            session_id,
+            HostStatus {
+                applied_pose_seq: 1,
+                control_ack: 0,
+                error_code: 0,
+                camera_name: Some("Camera".into()),
+            },
+        )
+        .unwrap();
+    tx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut bytes = [0; 1200];
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        assert!(Instant::now() < deadline, "applied STATUS deadline expired");
+        let n = tx.recv(&mut bytes).unwrap();
+        if let Message::Status(status) = device.open(&bytes[..n]).unwrap()
+            && status.applied_pose_seq == 1
+        {
+            assert_eq!((status.flags, status.camera_name.as_str()), (3, "Camera"));
+            break;
+        }
+    }
 
     drop(client);
     assert_eq!(

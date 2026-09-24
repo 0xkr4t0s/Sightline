@@ -9,7 +9,7 @@ pub use control::{
     ControlEvent, ControlServer, MemoryStore, PairedDevice, PairingStore, ServerConfig,
 };
 pub use store::FileStore;
-pub use udp::{ControlSample, DropCounts, PoseSample, ReceiverStats, UdpReceiver};
+pub use udp::{ControlSample, DropCounts, HostStatus, PoseSample, ReceiverStats, UdpReceiver};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use vcam_protocol::{ControlState, DropReason, Endpoint, MAX_DATAGRAM, Message, Pose, SeqFilter};
+use vcam_protocol::{
+    Clock, ControlState, DropReason, Endpoint, MAX_DATAGRAM, Message, Pose, SeqFilter, Status,
+};
 
 /// How often the thread checks for `stop` while idle (NFR-REL-002: stop within 1 s).
 const POLL: Duration = Duration::from_millis(50);
@@ -21,6 +23,44 @@ const POLL: Duration = Duration::from_millis(50);
 const WINDOW: Duration = Duration::from_secs(1);
 /// vcp.md §8: end a session after 10 s without an authenticated device datagram.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+
+const STATUS_INTERVAL: Duration = Duration::from_millis(500);
+const CLOCK_INTERVAL: Duration = Duration::from_secs(1);
+
+/// State actually applied by the host, not merely received over UDP (vcp.md §6.4).
+/// Publish after Blender's main-thread apply step; the network worker owns sequence/flags.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostStatus {
+    pub applied_pose_seq: u32,
+    pub control_ack: u32,
+    pub error_code: u16,
+    /// None means no camera bound; Some names the driven object (at most 63 UTF-8 bytes).
+    pub camera_name: Option<String>,
+}
+
+impl Default for HostStatus {
+    fn default() -> Self {
+        Self {
+            applied_pose_seq: 0,
+            control_ack: 0,
+            error_code: 1, // no camera until the application binds one
+            camera_name: None,
+        }
+    }
+}
+
+impl HostStatus {
+    fn into_message(self, status_seq: u32) -> Message {
+        Message::Status(Status {
+            status_seq,
+            applied_pose_seq: self.applied_pose_seq,
+            control_ack: self.control_ack,
+            error_code: self.error_code,
+            flags: 1 | (u8::from(self.camera_name.is_some()) << 1),
+            camera_name: self.camera_name.unwrap_or_default(),
+        })
+    }
+}
 
 /// The newest accepted pose, when it arrived, and from where.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -104,6 +144,10 @@ struct ActiveSession {
     endpoint: Endpoint,
     started_at: Instant,
     last_received: Option<Instant>,
+    status: Message,
+    status_dirty: bool,
+    last_status: Option<Instant>,
+    last_clock: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -170,6 +214,50 @@ impl State {
         }
     }
 
+    /// Called with the session lock held through send_to: revocation cannot race publication.
+    fn send_due(&mut self, socket: &UdpSocket, out: &mut Vec<u8>, epoch: Instant) {
+        let now = Instant::now();
+        self.expire(now);
+        let (Some(active), Some(source)) = (self.active.as_mut(), self.stats.source) else {
+            return;
+        };
+        if active.status_dirty
+            || active
+                .last_status
+                .is_none_or(|t| now.duration_since(t) >= STATUS_INTERVAL)
+        {
+            if let Message::Status(status) = &mut active.status {
+                let Some(next) = status.status_seq.checked_add(1) else {
+                    // Never wrap to a sequence the device would discard as stale.
+                    *self = Self::default();
+                    return;
+                };
+                status.status_seq = next;
+            }
+            if !send(socket, &active.endpoint, &active.status, source, out)
+                && let Message::Status(status) = &mut active.status
+            {
+                status.status_seq -= 1;
+            }
+            active.status_dirty = false;
+            active.last_status = Some(now);
+        }
+        if active
+            .last_clock
+            .is_none_or(|t| now.duration_since(t) >= CLOCK_INTERVAL)
+        {
+            let t1 = u64::try_from(epoch.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            send(
+                socket,
+                &active.endpoint,
+                &Message::Clock(Clock::Request { t1 }),
+                source,
+                out,
+            );
+            active.last_clock = Some(now);
+        }
+    }
+
     fn snapshot(&mut self, now: Instant) -> ReceiverStats {
         while self
             .window
@@ -219,6 +307,7 @@ impl UdpReceiver {
     pub fn start(bind: SocketAddr) -> io::Result<Self> {
         let socket = UdpSocket::bind(bind)?;
         socket.set_read_timeout(Some(POLL))?;
+        socket.set_write_timeout(Some(POLL))?;
         let local_addr = socket.local_addr()?;
         let state = Arc::new(Mutex::new(State::default()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -251,6 +340,10 @@ impl UdpReceiver {
                 endpoint,
                 started_at: Instant::now(),
                 last_received: None,
+                status: HostStatus::default().into_message(0),
+                status_dirty: true,
+                last_status: None,
+                last_clock: None,
             }),
             ..State::default()
         };
@@ -274,6 +367,40 @@ impl UdpReceiver {
             .active
             .as_ref()
             .is_some_and(|s| s.endpoint.session_id() == session_id)
+    }
+
+    /// Publish applied host state for this session; stale callers cannot update a replacement.
+    /// Changes are sent on the next worker poll (at most 50 ms when idle), then at 2 Hz.
+    /// Receiving POSE/CONTROL_STATE alone never advances the acknowledgements.
+    pub fn update_status(&self, session_id: u32, status: HostStatus) -> io::Result<()> {
+        if status
+            .camera_name
+            .as_ref()
+            .is_some_and(|name| name.len() > Status::MAX_NAME)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "camera name exceeds 63 UTF-8 bytes",
+            ));
+        }
+        let mut state = lock(&self.state);
+        let active = state
+            .active
+            .as_mut()
+            .filter(|s| s.endpoint.session_id() == session_id)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "session is no longer active")
+            })?;
+        let seq = match &active.status {
+            Message::Status(status) => status.status_seq,
+            _ => unreachable!("session status is always STATUS"),
+        };
+        let message = status.into_message(seq);
+        if active.status != message {
+            active.status = message;
+            active.status_dirty = true;
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -320,6 +447,8 @@ fn receive_loop(socket: &UdpSocket, state: &Mutex<State>, stop: &AtomicBool) {
     // One byte more than the largest valid datagram, so oversize datagrams are seen as oversize
     // instead of being silently truncated to a valid length.
     let mut buf = [0u8; MAX_DATAGRAM + 1];
+    let mut out = Vec::with_capacity(MAX_DATAGRAM);
+    let epoch = Instant::now();
     while !stop.load(Ordering::Acquire) {
         match socket.recv_from(&mut buf) {
             Ok((n, from)) => {
@@ -343,7 +472,21 @@ fn receive_loop(socket: &UdpSocket, state: &Mutex<State>, stop: &AtomicBool) {
                 drop(lock(state));
             }
         }
+        if !stop.load(Ordering::Acquire) {
+            lock(state).send_due(socket, &mut out, epoch);
+        }
     }
+}
+
+fn send(
+    socket: &UdpSocket,
+    endpoint: &Endpoint,
+    message: &Message,
+    source: SocketAddr,
+    out: &mut Vec<u8>,
+) -> bool {
+    out.clear();
+    endpoint.seal(message, out).is_ok() && socket.send_to(out, source).is_ok_and(|n| n == out.len())
 }
 
 /// `WSAEMSGSIZE`: on Windows, `recv_from` fails this way for a datagram larger than the buffer.

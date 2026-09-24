@@ -4,8 +4,8 @@
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
-use vcam_net::UdpReceiver;
-use vcam_protocol::{ControlState, Endpoint, Message, Pose, Role};
+use vcam_net::{HostStatus, UdpReceiver};
+use vcam_protocol::{Clock, ControlState, Endpoint, Message, Pose, Role, Status};
 
 const SID: u32 = 0x1234_ABCD;
 const K_D2H: [u8; 32] = [0x11; 32];
@@ -169,4 +169,215 @@ fn stop_is_prompt_and_releases_the_port() {
     let again = UdpReceiver::start(addr).expect("port released");
     again.set_session(host()).unwrap();
     assert_eq!(again.local_addr(), addr);
+}
+
+fn receive(tx: &UdpSocket, endpoint: &Endpoint) -> Message {
+    tx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut bytes = [0; 1200];
+    let n = tx.recv(&mut bytes).unwrap();
+    endpoint.open(&bytes[..n]).unwrap()
+}
+
+fn receive_status(tx: &UdpSocket, endpoint: &Endpoint) -> Status {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        assert!(Instant::now() < deadline, "STATUS deadline expired");
+        if let Message::Status(status) = receive(tx, endpoint) {
+            return status;
+        }
+    }
+}
+
+fn quiet(tx: &UdpSocket, duration: Duration) {
+    tx.set_read_timeout(Some(duration)).unwrap();
+    let err = tx
+        .recv(&mut [0; 1200])
+        .expect_err("unexpected outbound datagram");
+    assert!(matches!(
+        err.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    ));
+}
+
+fn drain(tx: &UdpSocket) {
+    tx.set_nonblocking(true).unwrap();
+    while tx.recv(&mut [0; 1200]).is_ok() {}
+    tx.set_nonblocking(false).unwrap();
+}
+
+#[test]
+fn outbound_heartbeat_rates_continue_without_device_traffic() {
+    let rx = start();
+    let tx = sender();
+    tx.send_to(&datagram(&pose(9)), rx.local_addr()).unwrap();
+    let mut statuses = Vec::new();
+    let mut clocks = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while clocks.len() < 3 {
+        assert!(Instant::now() < deadline, "CLOCK deadline expired");
+        match receive(&tx, &device()) {
+            Message::Status(s) => {
+                assert_eq!(s.status_seq, statuses.len() as u32 + 1);
+                // Reception is not application: only the host apply path may acknowledge.
+                assert_eq!((s.applied_pose_seq, s.control_ack), (0, 0));
+                assert_eq!((s.flags, s.error_code, s.camera_name.as_str()), (1, 1, ""));
+                statuses.push(Instant::now());
+            }
+            Message::Clock(Clock::Request { t1 }) => clocks.push(t1),
+            m => panic!("unexpected host message: {m:?}"),
+        }
+    }
+    assert!((4..=6).contains(&statuses.len()), "{statuses:?}");
+    for times in statuses.windows(2) {
+        assert!(
+            (Duration::from_millis(450)..Duration::from_millis(900))
+                .contains(&times[1].duration_since(times[0]))
+        );
+    }
+    for times in clocks.windows(2) {
+        assert!(
+            (900_000_000..1_500_000_000).contains(&(times[1] - times[0])),
+            "{clocks:?}"
+        );
+    }
+}
+
+#[test]
+fn applied_status_changes_are_prompt_validated_and_session_scoped() {
+    let rx = start();
+    let tx = sender();
+    tx.send_to(&datagram(&pose(9)), rx.local_addr()).unwrap();
+    assert_eq!(receive_status(&tx, &device()).status_seq, 1);
+    assert!(matches!(
+        receive(&tx, &device()),
+        Message::Clock(Clock::Request { .. })
+    ));
+    let status = HostStatus {
+        applied_pose_seq: 8,
+        control_ack: 7,
+        error_code: 0,
+        camera_name: Some("é".repeat(31) + "a"), // 63 UTF-8 bytes
+    };
+    let published = Instant::now();
+    rx.update_status(SID, status.clone()).unwrap();
+    let received = receive_status(&tx, &device());
+    assert!(
+        published.elapsed() < Duration::from_millis(400),
+        "change waited for 2 Hz timer"
+    );
+    assert_eq!(
+        (
+            received.status_seq,
+            received.applied_pose_seq,
+            received.control_ack,
+            received.flags
+        ),
+        (2, 8, 7, 3)
+    );
+    assert_eq!(received.camera_name, status.camera_name.clone().unwrap());
+    assert_eq!(received.error_code, 0);
+    rx.update_status(SID, status.clone()).unwrap();
+    quiet(&tx, Duration::from_millis(150)); // no change, no extra packet
+    assert_eq!(
+        rx.update_status(SID + 1, HostStatus::default())
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::NotConnected
+    );
+    assert_eq!(
+        rx.update_status(
+            SID,
+            HostStatus {
+                camera_name: Some("é".repeat(32)),
+                ..status
+            }
+        )
+        .unwrap_err()
+        .kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    let next = receive_status(&tx, &device());
+    assert_eq!(next.status_seq, 3);
+    assert_eq!(
+        (
+            next.applied_pose_seq,
+            next.control_ack,
+            next.flags,
+            next.camera_name
+        ),
+        (8, 7, 3, received.camera_name)
+    );
+}
+
+#[test]
+fn outbound_routing_requires_authentication_and_stops_on_revocation() {
+    let mut rx = UdpReceiver::start("127.0.0.1:0".parse().unwrap()).unwrap();
+    let (a, b) = (sender(), sender());
+    a.send_to(&datagram(&pose(1)), rx.local_addr()).unwrap();
+    quiet(&a, Duration::from_millis(150));
+    rx.set_session(host()).unwrap();
+    quiet(&a, Duration::from_millis(150)); // no address inherited from pre-session traffic
+    a.send_to(&datagram(&pose(1)), rx.local_addr()).unwrap();
+    assert_eq!(receive_status(&a, &device()).status_seq, 1);
+    assert!(matches!(
+        receive(&a, &device()),
+        Message::Clock(Clock::Request { .. })
+    ));
+    let mut forged = datagram(&pose(2));
+    *forged.last_mut().unwrap() ^= 1;
+    b.send_to(&forged, rx.local_addr()).unwrap();
+    wait_until("bad tag dropped", || rx.stats().dropped.tag == 1);
+    assert_eq!(receive_status(&a, &device()).status_seq, 2);
+    quiet(&b, Duration::from_millis(150));
+    b.send_to(&datagram(&pose(2)), rx.local_addr()).unwrap();
+    wait_until("roamed", || {
+        rx.stats().source == Some(b.local_addr().unwrap())
+    });
+    assert_eq!(receive_status(&b, &device()).status_seq, 3);
+    drain(&a);
+    quiet(&a, Duration::from_millis(150));
+
+    // Replacement resets routing, keys, acknowledgements and outbound sequence.
+    rx.update_status(
+        SID,
+        HostStatus {
+            applied_pose_seq: 2,
+            ..HostStatus::default()
+        },
+    )
+    .unwrap();
+    let new_host = Endpoint::new(Role::Host, SID + 1, &[3; 32], &[4; 32]).unwrap();
+    let new_device = Endpoint::new(Role::Device, SID + 1, &[3; 32], &[4; 32]).unwrap();
+    rx.set_session(new_host).unwrap();
+    drain(&b);
+    b.send_to(&datagram(&pose(3)), rx.local_addr()).unwrap();
+    quiet(&b, Duration::from_millis(650));
+    let mut bytes = Vec::new();
+    new_device.seal(&pose(1), &mut bytes).unwrap();
+    b.send_to(&bytes, rx.local_addr()).unwrap();
+    let status = receive_status(&b, &new_device);
+    assert_eq!(
+        (
+            status.status_seq,
+            status.applied_pose_seq,
+            status.control_ack
+        ),
+        (1, 0, 0)
+    );
+    assert!(matches!(
+        receive(&b, &new_device),
+        Message::Clock(Clock::Request { .. })
+    ));
+    rx.clear_session(SID + 1);
+    drain(&b);
+    b.send_to(&bytes, rx.local_addr()).unwrap();
+    quiet(&b, Duration::from_millis(650));
+    assert_eq!(
+        rx.update_status(SID + 1, HostStatus::default())
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::NotConnected
+    );
+    rx.stop();
+    quiet(&b, Duration::from_millis(150));
 }

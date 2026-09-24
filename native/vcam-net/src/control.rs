@@ -19,7 +19,7 @@ use vcam_protocol::{
     PROTOCOL_VERSION, PairError, Role, SessionChallenge, SessionHandshake,
 };
 
-use crate::{ControlSample, PoseSample, ReceiverStats, UdpReceiver};
+use crate::{ControlSample, HostStatus, PoseSample, ReceiverStats, UdpReceiver};
 
 const POLL: Duration = Duration::from_millis(50);
 
@@ -206,6 +206,11 @@ impl ControlServer {
     #[must_use]
     pub fn stats(&self) -> ReceiverStats {
         self.shared.udp().stats()
+    }
+
+    /// Publish state applied by Blender for the current session (not just received samples).
+    pub fn update_status(&self, session_id: u32, status: HostStatus) -> io::Result<()> {
+        self.shared.udp().update_status(session_id, status)
     }
 
     /// Starts (or restarts) pairing with a fresh code, valid for one success, 3 failures, or
