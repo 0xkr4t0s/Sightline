@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Start/stop the VCam host session (task 1.2.5b). The N-panel toggle comes in 1.3.3."""
+"""VCam session operators: start/stop (1.2.5b), pairing and Set/Clear origin (1.3.3)."""
 
 from __future__ import annotations
 
 import bpy
 
 from ..core import session
+from ..core.apply import ORIGIN_NAME, ZERO_YAW_KEY
+from ..core.status import code_label
 
 
 class VCAM_OT_session_start(bpy.types.Operator):
@@ -55,4 +57,76 @@ class VCAM_OT_session_stop(bpy.types.Operator):
 
     def execute(self, context):
         session.stop()
+        return {'FINISHED'}
+
+
+class VCAM_OT_pairing_start(bpy.types.Operator):
+    """Show a 6-digit code to type on the iPhone (valid for 5 minutes, one pairing)"""
+
+    bl_idname = "vcam.pairing_start"
+    bl_label = "Pair iPhone"
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        live = session.current()
+        return live is not None and live.pairing_code() is None
+
+    def execute(self, context):
+        try:
+            code = session.current().enable_pairing()
+        except (OSError, RuntimeError) as e:
+            self.report({'ERROR'}, f"Pairing not started: {e}")
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Pairing code {code_label(code)}")
+        return {'FINISHED'}
+
+
+class VCAM_OT_pairing_cancel(bpy.types.Operator):
+    """Stop accepting the current pairing code"""
+
+    bl_idname = "vcam.pairing_cancel"
+    bl_label = "Cancel Pairing"
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        live = session.current()
+        return live is not None and live.pairing_code() is not None
+
+    def execute(self, context):
+        session.current().disable_pairing()
+        return {'FINISHED'}
+
+
+class VCAM_OT_origin_set(bpy.types.Operator):
+    """Re-zero position and heading at the current pose (same as Set origin on the iPhone)"""
+
+    bl_idname = "vcam.origin_set"
+    bl_label = "Set Origin"
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        return session.state.session_id is not None and session.current() is not None
+
+    def execute(self, context):
+        session.set_origin()
+        return {'FINISHED'}
+
+
+class VCAM_OT_origin_clear(bpy.types.Operator):
+    """Forget the Set-origin zero: follow the device's own start position and heading"""
+
+    bl_idname = "vcam.origin_clear"
+    bl_label = "Clear Origin"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        origin = bpy.data.objects.get(ORIGIN_NAME)
+        return origin is not None and ZERO_YAW_KEY in origin
+
+    def execute(self, context):
+        session.clear_origin()
         return {'FINISHED'}

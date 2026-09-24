@@ -1,11 +1,22 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import bpy
-from .session import VCAM_OT_session_start, VCAM_OT_session_stop
+from .session import (
+    VCAM_OT_origin_clear,
+    VCAM_OT_origin_set,
+    VCAM_OT_pairing_cancel,
+    VCAM_OT_pairing_start,
+    VCAM_OT_session_start,
+    VCAM_OT_session_stop,
+)
 
 _classes = (
     VCAM_OT_session_start,
     VCAM_OT_session_stop,
+    VCAM_OT_pairing_start,
+    VCAM_OT_pairing_cancel,
+    VCAM_OT_origin_set,
+    VCAM_OT_origin_clear,
 )
 
 

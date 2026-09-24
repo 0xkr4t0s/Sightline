@@ -17,7 +17,8 @@ import socket
 import time
 from dataclasses import dataclass
 
-from .apply import Applier
+from .apply import ORIGIN_NAME, Applier, clear_zero
+from .status import pose_latency_ms
 
 HOST_ID_FILE = "host_id"
 HOST_ID_LEN = 16
@@ -26,22 +27,29 @@ DEFAULT_PORT = 47000
 POLL_INTERVAL = 1.0 / 60.0
 # Events drained per poll; the rest wait for the next tick so one poll stays short.
 MAX_EVENTS_PER_POLL = 64
+# The N-panel only redraws on user events; the poll refreshes it at this interval (seconds).
+REDRAW_INTERVAL = 0.25
 
 
 @dataclass
 class SessionState:
-    """Main-thread view of the session, updated by `_poll` (read by the N-panel in 1.3.3)."""
+    """Main-thread view of the session, updated by `_poll` and read by the N-panel."""
 
     device_id: str | None = None
     device_name: str | None = None
     session_id: int | None = None
     last_error: str | None = None
+    # From the last applied pose (vcp.md §6.1) and the clock estimate (NET-003).
+    tracking_state: int | None = None
+    latency_ms: float | None = None
+    clock_jitter_ms: float | None = None
 
 
 _package: str | None = None
 _session = None
 state = SessionState()
 _applier = Applier()
+_last_redraw = float("-inf")
 
 
 def load_or_create_host_id(directory: str) -> bytes:
@@ -112,6 +120,8 @@ def start(port: int = DEFAULT_PORT, bind: str = "0.0.0.0") -> None:
     except (OSError, ValueError) as e:
         # Discovery is a convenience; manual host entry still works (FR-UX-001).
         state.last_error = f"DNS-SD: {e}"
+    smoothing = getattr(getattr(bpy.context.scene, "vcam_props", None), "smoothing", False)
+    session.set_smoothing(bool(smoothing))
     _session = session
     if not bpy.app.timers.is_registered(_poll):
         bpy.app.timers.register(_poll, first_interval=POLL_INTERVAL, persistent=True)
@@ -132,6 +142,45 @@ def stop() -> None:
     except Exception as e:  # noqa: BLE001 - unregister must always complete
         state.last_error = f"stop: {e}"
         print(f"VCam: {state.last_error}")
+
+
+def applier() -> Applier:
+    """The current session's apply state (controls, applied seq), for the N-panel."""
+    return _applier
+
+
+def set_origin() -> None:
+    """Set origin from Blender: re-zero the rig at the next applied pose (FR-TRK-003)."""
+    _applier.request_set_origin()
+
+
+def clear_origin() -> None:
+    """Drop the stored zero, so the rig follows the device's own world origin again."""
+    import bpy
+
+    origin = bpy.data.objects.get(ORIGIN_NAME)
+    if origin is not None:
+        clear_zero(origin)
+    _applier.reapply()
+
+
+def set_smoothing(enabled: bool) -> None:
+    """FR-BL-006 toggle; applies to the running session (and to later ones via the scene)."""
+    if running():
+        _session.set_smoothing(enabled)
+
+
+def _tag_redraw(now: float) -> None:
+    global _last_redraw
+    import bpy
+
+    if now - _last_redraw < REDRAW_INTERVAL:
+        return
+    _last_redraw = now
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
 
 
 def _poll() -> float | None:
@@ -158,7 +207,15 @@ def _poll() -> float | None:
         error = session.discovery_error()
         if error:
             state.last_error = f"DNS-SD: {error}"
-        _applier.tick(session, state.session_id, bpy.context.scene, time.monotonic())
+        now = time.monotonic()
+        applied = _applier.tick(session, state.session_id, bpy.context.scene, now)
+        if applied is not None:
+            state.tracking_state = applied["tracking_state"]
+            clock = session.stats()["clock"]
+            if clock is not None:
+                state.latency_ms = pose_latency_ms(applied["capture_time_ns"], clock["offset_ns"], session.host_clock_ns())
+                state.clock_jitter_ms = clock["jitter_ns"] / 1e6
+        _tag_redraw(now)
     except Exception as e:  # noqa: BLE001 - an exception would silently unregister the timer
         state.last_error = str(e)
     return POLL_INTERVAL

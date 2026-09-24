@@ -74,6 +74,13 @@ def read_zero(origin):
     return tuple(origin[ZERO_POSITION_KEY]), float(origin[ZERO_YAW_KEY])
 
 
+def clear_zero(origin) -> None:
+    """Back to the identity zero: the device's own world origin and heading."""
+    for key in (ZERO_POSITION_KEY, ZERO_YAW_KEY):
+        if key in origin:
+            del origin[key]
+
+
 def write_zero(origin, position, orientation) -> None:
     p0, yaw0 = zero_from_pose(position, orientation)
     origin[ZERO_POSITION_KEY] = list(p0)
@@ -88,10 +95,20 @@ class Applier:
         self.controls = Controls()
         self.applied_seq = 0
         self._set_origin = False
+        self._force = False
         self._published: tuple | None = None
         self._published_at = float("-inf")
 
-    def tick(self, session, session_id: int | None, scene, now: float) -> None:
+    def request_set_origin(self) -> None:
+        """Set origin from Blender (FR-TRK-003): re-zero at the pose applied on the next tick."""
+        self._set_origin = True
+
+    def reapply(self) -> None:
+        """Apply the current pose again on the next tick (after the zero changed)."""
+        self._force = True
+
+    def tick(self, session, session_id: int | None, scene, now: float):
+        """Applies the newest pose if due; returns the pose dict it applied, else None."""
         if session_id != self.session_id:  # a new session restarts every sequence number
             self.__init__()
             self.session_id = session_id
@@ -99,7 +116,9 @@ class Applier:
         changed, set_origin = self.controls.update(session.latest_control()) if session_id else (False, False)
         self._set_origin |= set_origin
         pose = session.latest_pose()
-        if camera is not None and pose is not None and (pose["seq"] != self.applied_seq or changed or self._set_origin):
+        applied = None
+        due = pose is not None and (pose["seq"] != self.applied_seq or changed or self._set_origin or self._force)
+        if camera is not None and due:
             position, orientation = pose["smoothed_position"], pose["smoothed_orientation"]
             origin = ensure_rig(scene, camera)
             if self._set_origin:
@@ -109,8 +128,10 @@ class Applier:
             local = local_pose(position, orientation, read_zero(origin), c.motion_scale, c.lock_flags)
             camera.matrix_basis = pose_matrix(*local)
             self.applied_seq = pose["seq"]
+            self._force = False
+            applied = pose
         if session_id is None:
-            return
+            return applied
         error = ERROR_NONE if camera is not None else ERROR_NO_CAMERA
         name = camera_name(camera.name) if camera is not None else None
         content = (self.controls.state_seq, error, name)
@@ -118,3 +139,4 @@ class Applier:
             session.update_status(session_id, self.applied_seq, self.controls.state_seq, error, name)
             self._published = (self.applied_seq, *content)
             self._published_at = now
+        return applied

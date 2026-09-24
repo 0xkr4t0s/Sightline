@@ -5,7 +5,12 @@ from __future__ import annotations
 
 import bpy
 
+from ..core import session
 from ..core.session import DEFAULT_PORT
+
+
+def _smoothing_changed(self, _context):
+    session.set_smoothing(self.smoothing)
 
 
 class VCamProperties(bpy.types.PropertyGroup):
@@ -28,4 +33,10 @@ class VCamProperties(bpy.types.PropertyGroup):
         description="Camera object to drive (defaults to the scene camera)",
         type=bpy.types.Object,
         poll=lambda self, obj: obj.type == 'CAMERA',
+    )
+    smoothing: bpy.props.BoolProperty(
+        name="Smoothing",
+        description="Smooth the incoming pose (One-Euro filter). Raw poses are always kept",
+        default=False,
+        update=_smoothing_changed,
     )

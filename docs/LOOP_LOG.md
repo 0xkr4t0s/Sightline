@@ -949,3 +949,39 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none.
 - **Next task:** 1.3.3 — N-panel: session toggle, pairing code, device, stats, camera picker, origin reset, scale/locks (FR-BL-004). No second task started.
 - **Owner actions:** push (this commit makes 21 ahead). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.
+
+## 2026-09-25 — Iteration 35 — 1.3.3 (FR-BL-004, FR-BL-006, FR-TRK-003) — done
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 21 ahead of `origin`; no new CI run. Existing Phase 1 owner waiver applies.
+- **Scope:** the full N-panel for FR-BL-004 plus the operators and state it needs. Not in: FR-TRK-002 "hold the last good pose while limited" (not in the 1.3.3 row), FR-BL-007 robustness (1.3.4), the CI integration test (1.3.5).
+- **Decisions:**
+  - Scale and locks are shown read-only. The iPhone owns them as idempotent CONTROL_STATE (FR-CTL-009), and a second writer in Blender would split the source of truth.
+  - Set/Clear Origin act on the host-side zero stored on `VCam_Origin`, so they don't conflict with the device.
+  - Latency is the pose leg: host clock − (capture − clock offset) when the pose is applied.
+  - The panel redraws at 4 Hz from the session poll, because panels otherwise redraw only on user events.
+  - Smoothing is a scene property: it's applied at session start and when toggled.
+- **Code:**
+  - `BlenderAddOn/core/status.py` (new, pure): tracking/scale/locks/code labels and `pose_latency_ms`.
+  - `core/apply.py`: `clear_zero`; `Applier.request_set_origin`/`reapply`; `tick` returns the applied pose.
+  - `core/session.py`:
+    - new state fields: tracking_state, latency_ms, clock_jitter_ms;
+    - entry points `applier()`, `set_origin()`, `clear_origin()`, `set_smoothing()`;
+    - latency computed after each apply;
+    - the 4 Hz `_tag_redraw`;
+    - smoothing applied at start.
+  - Operators `vcam.pairing_start`, `vcam.pairing_cancel`, `vcam.origin_set`, `vcam.origin_clear` (with polls); the scene property `smoothing`; `ui/panels.py` rewritten.
+- **Files changed:** `BlenderAddOn/core/{status.py (new),apply.py,session.py}`, `BlenderAddOn/operators/{__init__.py,session.py}`, `BlenderAddOn/properties/scene_props.py`, `BlenderAddOn/ui/panels.py`, `BlenderAddOn/tests/test_status.py` (new), `tests/blender/addon_panel.py` (new), `IMPLEMENTATION_PROGRESS.md` (FR-BL-004 Done, FR-BL-006, FR-UX-001/002, pytest row, NFR-QA-001, re-anchored `session.py`/`apply.py` line numbers), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `pytest BlenderAddOn/tests`: 19 passed (4 new).
+  - `tests/blender/addon_panel.py` (headless, fake iPhone at 60 Hz): `VCAM_ADDON_PANEL_OK latency_ms=2.88 jitter_ms=0.000 pairing=start/cancel/start set_origin=zeroed clear_origin=raw smoothing=toggled`. The first run measured 0.57 ms; both are loopback.
+  - **GUI visual check** (Blender 5.2.2 with its window, timer-driven throwaway script, deleted afterwards): `GUI_PANEL_OK distinct_camera_positions=17 parent=VCam_Origin latency=11.780312 tracking=5`. Two screenshots were inspected:
+    - pairing: "Pairing code 045 479", Cancel Pairing, Waiting for the iPhone, scale 1:1, locks None, Set/Clear Origin disabled;
+    - streaming: Fake iPhone, Tracking Normal, 60 Hz loss 0.0 %, latency 11.8 ms (jitter 0.01 ms), scale 1:10, locks Roll (from `--scale 10 --locks 2`), origin VCam_Origin, Set Origin enabled, Clear disabled.
+    The factory-startup splash partly covers the left edge of the panel text. This run is also the first check of the session timer driving the camera in the real event loop.
+    Its final `applied_pose_seq=244` comes from the script itself: it blocked Blender's main thread in `communicate()` during the fake's linger, so this isn't a product issue.
+  - **Mutation check** (restored and `cmp`-verified): latency sign (pytest), Set Origin a no-op, and the smoothing toggle not wired (`addon_panel.py`). All 3 caught.
+  - Blender `smoke_native`, `session_native`, `addon_session` and `addon_apply` pass. `cargo fmt --check`/clippy clean; `cargo test` 60 passed. `gen_testdata.py --check`: up to date. `xcodebuild test`: 11 tests, 0 failures, `** TEST SUCCEEDED **`.
+- **Not verified:** the panel on Windows/Linux; latency on real Wi-Fi (S-4, owner/device).
+- **Blocked:** none.
+- **Next task:** 1.3.4 — robustness: file reload (`load_post`), undo, camera deleted or renamed (FR-BL-007). No second task started.
+- **Owner actions:** push (this commit makes 22 ahead). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.
