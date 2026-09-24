@@ -20,7 +20,9 @@ fn device() -> Endpoint {
 }
 
 fn start() -> UdpReceiver {
-    UdpReceiver::start("127.0.0.1:0".parse().unwrap(), host()).unwrap()
+    let rx = UdpReceiver::start("127.0.0.1:0".parse().unwrap()).unwrap();
+    rx.set_session(host()).unwrap();
+    rx
 }
 
 fn pose(seq: u32) -> Message {
@@ -164,6 +166,7 @@ fn stop_is_prompt_and_releases_the_port() {
     );
     rx.stop(); // idempotent
     // Re-enabling works without restarting: the same port binds again at once.
-    let again = UdpReceiver::start(addr, host()).expect("port released");
+    let again = UdpReceiver::start(addr).expect("port released");
+    again.set_session(host()).unwrap();
     assert_eq!(again.local_addr(), addr);
 }

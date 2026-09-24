@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test code: a panic is a test failure
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, UdpSocket};
 use std::time::{Duration, Instant};
 
 use vcam_net::{
@@ -15,7 +15,7 @@ use vcam_protocol::{
 };
 
 const DEVICE: [u8; 16] = [7; 16];
-const UDP_PORT: u16 = 47_000;
+const UDP_PORT: u16 = 0; // Each server binds an isolated ephemeral UDP port.
 
 fn server_with(config: ServerConfig) -> ControlServer {
     ControlServer::start(
@@ -30,13 +30,13 @@ fn server() -> ControlServer {
     server_with(ServerConfig::new([0xF0; 16], UDP_PORT))
 }
 
-struct Client(TcpStream);
+struct Client(TcpStream, u16);
 
 impl Client {
     fn connect(server: &ControlServer) -> Self {
         let s = TcpStream::connect(server.local_addr()).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        Self(s)
+        Self(s, server.udp_addr().port())
     }
 
     fn send(&mut self, msg: &ControlMessage) {
@@ -96,7 +96,7 @@ impl Client {
         let ControlMessage::SessionChallenge(challenge) = self.recv() else {
             panic!("expected SESSION_CHALLENGE")
         };
-        assert_eq!(challenge.udp_port, UDP_PORT);
+        assert_eq!(challenge.udp_port, self.1);
         let hs = SessionHandshake::new(pk, &hello, &challenge).unwrap();
         let proof_d = hs.device_proof().unwrap();
         self.send(&ControlMessage::SessionProof { proof: proof_d });
@@ -137,8 +137,141 @@ fn wrong(code: &str) -> String {
     format!("{:06}", (code.parse::<u32>().unwrap() + 1) % 1_000_000)
 }
 
+fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !cond() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn pose(seq: u32) -> Message {
+    Message::Pose(Pose {
+        seq,
+        capture_time_ns: 1,
+        position_m: [0.0; 3],
+        orientation: [0.0, 0.0, 0.0, 1.0],
+        tracking_state: Pose::TRACKING_NORMAL,
+        flags: 0,
+    })
+}
+
+fn datagram(keys: &SessionKeys, message: &Message) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    Endpoint::new(Role::Device, keys.session_id, &keys.k_d2h, &keys.k_h2d)
+        .unwrap()
+        .seal(message, &mut bytes)
+        .unwrap();
+    bytes
+}
+
+fn send_pose(tx: &UdpSocket, server: &ControlServer, keys: &SessionKeys, seq: u32) {
+    tx.send_to(&datagram(keys, &pose(seq)), server.udp_addr())
+        .unwrap();
+}
+
 #[test]
-fn pair_then_session_yields_matching_keys_and_a_working_udp_endpoint() {
+fn unverified_session_cannot_activate_udp_or_replace_an_active_session() {
+    let server = server();
+    let mut paired = Client::connect(&server);
+    let pk = paired.pair(&server.enable_pairing().unwrap());
+    let mut intruder = Client::connect(&server);
+    let h = hello(Hello::MODE_SESSION, [1; 16]);
+    intruder.send(&ControlMessage::Hello(h.clone()));
+    let ControlMessage::SessionChallenge(challenge) = intruder.recv() else {
+        panic!()
+    };
+    let pending = SessionHandshake::new(&pk, &h, &challenge)
+        .unwrap()
+        .keys()
+        .unwrap();
+    let tx = UdpSocket::bind("127.0.0.1:0").unwrap();
+    // Even correctly keyed UDP cannot arrive before SESSION_PROOF is verified.
+    send_pose(&tx, &server, &pending, 50);
+    wait_until("pending UDP rejected", || {
+        server.stats().dropped.session > 0
+    });
+    assert_eq!(server.latest_pose(), None);
+    assert_eq!(server.stats().session_id, None);
+    let active = paired.session(&pk);
+    send_pose(&tx, &server, &active, 1);
+    wait_until("active pose", || server.latest_pose().is_some());
+    intruder.send(&ControlMessage::SessionProof { proof: [0; 32] });
+    intruder.expect_error(ControlErrorMsg::PROOF_FAILED);
+    assert_eq!(server.stats().session_id, Some(active.session_id));
+    send_pose(&tx, &server, &active, 2);
+    wait_until("active survives invalid proof", || {
+        server.latest_pose().is_some_and(|p| p.pose.seq == 2)
+    });
+}
+
+#[test]
+fn authenticated_control_refreshes_idle_timeout_but_forged_udp_does_not() {
+    let server = server();
+    let mut client = Client::connect(&server);
+    let pk = client.pair(&server.enable_pairing().unwrap());
+    let keys = client.session(&pk);
+    next_event(&server); // Paired
+    next_event(&server); // SessionStarted
+    let tx = UdpSocket::bind("127.0.0.1:0").unwrap();
+    send_pose(&tx, &server, &keys, 100);
+    wait_until("first pose", || server.latest_pose().is_some());
+    let started = Instant::now();
+    let mut refreshed = None;
+    let mut forged = datagram(&keys, &pose(101));
+    *forged.last_mut().unwrap() ^= 1;
+    client
+        .0
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .unwrap();
+    loop {
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "idle session did not close"
+        );
+        if refreshed.is_none() && started.elapsed() >= Duration::from_secs(2) {
+            let control = Message::ControlState(vcam_protocol::ControlState {
+                state_seq: 1,
+                motion_scale: Some(2.0),
+                lock_flags: Some(0),
+                origin_epoch: Some(1),
+            });
+            tx.send_to(&datagram(&keys, &control), server.udp_addr())
+                .unwrap();
+            wait_until("control refresh", || server.latest_control().is_some());
+            refreshed = Some(Instant::now());
+        }
+        tx.send_to(&forged, server.udp_addr()).unwrap();
+        match client.0.read(&mut [0]) {
+            Ok(0) => break,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            other => panic!("unexpected TCP read: {other:?}"),
+        }
+    }
+    assert!(
+        refreshed.unwrap().elapsed() >= Duration::from_millis(9700),
+        "valid CONTROL_STATE must extend liveness"
+    );
+    assert!(
+        matches!(next_event(&server), ControlEvent::SessionEnded { session_id, .. } if session_id == keys.session_id)
+    );
+    assert_eq!(server.stats().session_id, None);
+    assert_eq!(server.latest_pose(), None);
+    assert_eq!(server.latest_control(), None);
+    assert_eq!(server.stats().source, None);
+    let mut reconnected = Client::connect(&server);
+    let fresh = reconnected.session(&pk);
+    send_pose(&tx, &server, &fresh, 1);
+    wait_until("reconnect after timeout", || server.latest_pose().is_some());
+    assert_eq!(server.latest_pose().unwrap().pose.seq, 1);
+}
+
+#[test]
+fn paired_session_drives_real_udp_and_disconnect_revokes_it() {
     let server = server();
     let code = server.enable_pairing().unwrap();
     assert_eq!(code.len(), 6);
@@ -158,25 +291,19 @@ fn pair_then_session_yields_matching_keys_and_a_working_udp_endpoint() {
     let keys = client.session(&pk);
     let ControlEvent::SessionStarted {
         device_id,
-        keys: host_keys,
+        session_id,
         peer,
         ..
     } = next_event(&server)
     else {
         panic!("expected SessionStarted")
     };
-    assert_eq!((device_id, &host_keys), (DEVICE, &keys));
+    assert_eq!((device_id, session_id), (DEVICE, keys.session_id));
     assert_eq!(peer, client.0.local_addr().unwrap());
 
     // The keys drive the UDP channel.
     let device = Endpoint::new(Role::Device, keys.session_id, &keys.k_d2h, &keys.k_h2d).unwrap();
-    let host = Endpoint::new(
-        Role::Host,
-        host_keys.session_id,
-        &host_keys.k_d2h,
-        &host_keys.k_h2d,
-    )
-    .unwrap();
+    let tx = UdpSocket::bind("127.0.0.1:0").unwrap();
     let pose = Message::Pose(Pose {
         seq: 1,
         capture_time_ns: 1,
@@ -187,7 +314,15 @@ fn pair_then_session_yields_matching_keys_and_a_working_udp_endpoint() {
     });
     let mut datagram = Vec::new();
     device.seal(&pose, &mut datagram).unwrap();
-    assert_eq!(host.open(&datagram).unwrap(), pose);
+    tx.send_to(&datagram, server.udp_addr()).unwrap();
+    wait_until("UDP pose", || server.latest_pose().is_some());
+    assert_eq!(
+        server.latest_pose().unwrap().pose,
+        match pose {
+            Message::Pose(p) => p,
+            _ => unreachable!(),
+        }
+    );
 
     drop(client);
     assert_eq!(
@@ -197,20 +332,45 @@ fn pair_then_session_yields_matching_keys_and_a_working_udp_endpoint() {
             session_id: keys.session_id
         }
     );
+    assert_eq!(server.latest_pose(), None);
+    assert_eq!(server.latest_control(), None);
+    assert_eq!(server.stats().source, None);
+    tx.send_to(&datagram, server.udp_addr()).unwrap();
+    wait_until("revoked datagram dropped", || {
+        server.stats().dropped.session > 0
+    });
+    assert_eq!(server.latest_pose(), None);
 }
 
 #[test]
-fn reconnect_uses_the_stored_pairing_and_a_new_session_id() {
+fn reconnect_replaces_keys_closes_old_tcp_and_resets_samples() {
     let server = server();
     let code = server.enable_pairing().unwrap();
     let mut first = Client::connect(&server);
     let pk = first.pair(&code);
     let k1 = first.session(&pk);
-    drop(first);
+    let tx = UdpSocket::bind("127.0.0.1:0").unwrap();
+    send_pose(&tx, &server, &k1, 100);
+    wait_until("old pose", || server.latest_pose().is_some());
     let mut second = Client::connect(&server);
     let k2 = second.session(&pk);
     assert_ne!(k1.session_id, k2.session_id);
     assert_ne!(k1.k_d2h, k2.k_d2h, "fresh nonces must give fresh keys");
+    let mut byte = [0];
+    assert_eq!(
+        first.0.read(&mut byte).unwrap(),
+        0,
+        "replaced TCP must close"
+    );
+    assert_eq!(server.latest_pose(), None);
+    assert_eq!(server.stats().source, None);
+    send_pose(&tx, &server, &k1, 101);
+    wait_until("old keys rejected", || server.stats().dropped.total() > 0);
+    assert_eq!(server.latest_pose(), None);
+    send_pose(&tx, &server, &k2, 1);
+    wait_until("new seq starts at one", || server.latest_pose().is_some());
+    assert_eq!(server.latest_pose().unwrap().pose.seq, 1);
+    assert_eq!(server.stats().session_id, Some(k2.session_id));
 }
 
 #[test]
@@ -307,8 +467,14 @@ fn a_second_concurrent_pairing_is_busy() {
 }
 
 #[test]
-fn stop_closes_idle_connections_promptly() {
+fn stop_closes_active_and_idle_connections_and_releases_both_ports() {
     let mut server = server();
+    let mut active = Client::connect(&server);
+    let pk = active.pair(&server.enable_pairing().unwrap());
+    let keys = active.session(&pk);
+    let tx = UdpSocket::bind("127.0.0.1:0").unwrap();
+    send_pose(&tx, &server, &keys, 1);
+    wait_until("active before stop", || server.latest_pose().is_some());
     let mut idle = Client::connect(&server); // never sends anything
     let _other = Client::connect(&server);
     std::thread::sleep(Duration::from_millis(100));
@@ -321,7 +487,7 @@ fn stop_closes_idle_connections_promptly() {
     );
     let mut buf = [0u8; 1];
     assert_eq!(
-        idle.0.read(&mut buf).unwrap_or(0),
+        idle.0.read(&mut buf).unwrap(),
         0,
         "connection must be closed"
     );
@@ -329,6 +495,21 @@ fn stop_closes_idle_connections_promptly() {
         TcpStream::connect(server.local_addr()).is_err(),
         "listener must be closed"
     );
+    assert_eq!(active.0.read(&mut buf).unwrap(), 0);
+    assert_eq!(server.latest_pose(), None);
+    assert_eq!(server.stats().session_id, None);
+    let mut restarted = ControlServer::start(
+        server.local_addr(),
+        ServerConfig::new([0xF0; 16], server.udp_addr().port()),
+        Box::new(MemoryStore::default()),
+    )
+    .expect("TCP and UDP ports must be released even while the stopped handle lives");
+    let mut client = Client::connect(&restarted);
+    let pk = client.pair(&restarted.enable_pairing().unwrap());
+    let keys = client.session(&pk);
+    send_pose(&tx, &restarted, &keys, 1);
+    wait_until("pose after re-enable", || restarted.latest_pose().is_some());
+    restarted.stop();
 }
 
 #[test]
@@ -412,7 +593,7 @@ fn file_pairing_survives_server_restart_without_a_new_code() {
     let new_keys = Client::connect(&second).session(&pk);
     assert_ne!(old_keys.k_d2h, new_keys.k_d2h);
     assert!(
-        matches!(next_event(&second), ControlEvent::SessionStarted { keys, .. } if keys == new_keys)
+        matches!(next_event(&second), ControlEvent::SessionStarted { session_id, .. } if session_id == new_keys.session_id)
     );
 }
 
@@ -465,7 +646,7 @@ fn storage_failure_closes_without_accepting_and_allows_retry() {
         }
     ));
     assert!(
-        matches!(next_event(&server), ControlEvent::SessionStarted { keys: host_keys, .. } if host_keys == keys)
+        matches!(next_event(&server), ControlEvent::SessionStarted { session_id, .. } if session_id == keys.session_id)
     );
 }
 

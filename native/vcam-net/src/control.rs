@@ -15,9 +15,11 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use vcam_protocol::{
-    ControlError, ControlErrorMsg, ControlMessage, HEADER_LEN, Hello, HostPairing,
-    PROTOCOL_VERSION, PairError, SessionChallenge, SessionHandshake, SessionKeys,
+    ControlError, ControlErrorMsg, ControlMessage, Endpoint, HEADER_LEN, Hello, HostPairing,
+    PROTOCOL_VERSION, PairError, Role, SessionChallenge, SessionHandshake,
 };
+
+use crate::{ControlSample, PoseSample, ReceiverStats, UdpReceiver};
 
 const POLL: Duration = Duration::from_millis(50);
 
@@ -56,7 +58,7 @@ impl PairingStore for MemoryStore {
 pub struct ServerConfig {
     /// Random per host install (vcp.md §9.3).
     pub host_id: [u8; 16],
-    /// Sent in `SESSION_CHALLENGE`: the port of this session's `UdpReceiver`.
+    /// UDP bind port on the TCP bind address; 0 chooses a free port, advertised in SESSION_CHALLENGE.
     pub udp_port: u16,
     /// vcp.md §9.4: a code is valid for 5 minutes...
     pub code_lifetime: Duration,
@@ -88,12 +90,12 @@ pub enum ControlEvent {
     },
     /// Persistence failed: no PAIR_ACCEPT was sent and the connection is closed.
     PairingStorageFailed { device_id: [u8; 16], error: String },
-    /// Build the session's host `Endpoint` from `keys` and start receiving on `udp_port`.
+    /// The authenticated session now owns UDP reception; samples are available on the server.
     SessionStarted {
         device_id: [u8; 16],
         device_name: String,
         peer: SocketAddr,
-        keys: SessionKeys,
+        session_id: u32,
     },
     /// The session's TCP connection closed (or a newer session replaced it).
     SessionEnded {
@@ -113,8 +115,8 @@ struct Inner {
     pairing: Option<PairingWindow>,
     pairing_busy: bool,
     last_session_id: u32,
-    /// Incremented per started session; a connection only reports `SessionEnded` if it still owns
-    /// the newest session (a reconnect supersedes the old one, NET-004).
+    /// Identifies the current owner so replaced connections cannot revoke its UDP state.
+    /// Checked even if two concurrent handshakes happen to choose the same wire session ID.
     session_generation: u64,
 }
 
@@ -122,11 +124,16 @@ struct Shared {
     inner: Mutex<Inner>,
     config: ServerConfig,
     stop: AtomicBool,
+    udp: Mutex<UdpReceiver>,
 }
 
 impl Shared {
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn udp(&self) -> MutexGuard<'_, UdpReceiver> {
+        self.udp.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -141,12 +148,14 @@ pub struct ControlServer {
 impl ControlServer {
     pub fn start(
         bind: SocketAddr,
-        config: ServerConfig,
+        mut config: ServerConfig,
         store: Box<dyn PairingStore>,
     ) -> io::Result<Self> {
         let listener = TcpListener::bind(bind)?;
         listener.set_nonblocking(true)?;
         let local_addr = listener.local_addr()?;
+        let udp = UdpReceiver::start(SocketAddr::new(bind.ip(), config.udp_port))?;
+        config.udp_port = udp.local_addr().port();
         let shared = Arc::new(Shared {
             inner: Mutex::new(Inner {
                 store,
@@ -157,6 +166,7 @@ impl ControlServer {
             }),
             config,
             stop: AtomicBool::new(false),
+            udp: Mutex::new(udp),
         });
         let (tx, events) = mpsc::channel();
         let thread = std::thread::Builder::new()
@@ -176,6 +186,26 @@ impl ControlServer {
     #[must_use]
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    #[must_use]
+    pub fn udp_addr(&self) -> SocketAddr {
+        self.shared.udp().local_addr()
+    }
+
+    #[must_use]
+    pub fn latest_pose(&self) -> Option<PoseSample> {
+        self.shared.udp().latest_pose()
+    }
+
+    #[must_use]
+    pub fn latest_control(&self) -> Option<ControlSample> {
+        self.shared.udp().latest_control()
+    }
+
+    #[must_use]
+    pub fn stats(&self) -> ReceiverStats {
+        self.shared.udp().stats()
     }
 
     /// Starts (or restarts) pairing with a fresh code, valid for one success, 3 failures, or
@@ -211,6 +241,7 @@ impl ControlServer {
     /// Stops accepting, closes every connection, and joins every thread. Idempotent.
     pub fn stop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
+        self.shared.udp().stop();
         if let Some(thread) = self.listener.take() {
             let _ = thread.join();
         }
@@ -264,6 +295,7 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>, events: &Sender<Con
                             peer,
                             shared: &shared,
                             events: &events,
+                            active_session: None,
                         };
                         conn.serve();
                     });
@@ -311,11 +343,13 @@ struct Conn<'a> {
     peer: SocketAddr,
     shared: &'a Shared,
     events: &'a Sender<ControlEvent>,
+    active_session: Option<(u64, u32)>, // generation and session ID
 }
 
 impl Conn<'_> {
     fn serve(&mut self) {
         if self.stream.set_read_timeout(Some(POLL)).is_err()
+            || self.stream.set_write_timeout(Some(POLL)).is_err()
             || self.stream.set_nodelay(true).is_err()
         {
             return;
@@ -489,19 +523,32 @@ impl Conn<'_> {
         let (Some(proof_h), Some(keys)) = (hs.host_proof(&proof_d), hs.keys()) else {
             return Err(End::Close);
         };
-        self.write(&ControlMessage::SessionAccept { proof: proof_h })?;
+        let endpoint = Endpoint::new(Role::Host, keys.session_id, &keys.k_d2h, &keys.k_h2d)
+            .ok_or(End::Close)?;
+        let accept = ControlMessage::SessionAccept { proof: proof_h }.encode()?;
         let generation = {
             let mut inner = self.shared.lock();
+            if self.shared.stop.load(Ordering::Acquire) {
+                return Err(End::Close);
+            }
             inner.last_session_id = session_id;
             inner.session_generation += 1;
+            self.shared.udp().set_session(endpoint)?;
+            // Serialize activation and acceptance so an older handshake cannot overwrite a
+            // newer accepted session. Socket writes have a bounded timeout.
+            if self.stream.write_all(&accept).is_err() {
+                self.shared.udp().clear_session(session_id);
+                return Err(End::Close);
+            }
+            let _ = self.events.send(ControlEvent::SessionStarted {
+                device_id: device.device_id,
+                device_name: device.device_name,
+                peer: self.peer,
+                session_id,
+            });
             inner.session_generation
         };
-        let _ = self.events.send(ControlEvent::SessionStarted {
-            device_id: device.device_id,
-            device_name: device.device_name,
-            peer: self.peer,
-            keys,
-        });
+        self.active_session = Some((generation, session_id));
         // v1 defines no messages after session setup: hold the connection until it closes.
         let end = loop {
             match self.read(None) {
@@ -509,12 +556,17 @@ impl Conn<'_> {
                 Err(end) => break end,
             }
         };
-        if self.shared.lock().session_generation == generation {
+        {
+            let inner = self.shared.lock();
+            if inner.session_generation == generation {
+                self.shared.udp().clear_session(session_id);
+            }
             let _ = self.events.send(ControlEvent::SessionEnded {
                 device_id: device.device_id,
                 session_id,
             });
         }
+        self.active_session = None;
         match end {
             End::Error(..) => Err(end),
             End::Close => Ok(()),
@@ -544,6 +596,14 @@ impl Conn<'_> {
                 || deadline.is_some_and(|d| Instant::now() >= d)
             {
                 return Err(End::Close);
+            }
+            if let Some((generation, session_id)) = self.active_session {
+                let inner = self.shared.lock();
+                if inner.session_generation != generation
+                    || !self.shared.udp().is_active(session_id)
+                {
+                    return Err(End::Close);
+                }
             }
             match self.stream.read(buf) {
                 Ok(0) => return Err(End::Close),
