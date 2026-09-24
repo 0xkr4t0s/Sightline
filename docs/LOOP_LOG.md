@@ -460,3 +460,37 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
   - 1.1.3c: `native/fuzz/` targets.
 
   Crypto crates (sha2/hmac/hkdf and an SRP bigint) will need pinning; the plan names HMAC and PAKE work but not specific crates, so pick RustCrypto and log it.
+
+## 2026-09-24 — Iteration 17 — 1.1.3a (PR-001..003, PR-005, PR-006, NET-002/003) — done
+
+- **Orient:** `main` is still 3 ahead of `origin` (unpushed), so there's no new CI run. Local rustc is 1.97.1.
+- **Split of 1.1.3** (recorded in iteration 16):
+  - **1.1.3a** (this): UDP framing, messages, receive rules, freshness, clock math, tests from `testdata/`.
+  - **1.1.3b:** TCP `HELLO`/pairing (SRP-6a)/session/`ERROR` codecs and crypto, against `pairing.json`/`session.json`/RFC 5054.
+  - **1.1.3c:** `native/fuzz/` targets.
+- **Dependencies added (pinned):**
+  - `vcam-protocol`: `hmac = "=0.13.0"` and `sha2 = "=0.11.0"` (RustCrypto, MIT OR Apache-2.0, both on `digest 0.11.3`). HMAC-SHA256 is named by PR-006.
+  - `serde_json = "=1.0.151"` as a dev-dependency (MIT OR Apache-2.0), only for reading `testdata/` in tests.
+  - API confirmed in the crate sources: `Mac::verify_truncated_left` (`digest-0.11.3/src/mac.rs:161-169`, constant-time `ct_eq` over `tag.len()` left bytes), and `KeyInit::new_from_slice` (`crypto-common-0.2.2`).
+- **Work (`native/vcam-protocol`):**
+  - `src/wire.rs`: bounds-checked LE `Reader`; every read returns `Option`.
+  - `src/message.rs`: `Pose`/`ControlState`/`Clock`/`Status` exact decode/encode with §6 validation (non-finite, quaternion norm 0.9–1.1, `motion_scale` [0.001, 1000] only when present, name UTF-8 ≤ 63 bytes); `orientation_normalized()`; `ClockSample::from_timestamps` in i128.
+  - `src/endpoint.rs`: `Endpoint { role, session_id, precomputed send/recv HMAC }`.
+    - `seal`: enforces direction, ≤ 1200 bytes, and name length; on failure the buffer is left unchanged.
+    - `open`: vcp.md §4.3 steps 1–8 in order, then the direction/`CLOCK`-mode check, returning a `DropReason` per step.
+  - `src/fresh.rs`: `SeqFilter` (newest wins) and `EpochWatcher` (any change, including wrap; the first value is not a reset).
+  - `tests/golden.rs`: 7 tests consuming `testdata/vcp/messages.json` (8 UDP cases, byte-exact decode → fields → re-encode), `receive.json` (all 26 verdicts, plus exact `DropReason` for 10), `freshness.json`, the clock example, seal limits, and a no-panic sweep (every prefix, every byte flip, 20,000 pseudo-random datagrams).
+- **Commands run:**
+  - In `native/`: `cargo fmt --check` passes; `cargo clippy --all-targets -- -D warnings` shows `Finished`, 0 warnings (one `match_like_matches_macro` fixed); `cargo test` passes. `golden`: `test result: ok. 7 passed; 0 failed`; the other 5 crates' unit tests: 5 × `ok. 1 passed`.
+  - **Mutation check** (temporary, reverted):
+    - removing the version check made `receive_rules_match_vectors` and `drop_reasons_follow_rule_order` fail (`FAILED. 5 passed; 2 failed`);
+    - accepting an equal seq made `freshness_sequences_match_vectors` fail (`FAILED. 6 passed; 1 failed`);
+    - after restoring: `ok. 7 passed`.
+  - `maturin build --release … -i …/python3.13`: `Built wheel`. Blender smoke (temporary `BLENDER_USER_RESOURCES`): `VCAM_NATIVE_OK 0.1.0`, exit 0.
+  - `.venv.nosync/bin/pytest -q -p no:cacheprovider BlenderAddOn/tests`: `12 passed`. `python3 tools/gen_testdata.py --check`: up to date.
+  - Rust 1.98 clippy lints are still unverifiable locally (see iteration 15).
+- **Files changed:** `native/vcam-protocol/{Cargo.toml,src/lib.rs,src/wire.rs,src/message.rs,src/endpoint.rs,src/fresh.rs,tests/golden.rs}`, `native/Cargo.lock`, `IMPLEMENTATION_PROGRESS.md` (ARC-002; PR-001..003/006, PR-005, NET-002 Partial with Rust evidence; NET-003 split out as Partial), `docs/LOOP_LOG.md`.
+- **Owner action:** push; 4 commits will then be ahead of `origin`, including the unconfirmed clippy fix.
+- **Next task:** 1.1.3b. TCP messages (`HELLO`, `PAIR_*`, `SESSION_*`, `ERROR`) and the pairing/session crypto against `testdata/vcp/pairing.json`, `session.json`, and `srp-rfc5054-appendix-b.json`.
+  - This needs `hkdf` (RFC 5869) and a big-integer modpow for SRP. The RustCrypto `srp 0.6.0` defaults don't match RFC 5054 (iteration 14), so either use its group constants with our own formulas over `num-bigint`, or use `crypto-bigint`. Pick one, pin it, log it.
+  - Constant-time modpow matters for the host's secret `b`; prefer `crypto-bigint`'s constant-time ops if the API allows it.
