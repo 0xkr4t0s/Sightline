@@ -15,7 +15,6 @@ You are working autonomously on VCam for Blender at "/Users/owner/iCloud Drive (
   - anything needing a physical iPhone or a human in front of the Blender UI: device testing, real-Wi-Fi latency (S-4), thermal runs, and the manual checklists in exit gates;
   - Apple Developer signing, notarization, TestFlight/App Store, or any credentials;
   - `git push`, creating remote repos or PRs, or publishing an extension repository. You MAY write CI workflow files, but can't run them remotely;
-  - moving the repo out of iCloud;
   - licence decisions (spike S-5): write up the options in the log instead;
   - installing global tools other than `cargo install cargo-fuzz` / `rustup component add` (ask first for anything else, for example Homebrew packages). Python packages go only into the project venv `.venv.nosync/` (pytest and maturin are already there).
 - If a task is bigger than one iteration, split it into sub-steps in the log and do only the first.
@@ -34,7 +33,7 @@ You are working autonomously on VCam for Blender at "/Users/owner/iCloud Drive (
 ## 4. Verify (required before recording success)
 - Toolchain is already set up; don't reconfigure it:
   - Python: use `.venv.nosync/bin/python`, `.venv.nosync/bin/pytest`, `.venv.nosync/bin/maturin`. Never `pip install` outside that venv.
-  - Rust build output goes to `native/target.nosync/` (set in `.cargo/config.toml` so iCloud doesn't sync it). Don't change this or use `target/`.
+  - Rust build output goes to `native/target.nosync/` (set in `.cargo/config.toml`). Don't change this or use `target/`.
   - Xcode: prefix every `xcodebuild`/`xcrun` command with `DEVELOPER_DIR=/Applications/Xcode-27.0.0.app/Contents/Developer` (the system default points at Command Line Tools).
   - Blender's bundled Python is 3.13 (`/Applications/Blender.app/Contents/Resources/*/python/bin/python3.13`); build wheels for it (for example `maturin build -i <that path>`), not for the venv's 3.14.
 - Rust (once `native/` exists): `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` in `native/`.

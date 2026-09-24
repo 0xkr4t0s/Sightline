@@ -185,4 +185,4 @@ VCamBlender/
 | H.264 software-encoder licensing | Medium | T3 distribution | Prefer OS hardware encoders; legal check before shipping OpenH264 |
 | Blender Python API changes in 5.x → 6.0 | Medium | Rework | Pin 5.2 LTS; keep `bpy`/`gpu` usage in a thin layer; CI against the next Blender beta |
 | GPL boundary mistakes with the iOS app | Low | Legal | No GPL code in iOS; share only test vectors, or MIT/Apache crates (S-5) |
-| iCloud Drive sync corrupts `target/` or `.git` | Medium | Lost work | Move the repo out of iCloud, or mark build dirs `.nosync` |
+| ~~iCloud Drive sync corrupts `target/` or `.git`~~ | Closed 2026-09-24 | — | `~/iCloud Drive (Archive)` is a local, non-synced folder (macOS's archive copy), so the repo isn't in iCloud. No remote backup exists yet; the owner should add a private remote. |
