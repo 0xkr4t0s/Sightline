@@ -559,3 +559,36 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
   2. Optional: OK installing a nightly toolchain locally (`rustup toolchain install nightly --profile minimal` plus `cargo install cargo-fuzz --version 0.13.2 --locked`), so the loop can run guided fuzzing without a push.
 - **1.1.3 status:** 1.1.3a, b, c are done. `vcam-protocol` covers DM-001 (pose type) and PR-001..006. The DM-002/003 "conversions" part is iOS-side by design (DM-002: the conversion happens once on the iPhone), so the Rust coordinate code is only needed for the Blender apply step (1.3.2).
 - **Next task:** 1.1.4, the Swift `VCP` module in VCamIOS (encoder/decoder + ARKit→canonical conversion) with XCTests on `testdata/` (folder reference in the test bundle). Split it: 1.1.4a UDP messages + HMAC + coords tests; 1.1.4b pairing via `swift-srp` (needs owner review of that dependency per iteration 14).
+
+## 2026-09-24 — Iteration 20 — 1.1.4a (DM-001..004, PR-001..003, PR-006, NFR-QA-003) — done
+
+- **Orient:** `main` is still 6 ahead of `origin` (unpushed). No new CI run or owner notes.
+- **Split of 1.1.4:**
+  - **1.1.4a** (this): Swift UDP messages, HMAC, receive rules, ARKit→canonical, and XCTests on `testdata/`.
+  - **1.1.4b**: Swift TCP control frames and SRP-6a pairing/session, needing the `swift-srp` dependency (Apache-2.0). The owner should review it first (iteration 14).
+- **APIs confirmed in the Xcode 27 iOS SDK interfaces before use:**
+  - CryptoKit `HMAC<H>.authenticationCode(for:using:)` (`D: DataProtocol`) and `SymmetricKey(data:)`;
+  - simd `simd_quatf.init(_ rotationMatrix: simd_float3x3)`, quaternion `*`, `act(_:)`, `init(ix:iy:iz:r:)`, and the `simd_quatf { simd_float4 vector }` layout (ix, iy, iz, r = VCP's x, y, z, w);
+  - Swift 6.4 (`xcrun swift --version`), which has `nonisolated` type declarations (SE-0449).
+- **Work (no dependencies added):**
+  - `VCamIOS/VCamIOS/VCP/VCPMessages.swift`: `VCPPose`/`VCPControlState`/`VCPClock`/`VCPStatus`/`VCPMessage`, exact decode/encode with §6 validation (same rules as Rust); `VCPSeqFilter`; bounds-checked `VCPReader`.
+  - `VCPEndpoint.swift`: `seal`/`open` with the §4.3 rule order and a typed `VCPDropReason`; HMAC-SHA256 truncated to 8 bytes; hand-written constant-time comparison (CryptoKit's validator compares full-length MACs only); direction rules per §5.
+  - `VCPCoordinates.swift`: `canonicalPose(fromARKit:)` with `(x, −z, y)` and `q_C ⊗ q` (w ≥ 0).
+  - All types are `nonisolated`, so they work both in the app target (`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`) and off the main actor later (ARC-005).
+  - Written from the spec. No GPL code: the Rust extension code wasn't translated, only the shared vectors were used (C-1).
+  - `VCamIOSTests/VCPGoldenTests.swift`: 6 tests: 8 UDP messages open, match their fields, and re-seal byte-exactly; 26 `receive.json` verdicts plus 6 exact drop reasons; freshness; 9 DM-004 cases; seal limits; a prefix/byte-flip sweep.
+  - `project.pbxproj` (+10 lines, `plutil -lint` OK):
+    - a `testdata` **folder reference** (`path = ../testdata`) in the test target's Resources phase, as the plan asks;
+    - the three `VCP/*.swift` files added to the test target's `membershipExceptions`, the same pattern the FreeD files use (the test bundle compiles app sources directly and has no test host).
+- **Commands run:**
+  - `xcodebuild test … name=iPhone 17 Pro`: first run failed to compile (`withUnsafeBytes` resolved to the `Array` instance method), fixed with `Swift.withUnsafeBytes`. Second run: `Executed 11 tests, with 0 failures (0 unexpected)`, `** TEST SUCCEEDED **` (6 VCP + 5 FreeD).
+  - **Mutation check** (`-only-testing:VCamIOSTests/VCPGoldenTests`, reverted):
+    - dropping the version check gave `Executed 6 tests, with 2 failures`;
+    - position `(x, z, y)` instead of `(x, −z, y)` gave `Executed 6 tests, with 1 failure`;
+    - after restoring: `0 failures`, `** TEST SUCCEEDED **`.
+  - No Rust, Python, or testdata change this iteration, so those suites weren't re-run.
+- **Files changed:** `VCamIOS/VCamIOS/VCP/{VCPMessages,VCPEndpoint,VCPCoordinates}.swift` (new), `VCamIOS/VCamIOSTests/VCPGoldenTests.swift` (new), `VCamIOS/VCamIOS.xcodeproj/project.pbxproj`, `IMPLEMENTATION_PROGRESS.md` (Pose maths, DM-001..003, DM-004, PR-001..003/006, NFR-QA-003), `docs/LOOP_LOG.md`.
+- **Owner actions:**
+  1. Push (7 commits ahead).
+  2. **Approve or reject `swift-srp`** (`adam-fowler/swift-srp`, Apache-2.0) for 1.1.4b. It isn't GPL, so C-1 allows it; the alternative is our own SRP-6a in Swift over a BigInt package, which is more code to audit.
+- **Next task:** 1.1.4b if `swift-srp` is approved (Swift pairing/session against `pairing.json`/`session.json`/RFC 5054 App. B). If it isn't answered yet, go on in plan order to **1.2.1** (vcam-net UDP receiver thread with latest-sample slot and per-source stats), and mark 1.1.4b "waiting for owner".

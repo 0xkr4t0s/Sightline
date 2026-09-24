@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		7C0DE7E57DA7A00000000002 /* testdata in Resources */ = {isa = PBXBuildFile; fileRef = 7C0DE7E57DA7A00000000001 /* testdata */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		9E74B7DF2F84AF9400B754DD /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -17,6 +21,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		7C0DE7E57DA7A00000000001 /* testdata */ = {isa = PBXFileReference; lastKnownFileType = folder; name = testdata; path = ../testdata; sourceTree = "<group>"; };
 		9E74B7DB2F84AF9400B754DD /* VCamIOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VCamIOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9EE25E0D2F8410E3009FB801 /* VCamIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VCamIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -27,6 +32,9 @@
 			membershipExceptions = (
 				FreeDPacketEncoder.swift,
 				TrackingPose.swift,
+				VCP/VCPCoordinates.swift,
+				VCP/VCPEndpoint.swift,
+				VCP/VCPMessages.swift,
 			);
 			target = 9E74B7DA2F84AF9400B754DD /* VCamIOSTests */;
 		};
@@ -79,6 +87,7 @@
 			children = (
 				9EE25E452F841844009FB801 /* VCamIOS */,
 				9E74B7DC2F84AF9400B754DD /* VCamIOSTests */,
+				7C0DE7E57DA7A00000000001 /* testdata */,
 				9EE25E0E2F8410E3009FB801 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -183,6 +192,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7C0DE7E57DA7A00000000002 /* testdata in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
