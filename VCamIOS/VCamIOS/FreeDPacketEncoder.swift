@@ -1,6 +1,6 @@
 import Foundation
 
-enum FreeDPacketEncoder {
+nonisolated enum FreeDPacketEncoder {
     static let marker: UInt8 = 0xD1
     static let packetLength = 29
     static let rotationDivisor = 32768.0

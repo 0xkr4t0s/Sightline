@@ -1,7 +1,7 @@
 import Foundation
 import Network
 
-enum UDPSenderError: LocalizedError {
+nonisolated enum UDPSenderError: LocalizedError {
     case invalidHost
     case invalidPort
 
@@ -15,28 +15,27 @@ enum UDPSenderError: LocalizedError {
     }
 }
 
-final class UDPSender {
-    private let queue = DispatchQueue(label: "VCamIOS.UDPSender")
+/// One UDP connection, reused while the destination stays the same. Not thread-safe: its owner
+/// (`TrackingPipeline`) calls it only on `queue`, which is also where completions run.
+nonisolated final class UDPSender {
+    private let queue: DispatchQueue
     private var connection: NWConnection?
     private var destinationKey: String?
 
-    func send(
-        _ data: Data,
-        host: String,
-        port: UInt16,
-        completion: @escaping (Result<Void, Error>) -> Void
-    ) {
+    init(queue: DispatchQueue) {
+        self.queue = queue
+    }
+
+    /// Sends one datagram; `completion` gets nil on success, else the error text, on `queue`.
+    func send(_ data: Data, host: String, port: UInt16, completion: @escaping @Sendable (String?) -> Void) {
         do {
             try configure(host: host, port: port)
             connection?.send(content: data, completion: .contentProcessed { error in
-                if let error {
-                    completion(.failure(error))
-                } else {
-                    completion(.success(()))
-                }
+                completion(error?.localizedDescription)
             })
         } catch {
-            completion(.failure(error))
+            let message = error.localizedDescription
+            queue.async { completion(message) }
         }
     }
 

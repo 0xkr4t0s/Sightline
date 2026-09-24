@@ -1038,3 +1038,31 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none.
 - **Next task:** 1.4.x, the first iOS task in plan order (1.4.1). No second task started.
 - **Owner actions:** push, so this job runs on 3 OSes (this commit makes 24 ahead). Still pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.
+
+## 2026-09-25 — Iteration 38 — 1.4.1 (ARC-005) — done (device run owner-blocked)
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 24 ahead of `origin`. The existing Phase 1 owner waiver applies.
+- **Change:**
+  - **Project:** `SWIFT_VERSION` 5.0 → 6.0 for the app and test targets. The app keeps default `MainActor` isolation. The zero-width spaces (U+200B, 2 per config) are removed from `INFOPLIST_KEY_NSCameraUsageDescription`; the built `Info.plist` has none. `TrackingPipeline.swift` and `UDPSender.swift` were added to the test target's synchronized-folder membership.
+  - **`TrackingPipeline.swift` (new):** a `TrackingPipeline` actor whose executor is its own `DispatchSerialQueue`. The same queue is `ARSession.delegateQueue` and the `NWConnection` queue, so `receive` and send completions enter it with `assumeIsolated` and no hop. `start`/`stop` are synchronous (`queue.sync`), so they stay in order when issued from the main actor. `UIThrottle` gives ≤ 15 Hz: slots advance exactly one interval per publish, with 1 ms tolerance, and a clock jump restarts the cadence. There's also a `TrackingSnapshot`.
+  - **`TrackingSessionController.swift`:**
+    - `@Observable @MainActor` replaces `ObservableObject`/`@Published`, with `@ObservationIgnored` for the session, pipeline and receiver.
+    - Snapshots arrive through `AsyncStream` (`bufferingNewest(1)`).
+    - A new `ARFrameReceiver` (a `Sendable` NSObject delegate) copies the transform and timestamp out of the `ARFrame` on the pipeline queue and sends rare events to the main actor.
+    - `requestAccess` uses the async API.
+  - **`UDPSender`:** `nonisolated`, owned by the pipeline, runs on the pipeline's queue, and its completion is a `@Sendable (String?)`.
+  - `TrackingPose` is now `nonisolated … Sendable`, and `FreeDPacketEncoder` is `nonisolated`.
+  - `ContentView` uses `@Bindable` and the app uses `@State`.
+- **Files changed:** `VCamIOS/VCamIOS.xcodeproj/project.pbxproj`, `VCamIOS/VCamIOS/{TrackingPipeline.swift (new),TrackingSessionController.swift,UDPSender.swift,TrackingPose.swift,FreeDPacketEncoder.swift,ContentView.swift,VCamIOSApp.swift}`, `VCamIOS/VCamIOSTests/TrackingPipelineTests.swift` (new), `IMPLEMENTATION_PROGRESS.md` (ARC-005, iOS test row), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `xcodebuild test` (iPhone 17 Pro sim, Swift 6): `Executed 14 tests, with 0 failures`, `** TEST SUCCEEDED **`, with no Swift errors or warnings in the log. `-showBuildSettings`: `SWIFT_VERSION = 6.0`.
+  - The first run failed `XCTAssertFalse(anyOnMain)`. The cause was in the test: a `queue.sync` issued from the main thread runs the block on the main thread. The test now feeds frames with `queue.async` like ARKit, then waits with a `sync` barrier.
+  - **Mutation check** (restored and `cmp`-verified):
+    - a mutable `var` on the `Sendable` delegate: the Swift 6 build failed with `stored property 'frames' of 'Sendable'-conforming class 'ARFrameReceiver' is mutable`;
+    - throttle bypassed: 1200 > 301 and window 18 > 16, among others;
+    - frames not dropped after stop: 18 ≠ 2.
+  - **Simulator smoke:** the app was built, installed and launched (`simctl launch` → pid; `launchctl` lists it). The screenshot shows the form, Idle, and 0 packets, so the new controller initialises without a crash. ARKit doesn't run in the simulator, so Start only reports Unsupported.
+  - `pytest BlenderAddOn/tests`: 19 passed. `gen_testdata.py --check`: up to date (21 files). `cargo test`: 60 passed, 0 failed. No Rust or Python changes, so the Blender suites were not re-run.
+- **Not verified (BLOCKED, needs owner/device):** ARKit frames on the delegate queue on a real iPhone (`assumeIsolated` would trap if ARKit ignored `delegateQueue`), and the UI refresh rate on the device.
+- **Next task:** 1.4.2 — replace FreeD/Euler with VCP `POSE` (seq, capture time, quaternion, state) (FR-TRK-001/002, PR-FD-001). No second task started.
+- **Owner actions:** push (this commit makes 26 ahead; includes the owner's `.omp/` ignore commit `468a4a3`). Run the app on an iPhone once to confirm tracking still streams (device test). Still pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.

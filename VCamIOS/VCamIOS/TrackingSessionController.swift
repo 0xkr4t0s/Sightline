@@ -1,28 +1,49 @@
 import ARKit
 import AVFoundation
-import Combine
 import Foundation
+import Observation
 import SwiftUI
 
+/// UI state and start/stop (main actor). The per-frame work runs in `TrackingPipeline` on its own
+/// queue (ARC-005); this object only sees throttled snapshots (≤ 15 Hz) and rare session events.
 @MainActor
-final class TrackingSessionController: NSObject, ObservableObject {
-    @Published var host: String
-    @Published var portText: String
-    @Published private(set) var isTracking = false
-    @Published private(set) var packetsSent = 0
-    @Published private(set) var latestPose = TrackingPose.zero
-    @Published private(set) var sessionStatus = "Idle"
-    @Published private(set) var lastError: String?
+@Observable
+final class TrackingSessionController {
+    var host: String
+    var portText: String
+    private(set) var isTracking = false
+    private(set) var packetsSent = 0
+    private(set) var latestPose = TrackingPose.zero
+    private(set) var sessionStatus = "Idle"
+    private(set) var lastError: String?
 
-    private let session = ARSession()
-    private let sender = UDPSender()
+    @ObservationIgnored private let session = ARSession()
+    @ObservationIgnored private let pipeline: TrackingPipeline
+    // ARSession.delegate is weak: this keeps the receiver alive.
+    @ObservationIgnored private var receiver: ARFrameReceiver?
 
-    override init() {
+    init() {
         let settings = TrackingSettings.load()
         host = settings.host
         portText = String(settings.port)
-        super.init()
-        session.delegate = self
+        // Newest snapshot wins: the UI never queues stale frames.
+        let (snapshots, continuation) = AsyncStream.makeStream(
+            of: TrackingSnapshot.self, bufferingPolicy: .bufferingNewest(1))
+        pipeline = TrackingPipeline(publish: { _ = continuation.yield($0) })
+        let receiver = ARFrameReceiver(pipeline: pipeline) { [weak self] event in
+            Task { @MainActor in self?.handle(event) }
+        }
+        self.receiver = receiver
+        session.delegate = receiver
+        session.delegateQueue = pipeline.queue
+        Task { [weak self] in
+            for await snapshot in snapshots {
+                guard let self else {
+                    return
+                }
+                self.apply(snapshot)
+            }
+        }
     }
 
     func startTracking() async {
@@ -46,7 +67,8 @@ final class TrackingSessionController: NSObject, ObservableObject {
             }
 
             TrackingSettings(host: destination.host, port: Int(destination.port)).save()
-            sender.close()
+            host = destination.host
+            pipeline.start(host: destination.host, port: destination.port)
 
             let configuration = ARWorldTrackingConfiguration()
             configuration.worldAlignment = .gravity
@@ -65,7 +87,7 @@ final class TrackingSessionController: NSObject, ObservableObject {
 
     func stopTracking(reason: String? = nil) {
         session.pause()
-        sender.close()
+        pipeline.stop()
         isTracking = false
         if let reason {
             sessionStatus = reason
@@ -97,6 +119,38 @@ final class TrackingSessionController: NSObject, ObservableObject {
         }
     }
 
+    private func apply(_ snapshot: TrackingSnapshot) {
+        guard isTracking else {
+            return
+        }
+        latestPose = snapshot.pose
+        packetsSent = snapshot.packetsSent
+        if let error = snapshot.sendError {
+            lastError = error
+            sessionStatus = "Send error"
+        } else if sessionStatus == "Send error" {
+            lastError = nil
+            sessionStatus = "Running"
+        }
+    }
+
+    private func handle(_ event: ARFrameReceiver.Event) {
+        switch event {
+        case .trackingState(let description):
+            if isTracking {
+                sessionStatus = description
+            }
+        case .failed(let message):
+            lastError = message
+            stopTracking(reason: "Session failed")
+        case .interrupted:
+            sessionStatus = "Interrupted"
+            lastError = "The AR session was interrupted."
+        case .interruptionEnded:
+            sessionStatus = "Interruption ended"
+        }
+    }
+
     private func validatedDestination() throws -> (host: String, port: UInt16) {
         let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedHost.isEmpty else {
@@ -113,53 +167,55 @@ final class TrackingSessionController: NSObject, ObservableObject {
         case .authorized:
             return true
         case .notDetermined:
-            return await withCheckedContinuation { continuation in
-                AVCaptureDevice.requestAccess(for: .video) { granted in
-                    continuation.resume(returning: granted)
-                }
-            }
+            return await AVCaptureDevice.requestAccess(for: .video)
         case .denied, .restricted:
             return false
         @unknown default:
             return false
         }
     }
+}
 
-    private func send(pose: TrackingPose) {
-        guard isTracking else {
-            return
-        }
-
-        do {
-            let destination = try validatedDestination()
-            host = destination.host
-            let packet = FreeDPacketEncoder.encode(pose: pose)
-            latestPose = pose
-
-            sender.send(packet, host: destination.host, port: destination.port) { [weak self] result in
-                Task { @MainActor [weak self] in
-                    guard let self else {
-                        return
-                    }
-
-                    switch result {
-                    case .success:
-                        self.packetsSent += 1
-                        self.lastError = nil
-                    case .failure(let error):
-                        self.lastError = error.localizedDescription
-                        self.sessionStatus = "Send error"
-                    }
-                }
-            }
-        } catch {
-            lastError = error.localizedDescription
-            sessionStatus = "Configuration error"
-            stopTracking(reason: "Stopped")
-        }
+/// The ARSession delegate. It runs on the pipeline's queue (`ARSession.delegateQueue`), never the
+/// main thread: frames go straight into the pipeline, and rare session events go to `onEvent`.
+nonisolated final class ARFrameReceiver: NSObject, ARSessionDelegate, Sendable {
+    enum Event: Sendable {
+        case trackingState(String)
+        case failed(String)
+        case interrupted
+        case interruptionEnded
     }
 
-    private func trackingStateDescription(_ trackingState: ARCamera.TrackingState) -> String {
+    private let pipeline: TrackingPipeline
+    private let onEvent: @Sendable (Event) -> Void
+
+    init(pipeline: TrackingPipeline, onEvent: @escaping @Sendable (Event) -> Void) {
+        self.pipeline = pipeline
+        self.onEvent = onEvent
+    }
+
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        // Copy the values out: holding the ARFrame would stall ARKit's frame pool.
+        pipeline.receive(transform: frame.camera.transform, timestamp: frame.timestamp)
+    }
+
+    func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
+        onEvent(.trackingState(Self.describe(camera.trackingState)))
+    }
+
+    func session(_ session: ARSession, didFailWithError error: Error) {
+        onEvent(.failed(error.localizedDescription))
+    }
+
+    func sessionWasInterrupted(_ session: ARSession) {
+        onEvent(.interrupted)
+    }
+
+    func sessionInterruptionEnded(_ session: ARSession) {
+        onEvent(.interruptionEnded)
+    }
+
+    private static func describe(_ trackingState: ARCamera.TrackingState) -> String {
         switch trackingState {
         case .normal:
             return "Running"
@@ -178,46 +234,6 @@ final class TrackingSessionController: NSObject, ObservableObject {
             @unknown default:
                 return "Limited"
             }
-        }
-    }
-}
-
-extension TrackingSessionController: ARSessionDelegate {
-    nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        let pose = TrackingPose(cameraTransform: frame.camera.transform, timestamp: frame.timestamp)
-        Task { @MainActor [weak self] in
-            self?.send(pose: pose)
-        }
-    }
-
-    nonisolated func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
-        Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-            if self.isTracking {
-                self.sessionStatus = self.trackingStateDescription(camera.trackingState)
-            }
-        }
-    }
-
-    nonisolated func session(_ session: ARSession, didFailWithError error: Error) {
-        Task { @MainActor [weak self] in
-            self?.lastError = error.localizedDescription
-            self?.stopTracking(reason: "Session failed")
-        }
-    }
-
-    nonisolated func sessionWasInterrupted(_ session: ARSession) {
-        Task { @MainActor [weak self] in
-            self?.sessionStatus = "Interrupted"
-            self?.lastError = "The AR session was interrupted."
-        }
-    }
-
-    nonisolated func sessionInterruptionEnded(_ session: ARSession) {
-        Task { @MainActor [weak self] in
-            self?.sessionStatus = "Interruption ended"
         }
     }
 }

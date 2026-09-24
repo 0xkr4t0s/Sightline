@@ -1,7 +1,7 @@
 import Foundation
 import simd
 
-struct TrackingPose: Equatable {
+nonisolated struct TrackingPose: Equatable, Sendable {
     let timestamp: TimeInterval
     let x: Double
     let y: Double
@@ -20,7 +20,7 @@ struct TrackingPose: Equatable {
         roll: 0
     )
 
-    nonisolated init(
+    init(
         timestamp: TimeInterval,
         x: Double,
         y: Double,
@@ -38,7 +38,7 @@ struct TrackingPose: Equatable {
         self.roll = roll
     }
 
-    nonisolated init(cameraTransform transform: simd_float4x4, timestamp: TimeInterval) {
+    init(cameraTransform transform: simd_float4x4, timestamp: TimeInterval) {
         let translation = transform.columns.3
         let quaternion = simd_quatf(transform)
 

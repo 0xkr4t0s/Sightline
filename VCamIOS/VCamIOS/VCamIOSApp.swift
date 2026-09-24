@@ -10,7 +10,7 @@ import SwiftUI
 @main
 struct VCamIOSApp: App {
     @Environment(\.scenePhase) private var scenePhase
-    @StateObject private var controller = TrackingSessionController()
+    @State private var controller = TrackingSessionController()
 
     var body: some Scene {
         WindowGroup {

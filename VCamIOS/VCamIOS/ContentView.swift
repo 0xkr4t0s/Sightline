@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @ObservedObject var controller: TrackingSessionController
+    @Bindable var controller: TrackingSessionController
 
     var body: some View {
         NavigationStack {
