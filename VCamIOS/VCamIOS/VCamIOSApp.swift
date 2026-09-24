@@ -9,9 +9,15 @@ import SwiftUI
 
 @main
 struct VCamIOSApp: App {
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var controller = TrackingSessionController()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(controller: controller)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            controller.handleScenePhase(newPhase)
         }
     }
 }
