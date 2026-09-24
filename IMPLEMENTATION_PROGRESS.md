@@ -66,7 +66,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | FR-TRK-008 | Done | Headless `ARSession`; no camera preview. |
 | FR-VF-* | Not started | |
 | FR-CTL-* | Not started | |
-| FR-UX-001/002 | Not started | iOS: manual host/port entry only (`TrackingSettings.swift`). The pairing crypto FR-UX-002 relies on exists in Rust (`vcam-protocol/src/pairing.rs`, task 1.1.3b); no UI or network wiring yet. |
+| FR-UX-001/002 | Partial | iOS: manual host/port entry only (`TrackingSettings.swift`); no discovery or pairing UI. Host side of FR-UX-002 done in Rust: `native/vcam-net/src/control.rs` `ControlServer` (6-digit CSPRNG code, SRP-6a pairing, remembered pairings via `PairingStore`, task 1.2.2a). Still to do: persistence (1.2.2b), the N-panel code display (1.3.3), Swift pairing (1.1.4b, waiting for owner). |
 | FR-UX-003/004 | Not started | Portrait `Form` UI (`ContentView.swift`). |
 | Pose maths | Replace | `TrackingPose.swift` uses an aerospace Euler extraction on ARKit's Y-up frame. The replacement exists: `VCamIOS/VCamIOS/VCP/VCPCoordinates.swift` (DM-002 quaternion conversion, task 1.1.4a). Wiring it into the tracking path is task 1.4.2. |
 | Project settings | Partial | Deployment target iOS 26.4; `SWIFT_VERSION = 5.0`; the camera usage string contains zero-width spaces (U+200B). |
@@ -114,14 +114,14 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | NET-001 | Not started | |
 | NET-002 | Partial | Rust `UdpReceiver` (task 1.2.1): one datagram per pose, never retransmitted; newest `seq` wins via `SeqFilter`; reordered or replayed poses counted as stale (`native/vcam-net/tests/udp_receiver.rs`, 6 loopback tests). Not yet used by Blender (1.2.5/1.3.1). |
 | NET-003 | Partial | Offset/delay math `ClockSample::from_timestamps` (i128, overflow-safe) matches the vector. No estimator or 1 Hz exchange yet (1.2.4). |
-| NET-004 | Not started | |
+| NET-004 | Partial | Reconnect without re-pairing works on the host: a paired device's new session replaces the old one, with a fresh `session_id` and keys (`control_server.rs` test `reconnect_uses_the_stored_pairing_and_a_new_session_id`). The UDP reply address follows roaming (1.2.1). Still to do: the device-side retry loop and 3 s reconnect measurement (1.4.x), `.blend` reload (1.3.4). |
 | NET-VID-* | Not started | S-2a/b/c (SRS §13.2), macOS: Stage A JPEG 540p q80 is about 1 ms at 9–13 Mbit/s @ 30 fps. Stage B VideoToolbox H.264 720p is 3.6/5.6 ms (med/p95). The OpenH264 fallback at 720p is about 3/5.5 ms plus 2–3 ms conversion. The software-fallback licensing is an open owner decision. Production encoder code comes in Phases 2–3. |
 | LNS-* | Not started | |
 | NFR-LAT-*, NFR-PERF-* | Not started | No latency measurements. Render/readback costs are measured by S-1 (SRS §13.1). |
 | NFR-REL-001 | Partial | Rust parsers never panic on network data (clippy-enforced no `unwrap`; prefix/flip/random sweeps; fuzz targets). The receiver thread survives bad datagrams and socket errors. Not yet: panic catching at the PyO3 boundary (1.2.5). |
 | NFR-REL-002 | Partial | `UdpReceiver::stop()`/`Drop` join the thread within one 50 ms poll and close the socket; the port re-binds at once (test `stop_is_prompt_and_releases_the_port`). The Blender unregister path isn't wired yet (1.2.5/1.3.x). |
 | NFR-REL-003 | Not started | |
-| NFR-SEC-001 | Partial | Protocol side done in Rust: SRP-6a pairing (RFC 5054 App. B verified through the same code path; constant-time `pow_bounded_exp` for secret exponents), per-session HKDF keys, constant-time proof checks, HMAC on every UDP datagram. Not yet enforced on a live socket, and there's no key storage yet (1.2.2, 1.4.3). |
+| NFR-SEC-001 | Partial | Rust protocol: SRP-6a (RFC 5054 App. B verified), HKDF session keys, constant-time proofs, HMAC on every UDP datagram. Rust host server (task 1.2.2a): pairing only via a single-use code, locked after 3 failures, 5-minute expiry, one pairing at a time; sessions only for stored pairings; mutation-checked. Still to do: key storage in the Blender config dir (1.2.2b), iOS Keychain (1.4.3). |
 | NFR-SEC-002/003 | Not started | |
 | NFR-QA-001 | Partial | One git repo. `xcodebuild test`, `cargo test` (in `native/`), and a headless Blender smoke test (`tests/blender/smoke_native.py`) all run. There's no single `blender --background … tests` runner for add-on logic yet. |
 | NFR-QA-002 | Partial | `ci.yml` runs fmt, clippy (`-D warnings`), and test on 3 OSes, plus Python tests, headless Blender on 3 OSes, iOS unit tests, and (new) a `fuzz` job: nightly + `cargo-fuzz 0.13.2`, 60 s per target, seeded from `testdata/`, artifacts uploaded on failure. The first GitHub run failed only on clippy (fixed locally); the fuzz job hasn't run yet (awaiting push). |

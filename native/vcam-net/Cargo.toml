@@ -9,4 +9,5 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+getrandom = "=0.4.3"
 vcam-protocol.workspace = true

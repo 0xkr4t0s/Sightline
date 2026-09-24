@@ -1,8 +1,12 @@
 //! Sockets, mDNS discovery, pairing, clock sync and fragment reassembly (ARC-002).
 //! Runs its I/O on its own threads, never on Blender's main thread.
 
+mod control;
 mod udp;
 
+pub use control::{
+    ControlEvent, ControlServer, MemoryStore, PairedDevice, PairingStore, ServerConfig,
+};
 pub use udp::{ControlSample, DropCounts, PoseSample, ReceiverStats, UdpReceiver};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

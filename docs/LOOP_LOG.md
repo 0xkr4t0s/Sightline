@@ -619,3 +619,39 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Next task:** 1.2.2, the TCP control server in `vcam-net`: accept one device, run `HELLO` → pairing (`HostPairing` with a CSPRNG code, salt, and `b`; code policy §9.4: single use, 3 failures, 5 min) → session (`SessionHandshake`) → hand the `Endpoint` to `UdpReceiver`. Store `PK` per `device_id` behind a storage trait; the real Blender-config path comes in 1.2.5.
   - A CSPRNG crate is needed. The plan doesn't name one; `getrandom` (RustCrypto, MIT/Apache) is the minimal choice. Log it and pin it.
   - It's bigger than one iteration, so split it: 1.2.2a server state machine plus in-memory store, tested with a Rust client built from `vcam-protocol`; 1.2.2b persistence plus `STATUS`/`CLOCK` sending.
+
+## 2026-09-24 — Iteration 22 — 1.2.2a (FR-UX-002, NFR-SEC-001, NET-004, NFR-REL-002) — done
+
+- **Orient:** `main` is 8 ahead of `origin` (unpushed, no new CI run). No owner answer on `swift-srp` (1.1.4b still waiting).
+- **Dependency added (pinned), flagged for owner review:** `getrandom = "=0.4.3"` in `vcam-net` (RustCrypto, MIT OR Apache-2.0, default features, no `std`/`sys_rng`). The plan requires random secrets for pairing (1.2.2: code, and the PAKE secret, salt, and nonces) but names no RNG crate; `getrandom` is the minimal OS-CSPRNG wrapper. API confirmed: `getrandom::fill(&mut [u8]) -> Result<(), Error>` (`getrandom-0.4.3/src/lib.rs:87`).
+- **Work (`native/vcam-net/src/control.rs`):**
+  - `ControlServer::{start, local_addr, enable_pairing, disable_pairing, pairing_code, try_event, stop}` plus `Drop`. `ServerConfig` (host_id, udp_port, `code_lifetime` 5 min, `max_failures` 3, `handshake_timeout` 10 s).
+  - `PairingStore` trait + `MemoryStore`. `ControlEvent::{Paired, SessionStarted{keys, peer}, SessionEnded}` go through a non-blocking `try_event()` (C-2).
+  - The listener thread (non-blocking, 50 ms poll) spawns one thread per connection; all are joined on stop. Reads poll every 50 ms, checking stop and the handshake deadline; frames are capped at 4096 bytes by `ControlMessage::frame_len`.
+  - vcp.md §9.4 code policy: uniform 6 digits by rejection sampling below 4,294,000,000; single use; invalidated after 3 failed proofs (illegal SRP values count as failures) or on expiry; one pairing at a time (`ERROR 4`).
+  - Errors: 1 version, 2 proof, 3 not paired, 4 busy, 5 disabled/expired, 6 malformed. The server sends `ERROR`, then closes.
+  - Sessions: random non-zero `session_id` different from the previous one; a new session from a paired device supersedes the old one (NET-004). A generation counter makes sure `SessionEnded` is only reported by the connection that still owns the newest session.
+  - v1 has no post-setup TCP messages, so the connection is simply held until it closes.
+- **Tests (`native/vcam-net/tests/control_server.rs`, 9, real TCP with a device client built only from `vcam-protocol`):**
+  - full pairing plus session: the server's `SessionStarted` keys equal the client's, and they authenticate a UDP `POSE`; `SessionEnded` on disconnect; the code is consumed;
+  - reconnect: new `session_id` and keys;
+  - 3 wrong codes lock pairing (then `ERROR 5`), with no `Paired` event;
+  - code expiry;
+  - unpaired device (`ERROR 3`); bad session proof (`ERROR 2`);
+  - malformed HELLO (`ERROR 6`); `proto_min`/`proto_max` with no overlap and header version 2 (`ERROR 1`);
+  - concurrent pairing (`ERROR 4`);
+  - `stop()` < 1 s with idle connections, which are closed, and the listener is closed;
+  - 50 codes all 6 digits and distinct enough.
+- **Commands run:**
+  - In `native/`: `cargo fmt --check` passes; `cargo clippy --all-targets -- -D warnings` shows `Finished`, 0 warnings; `cargo test` all `ok` (control_server `ok. 9 passed`; udp_receiver 6; vcam-protocol 3/7/5; 4 × 1).
+  - Flakiness: `cargo test -p vcam-net` 10 consecutive runs, `10/10 runs passed`.
+  - **Mutation check** (reverted):
+    - code not consumed on success failed `pair_then_session_…`;
+    - failures not counted failed `three_wrong_codes_lock_pairing`;
+    - session proof unchecked failed `unpaired_device_and_bad_session_proof_are_refused`;
+    - after restoring: `ok. 9 passed`.
+  - `maturin build`: `Built wheel`. Blender smoke: `VCAM_NATIVE_OK 0.1.0`, exit 0. `.venv.nosync/bin/pytest -q -p no:cacheprovider BlenderAddOn/tests`: `12 passed`.
+- **Files changed:** `native/vcam-net/{Cargo.toml,src/lib.rs,src/control.rs,tests/control_server.rs}`, `native/Cargo.lock`, `IMPLEMENTATION_PROGRESS.md` (FR-UX-001/002, NET-004, NFR-SEC-001), `docs/LOOP_LOG.md`.
+- **Owner actions:** push (9 commits ahead); review `getrandom 0.4.3`; decide on `swift-srp` (1.1.4b).
+- **Next task:** 1.2.2b, a file-backed `PairingStore`: JSON of `{device_id, device_name, PK}` in a caller-given directory (Blender's user config dir, passed from Python in 1.2.5), written atomically (write to a temp file, then rename), with owner-only permissions on Unix. Plus the host's `STATUS` sender over UDP to the receiver's `source` address, and the 1 Hz `CLOCK` request.
+  - The JSON needs `serde`/`serde_json` as a normal dependency (the plan doesn't name them), or a tiny hand-written line format with no new dependency. Prefer the no-dependency option; decide then.

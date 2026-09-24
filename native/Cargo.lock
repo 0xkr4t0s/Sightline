@@ -788,6 +788,7 @@ dependencies = [
 name = "vcam-net"
 version = "0.1.0"
 dependencies = [
+ "getrandom",
  "vcam-protocol",
 ]
 
