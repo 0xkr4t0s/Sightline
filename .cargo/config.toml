@@ -1,0 +1,4 @@
+# Keep Rust build output out of iCloud sync: iCloud skips names ending in ".nosync".
+# Relative to the repo root (the directory containing .cargo/).
+[build]
+target-dir = "native/target.nosync"

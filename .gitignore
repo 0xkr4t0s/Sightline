@@ -1,0 +1,32 @@
+# macOS / Xcode
+.DS_Store
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# Rust (target dir is set in .cargo/config.toml)
+native/target.nosync/
+target/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv.nosync/
+.venv/
+
+# Built wheels / extension packages
+BlenderAddOn/wheels/*.whl
+*.zip
+
+# Legacy C++ build output
+DesktopReceiver/build/
+legacy/DesktopReceiver/build/
+
+# Loop control file (local only)
+docs/LOOP_STOP
+
+# Agent harness state (local only)
+.omx/
+.claude/settings.local.json

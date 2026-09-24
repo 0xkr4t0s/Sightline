@@ -1,0 +1,16 @@
+schema_version = "1.0.0"
+
+id = "vcam_blender"
+version = "0.1.0"
+name = "VCam Blender"
+tagline = "Real-time virtual camera tracking receiver for motion picture production"
+maintainer = "VCamBlender Team"
+type = "add-on"
+blender_version_min = "5.1.0"
+
+license = ["SPDX:GPL-3.0-or-later"]
+
+tags = ["Camera", "Animation", "Import-Export"]
+
+[permissions]
+network = "Receive camera tracking data over local UDP"
