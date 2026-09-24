@@ -76,7 +76,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | ID | Status | Evidence / gap |
 |---|---|---|
 | FR-BL-001 | Done | `blender_version_min = "5.2.0"`, `network` permission, `wheels`/`platforms`. CI writes all three platforms into the manifest (`tools/set_manifest_wheels.py`) and produced `windows-x64`, `linux-x64`, and `macos-arm64` zips that install and import (run `35958600428`). The committed manifest lists macOS only, for local builds. `windows-arm64` (SHOULD) not built. |
-| FR-BL-002 | Partial | Latest-sample semantics and main-thread apply are done in Python (`core/udp_client.py`, `operators/tracking_receiver.py`). Sockets must move into the Rust module. |
+| FR-BL-002 | Partial | Rust side of "native module owns the sockets and threads" done for pose reception: `native/vcam-net/src/udp.rs` `UdpReceiver` (own thread, HMAC-authenticated, newest-seq slot read with `latest_pose()`), task 1.2.1. Not yet exposed to Python (1.2.5); the add-on still uses the Python FreeD client (`core/udp_client.py`) until 1.3.1. |
 | FR-BL-003 | Partial | Drives a chosen camera directly; no `VCam_Origin` rig; Euler rotation (`core/transform.py`). |
 | FR-BL-004 | Partial | N-panel with connection settings and status (`ui/panels.py`); no pairing or stats. |
 | FR-BL-005 | Partial | Lens/focus mapped from FreeD zoom/focus encoders; to be replaced by `CONTROL_STATE`. |
@@ -112,13 +112,15 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | ID | Status | Evidence / gap |
 |---|---|---|
 | NET-001 | Not started | |
-| NET-002 | Partial | UDP, newest sample wins (Python client). Rust `SeqFilter` (newest-seq-wins, replay drop) passes `testdata/vcp/freshness.json`; not yet wired to sockets (1.2.1). |
+| NET-002 | Partial | Rust `UdpReceiver` (task 1.2.1): one datagram per pose, never retransmitted; newest `seq` wins via `SeqFilter`; reordered or replayed poses counted as stale (`native/vcam-net/tests/udp_receiver.rs`, 6 loopback tests). Not yet used by Blender (1.2.5/1.3.1). |
 | NET-003 | Partial | Offset/delay math `ClockSample::from_timestamps` (i128, overflow-safe) matches the vector. No estimator or 1 Hz exchange yet (1.2.4). |
 | NET-004 | Not started | |
 | NET-VID-* | Not started | S-2a/b/c (SRS §13.2), macOS: Stage A JPEG 540p q80 is about 1 ms at 9–13 Mbit/s @ 30 fps. Stage B VideoToolbox H.264 720p is 3.6/5.6 ms (med/p95). The OpenH264 fallback at 720p is about 3/5.5 ms plus 2–3 ms conversion. The software-fallback licensing is an open owner decision. Production encoder code comes in Phases 2–3. |
 | LNS-* | Not started | |
 | NFR-LAT-*, NFR-PERF-* | Not started | No latency measurements. Render/readback costs are measured by S-1 (SRS §13.1). |
-| NFR-REL-* | Not started | |
+| NFR-REL-001 | Partial | Rust parsers never panic on network data (clippy-enforced no `unwrap`; prefix/flip/random sweeps; fuzz targets). The receiver thread survives bad datagrams and socket errors. Not yet: panic catching at the PyO3 boundary (1.2.5). |
+| NFR-REL-002 | Partial | `UdpReceiver::stop()`/`Drop` join the thread within one 50 ms poll and close the socket; the port re-binds at once (test `stop_is_prompt_and_releases_the_port`). The Blender unregister path isn't wired yet (1.2.5/1.3.x). |
+| NFR-REL-003 | Not started | |
 | NFR-SEC-001 | Partial | Protocol side done in Rust: SRP-6a pairing (RFC 5054 App. B verified through the same code path; constant-time `pow_bounded_exp` for secret exponents), per-session HKDF keys, constant-time proof checks, HMAC on every UDP datagram. Not yet enforced on a live socket, and there's no key storage yet (1.2.2, 1.4.3). |
 | NFR-SEC-002/003 | Not started | |
 | NFR-QA-001 | Partial | One git repo. `xcodebuild test`, `cargo test` (in `native/`), and a headless Blender smoke test (`tests/blender/smoke_native.py`) all run. There's no single `blender --background … tests` runner for add-on logic yet. |

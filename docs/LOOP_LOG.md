@@ -592,3 +592,30 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
   1. Push (7 commits ahead).
   2. **Approve or reject `swift-srp`** (`adam-fowler/swift-srp`, Apache-2.0) for 1.1.4b. It isn't GPL, so C-1 allows it; the alternative is our own SRP-6a in Swift over a BigInt package, which is more code to audit.
 - **Next task:** 1.1.4b if `swift-srp` is approved (Swift pairing/session against `pairing.json`/`session.json`/RFC 5054 App. B). If it isn't answered yet, go on in plan order to **1.2.1** (vcam-net UDP receiver thread with latest-sample slot and per-source stats), and mark 1.1.4b "waiting for owner".
+
+## 2026-09-24 — Iteration 21 — 1.2.1 (NET-002, FR-BL-002/004, NFR-REL-001/002) — done
+
+- **Orient:** `main` is 7 ahead of `origin` (unpushed). No new CI run and no owner answer on `swift-srp`, so **1.1.4b is waiting for the owner** and, per iteration 20's plan, I moved on to 1.2.1.
+- **Work (`native/vcam-net`, no dependencies added):**
+  - `src/udp.rs` `UdpReceiver::{start, local_addr, latest_pose, latest_control, stats, stop}`:
+    - The thread (`vcam-udp-rx`) owns the socket with a 50 ms read timeout and authenticates each datagram with a host-role `vcam_protocol::Endpoint`.
+    - Poses go through `SeqFilter` into a latest-sample slot; `CONTROL_STATE` goes into its own newest-`state_seq` slot.
+    - `ReceiverStats`: `poses_applied`, `poses_stale`, `DropCounts` per §4.3 reason, `rate_hz` and seq-gap `loss` over a 1 s window, `last_pose_age`, and `source` (latest authenticated sender, the reply address for STATUS, vcp.md §3/NET-004).
+    - `Drop` stops and joins.
+    - A 1201-byte buffer detects oversize datagrams. Windows `WSAEMSGSIZE` (10040) is counted as a size drop, because Windows reports oversize datagrams as an error instead of truncating them. **That path only runs on Windows, so it's unverified until the CI `rust (windows-latest)` job runs the tests.**
+    - A poisoned lock is recovered (`PoisonError::into_inner`) rather than panicking.
+  - **Interpretation, logged:** the plan says "latest-sample slot (atomic swap)". I used a `Mutex<Option<Sample>>` held only for a copy: the same newest-wins, O(1), no-queue semantics without `unsafe` (a lock-free `AtomicPtr` swap would need `unsafe`, which NFR-QA-004 limits to FFI/encoder modules). C-2's "bounded, non-blocking" holds: readers never wait on I/O, only on a sub-microsecond copy.
+  - `tests/udp_receiver.rs`: 6 tests over real loopback sockets: newest-seq wins with a stale count; drops by reason (tag, size ×2) with no slot or reply-address update; loss 0.2 and rate 16 Hz from 16 of 20 seqs, then the window expires after 1.1 s; `CONTROL_STATE` newest wins; the reply address follows the latest source (roaming); `stop()` < 1 s, idempotent, port re-binds.
+- **Commands run:**
+  - In `native/`: `cargo fmt --check` passes; `cargo clippy --all-targets -- -D warnings` shows `Finished`, 0 warnings; `cargo test` all `ok` (vcam-net `udp_receiver` `ok. 6 passed`; vcam-protocol 3/7/5; 4 × 1).
+  - Flakiness check: `udp_receiver` 10 consecutive runs, `10/10 runs passed`.
+  - **Mutation check** (reverted):
+    - bypassing `SeqFilter` failed `newest_seq_wins_and_reordered_poses_are_stale`;
+    - dropping `+1` from the expected-count formula failed `loss_and_rate_come_from_seq_gaps_in_the_last_second`;
+    - after restoring: `ok. 6 passed`.
+  - `maturin build`: `Built wheel`. Blender smoke: `VCAM_NATIVE_OK 0.1.0`, exit 0. `.venv.nosync/bin/pytest -q -p no:cacheprovider BlenderAddOn/tests`: `12 passed`.
+- **Files changed:** `native/vcam-net/src/lib.rs`, `native/vcam-net/src/udp.rs` (new), `native/vcam-net/tests/udp_receiver.rs` (new), `IMPLEMENTATION_PROGRESS.md` (FR-BL-002, NET-002, NFR-REL-001/002 split out), `docs/LOOP_LOG.md`.
+- **Owner actions (unchanged):** push (8 commits ahead); decide on `swift-srp` for 1.1.4b.
+- **Next task:** 1.2.2, the TCP control server in `vcam-net`: accept one device, run `HELLO` → pairing (`HostPairing` with a CSPRNG code, salt, and `b`; code policy §9.4: single use, 3 failures, 5 min) → session (`SessionHandshake`) → hand the `Endpoint` to `UdpReceiver`. Store `PK` per `device_id` behind a storage trait; the real Blender-config path comes in 1.2.5.
+  - A CSPRNG crate is needed. The plan doesn't name one; `getrandom` (RustCrypto, MIT/Apache) is the minimal choice. Log it and pin it.
+  - It's bigger than one iteration, so split it: 1.2.2a server state machine plus in-memory store, tested with a Rust client built from `vcam-protocol`; 1.2.2b persistence plus `STATUS`/`CLOCK` sending.
