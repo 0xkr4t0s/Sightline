@@ -16,7 +16,8 @@ Timers don't run in a background script, so the test calls the session poll itse
 - A stub session drives Set origin + motion scale + locks through real Blender objects,
   checked against `testdata/rig/rig_cases.json`.
 
-The CI version is task 1.3.5.
+CI runs this, `addon_panel.py` and `addon_robust.py` on Linux, Windows and macOS against a
+release build of the fake iPhone (`blender-smoke` job in `.github/workflows/ci.yml`, task 1.3.5).
 """
 
 import importlib

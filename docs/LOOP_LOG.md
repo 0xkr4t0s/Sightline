@@ -1018,3 +1018,23 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none.
 - **Next task:** 1.3.5 — headless integration test with the fake iPhone that asserts `matrix_world` for each scripted keypose and runs in CI on 3 OSes (XP-002). No second task started.
 - **Owner actions:** push (this commit makes 23 ahead). Still pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.
+
+## 2026-09-25 — Iteration 37 — 1.3.5 (XP-002) — done locally; awaiting a push to run on GitHub
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 23 ahead of `origin`. The existing Phase 1 owner waiver applies.
+- **Scope:** `tests/blender/addon_apply.py` already asserts the camera's `matrix_basis` and `matrix_world` at all 5 scripted keyposes, so no new test was needed. The task was to run it, together with `addon_panel.py` and `addon_robust.py`, in CI on all 3 OSes. Not in scope: a single Blender test runner, and actually running the job on GitHub (that needs a push).
+- **Change (`.github/workflows/ci.yml`, job `blender-smoke`):**
+  - adds `Swatinem/rust-cache` and builds the fake iPhone with `cargo build --release --locked -p vcam-fake-iphone`;
+  - exports `FAKE_IPHONE` as an absolute path into `GITHUB_ENV`, with the `.exe` suffix on Windows;
+  - a new step runs the 3 integration tests with `--python-exit-code 1` in log groups.
+  - The header comment and the `addon_apply.py` docstring were updated to match.
+- **Files changed:** `.github/workflows/ci.yml`, `tests/blender/addon_apply.py` (docstring), `IMPLEMENTATION_PROGRESS.md` (XP-002, NFR-QA-001, NFR-QA-002), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `actionlint ci.yml`: OK.
+  - **CI simulation** (throwaway `/tmp/ci_sim.py`, deleted afterwards): it extracted the `blender-smoke` job's `run:` blocks from `ci.yml` and executed them in order with `bash -eo pipefail`. It used `RUNNER_OS=macOS`, a real `GITHUB_ENV` file, `GITHUB_WORKSPACE` set to the repo (the path has spaces), and a local `--split-platforms` build of `dist/vcam_blender-0.1.0-macos_arm64.zip`. Only the download-Blender step was replaced with the local Blender. Result: all 4 blocks exit 0; the job's own steps printed `VCAM_NATIVE_OK`, `VCAM_SESSION_OK`, `VCAM_ADDON_SESSION_OK`, `VCAM_ADDON_APPLY_OK keyposes=5 max_err=1.79e-07 …`, `VCAM_ADDON_PANEL_OK latency_ms=3.37 …` and `VCAM_ADDON_ROBUST_OK …`; the simulator printed `CI_SIM_OK 4`.
+  - **Mutation check:** `pose_matrix` with the translation dropped makes the integration step fail with `AssertionError: 6.199999809265137`, `block 3 exit=1`, and the loop stops. The file was restored and `cmp`-verified; `dist/` was removed.
+  - `pytest BlenderAddOn/tests`: 19 passed. `gen_testdata.py --check`: `testdata/ up to date (21 files)`. In `native/`: `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean; `cargo test`: 60 passed, 0 failed (summed from the `test result:` lines). `xcodebuild test`: `Executed 11 tests, with 0 failures`, `** TEST SUCCEEDED **`.
+- **Not verified:** the job on GitHub's Linux and Windows runners. Possible risks there: Windows sleep resolution in the 2 ms poll loops (the keypose holds are 250 ms, so there is plenty of margin), and a slow runner overshooting the 83 ms margin before the tilt in `addon_panel.py`'s pan-hold Set Origin. If either fails after the push, read the log with `gh run view --log-failed`.
+- **Blocked:** none.
+- **Next task:** 1.4.x, the first iOS task in plan order (1.4.1). No second task started.
+- **Owner actions:** push, so this job runs on 3 OSes (this commit makes 24 ahead). Still pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.

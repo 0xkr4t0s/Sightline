@@ -1,6 +1,6 @@
-# CI for VCam Blender (IMPLEMENTATION_PLAN.md task 0.1.5; SRS XP-001/002, NFR-QA-002).
+# CI for VCam Blender (IMPLEMENTATION_PLAN.md tasks 0.1.5, 1.3.5; SRS XP-001/002, NFR-QA-002).
 # Rust checks -> vcam_native wheels per OS -> Blender extension (split per platform)
-# -> headless Blender smoke test per OS. Plus Python unit tests and iOS unit tests.
+# -> headless Blender smoke + fake-iPhone integration tests per OS. Plus Python and iOS unit tests.
 name: CI
 
 on:
@@ -170,6 +170,15 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native -> target.nosync
+      - name: Build the fake iPhone (task 1.2.7) for the integration tests
+        working-directory: native
+        run: |
+          cargo build --release --locked -p vcam-fake-iphone
+          exe=""; [ "${RUNNER_OS}" = "Windows" ] && exe=".exe"
+          echo "FAKE_IPHONE=${GITHUB_WORKSPACE}/native/target.nosync/release/vcam-fake-iphone${exe}" >> "${GITHUB_ENV}"
       - uses: actions/download-artifact@v8
         with:
           name: extension
@@ -208,6 +217,17 @@ jobs:
             --python tests/blender/session_native.py
           "${BLENDER}" --background --factory-startup --python-exit-code 1 \
             --python tests/blender/addon_session.py
+      - name: Integration tests with the fake iPhone (XP-002, task 1.3.5)
+        env:
+          BLENDER_USER_RESOURCES: ${{ runner.temp }}/blender-user
+        run: |
+          # addon_apply: matrix_world of the driven camera at every scripted keypose.
+          for t in addon_apply addon_panel addon_robust; do
+            echo "::group::${t}"
+            "${BLENDER}" --background --factory-startup --python-exit-code 1 \
+              --python "tests/blender/${t}.py"
+            echo "::endgroup::"
+          done
 
   python:
     runs-on: ubuntu-latest
