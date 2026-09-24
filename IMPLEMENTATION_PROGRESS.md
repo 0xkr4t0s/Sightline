@@ -89,8 +89,10 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 
 | ID | Status | Evidence / gap |
 |---|---|---|
-| DM-001..004 | Not started | |
-| PR-001..006 | Not started | |
+| DM-001..003 | Partial | Specified: `docs/protocol/vcp.md` §6.1 (pose layout) and §7 (canonical axes, ARKit→canonical conversion, verified numerically). No code yet (1.1.3 Rust, 1.1.4 Swift). Open items O-1/O-2 (device checks). |
+| DM-004 | Not started | Golden vectors come in 1.1.2. |
+| PR-001..004, PR-006 | Partial | Specified in `docs/protocol/vcp.md` (task 1.1.1): header §4.1, types §5, UDP/TCP channels §3, byte layouts with example hex §6/§9, HMAC trailer §4.2, SRP-6a pairing §9, session keys §10. Examples independently decoded and HMAC-checked. Still to do: `testdata/vcp/` (1.1.2) and code (1.1.3/1.1.4). |
+| PR-005 | Not started | Receive rules specified in `vcp.md` §4.3; parser and fuzzing in 1.1.3. |
 | PR-FD-001 | Replace | Non-standard FreeD in `BlenderAddOn/core/freed_parser.py`, `VCamIOS/VCamIOS/FreeDPacketEncoder.swift`, `legacy/DesktopReceiver/src/protocol/FreeDParser.cpp`. |
 | PR-FD-002, PR-OTIO-001 | Not started | Optional, T4. |
 

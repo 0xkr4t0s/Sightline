@@ -362,3 +362,39 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **EEVEE:** exempt with a warning. Solid is the default; EEVEE is an opt-in preview-quality mode exempt from FR-REN-004/NFR-PERF-002. SRS FR-REN-002/004 and NFR-PERF-002 updated.
 - **H.264 fallback:** option A. Hardware encoders only, JPEG where none exists. No OpenH264 in shipped code. SRS NET-VID-003 and §13.2 updated.
 - **GitHub:** the owner created a private remote (`origin`) and pushed `main`. The loop still doesn't push. It MAY read CI results read-only (`gh run list`, `gh run view --log-failed`) and fix failures locally; the owner pushes.
+
+## 2026-09-24 — Iteration 14 — 1.1.1 (PR-001..004, PR-006) — done
+
+- **Orient:** the owner's decisions are in (Phase 1 allowed; EEVEE exempt with a warning; H.264 fallback = JPEG; remote `origin` exists). CI run `35958600428` on the owner's push was `in_progress` when checked (`gh run list`). The next iteration should read its result before starting new work.
+- **Work:** wrote `docs/protocol/vcp.md` (Draft 1) with these sections:
+  - conventions (LE, `str8`, forward-compatible payload growth, device and host clocks);
+  - transport and DNS-SD TXT;
+  - the 12-byte header (PR-001) and 8-byte HMAC-SHA256/64 trailer with directional keys (PR-006);
+  - ordered receive rules (PR-005 basis);
+  - the type registry (UDP 0x01–0x06, TCP 0x40–0x4F);
+  - byte layouts plus example hex for `POSE` (42 B), `CONTROL_STATE` (16 B, T1 subset: scale, locks, origin epoch; full idempotent state resent until `STATUS.control_ack`), `CLOCK` (28 B, NTP four-timestamp, host-initiated 1 Hz, also the heartbeat) and `STATUS` (≥ 16 B);
+  - canonical axes and the ARKit→canonical conversion (DM-002);
+  - liveness and reconnect (NET-004);
+  - pairing, session setup, `ERROR` codes, security notes, open items, change log.
+- **Design decision (within the plan's mandate, 1.2.2: "a PAKE or HKDF over the code and nonces; document the choice"): pairing uses SRP-6a (RFC 5054, 3072-bit group, g = 5, SHA-256).** Rationale, documented in `vcp.md` §9.1:
+  - HKDF over a 20-bit code is brute-forceable offline from a recorded handshake.
+  - ECDH plus a code-keyed confirmation lets an active MITM recover the code offline from whichever side confirms first; commitments don't fix this, because the MITM delays its own commitment.
+  - A PAKE limits attackers to one online guess per attempt. Combined with the code policy (single-use, 3 failures, 5 min), an active attacker's success is ≤ 3 × 10⁻⁶ per code.
+  - The iOS 27 CryptoKit (`CryptoKit.swiftinterface`) has **no** PAKE (no SPAKE2/CPace/SRP types). The permissively licensed options are Swift `adam-fowler/swift-srp` (Apache-2.0, README states RFC 5054 compliance and test-vector checks) and Rust RustCrypto `srp` (MIT/Apache).
+  - **Found:** `srp` 0.6.0 does not follow RFC 5054 for `u` (unpadded A/B, `utils.rs:7-12`), uses the raw S as the key, and uses non-RFC M1/M2. Off the shelf it would fail interop about 1 in 128 pairings. The spec therefore pins every formula with `PAD()`, defines VCP's own proofs and HKDF key schedule over `K = H(PAD(S))`, and requires the RFC 5054 Appendix B vectors (open item O-3).
+  - **Owner may want to review this choice.** It adds a Swift dependency (`swift-srp`, Apache-2.0, allowed for iOS by C-1) when task 1.4.3 comes. No dependency was added this iteration.
+- **Facts checked in the SDK before relying on them:**
+  - `ARConfiguration.h`: `.gravity` defines gravity as (0, −1, 0).
+  - `ARTrackingState`/`Reason` enum names.
+  - `ARFrame.timestamp` and `ARCamera.transform` headers don't state the clock base or the camera-local axes. These are recorded as open items O-1/O-2 for a device check (1.4.2), not asserted.
+  - RFC 5054 3072-bit group generator `g = 5`, and N = 384 bytes (`srp-0.6.0/src/groups.rs`, `groups/3072.bin`).
+- **Fix during verification:** the `HELLO` size said "38 + name"; it's 37 + name. Corrected.
+- **Files changed:** `docs/protocol/vcp.md` (new), `IMPLEMENTATION_PROGRESS.md` (DM-001..003, DM-004, PR-001..004/006, PR-005 rows), `docs/LOOP_LOG.md`.
+- **Commands run / verification:**
+  - Example hex was generated with Python `struct` + `hmac` (keys `00..1f` d2h, `20..3f` h2d, `session_id 0x1234ABCD`).
+  - An independent checker parsed all **6** example blocks straight from `vcp.md` at the spec's offsets. For each: header, `len`, and `session_id` checked; HMAC verified with the correct direction key and rejected with the wrong one; every field value matches the prose; sizes match (`POSE` 42, `CONTROL_STATE` 16, `CLOCK` 28, `STATUS` 16 + name, `HELLO` 37 + name). Output: `6 example blocks: ['POSE ok', 'CONTROL_STATE ok', 'CLOCK req ok', 'CLOCK rep ok', 'STATUS ok', 'HELLO ok (37+name)']`.
+  - Clock example: θ = −4.000075 s, δ = 0.95 ms (matches §6.3).
+  - §7: the quaternion rule `q_C ⊗ q` equals the position rule `(x,y,z)→(x,−z,y)` for 1000 random orientations (max error 4.4e-16). An identity ARKit camera looks along canonical +Y with up +Z.
+  - No code changed, so the Rust, Python, iOS, and Blender suites weren't re-run.
+- **Blocked:** none new.
+- **Next task:** first read CI run `35958600428` (`gh run view --log-failed`) and fix any failures locally, since CI green is a P0 gate item. Otherwise 1.1.2: `testdata/vcp/*.bin` + `*.json` (the §6 examples, plus a full SRP-6a pairing transcript with fixed `a`, `b`, `s`, code, including RFC 5054 Appendix B vectors) and `testdata/coords/*.json` (DM-004 set). Generate them with a committed script, so the vectors are reproducible.
