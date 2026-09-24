@@ -754,3 +754,33 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none.
 - **Next task:** 1.2.5 — Python API (`Session.start(port)`, `.latest_pose()`, `.stats()`, `.pairing_code()`, `.stop()`), releasing the GIL, panics → exceptions, clean shutdown on unregister. Likely split: 1.2.5a PyO3 `Session` over `ControlServer` plus headless-Blender test; 1.2.5b add-on register/unregister wiring. No second task started.
 - **Owner actions:** push (this commit makes 14 ahead); pending: the `mdns-sd`/`getrandom` dependency reviews and the `swift-srp` decision.
+
+## 2026-09-24 — Iteration 28 — 1.2.5a (C-2, NFR-REL-001, NFR-REL-002, FR-BL-002) — done
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 14 ahead of `origin`; no new CI run. Existing Phase 1 owner waiver applies.
+- **Split of 1.2.5** (too big for one iteration):
+  - **1.2.5a (this):** PyO3 `vcam_native.Session` over `ControlServer`: GIL release, panic → exception, clean stop, verified in headless Blender.
+  - **1.2.5b (next):** add-on wiring: a stable `host_id` and config directory (Blender user config), start on enable, `stop()` in `unregister()`, and a `bpy.app.timers` poll. The Python FreeD path is still replaced in 1.3.1.
+- **API (`native/vcam-py/src/lib.rs`):**
+  - `Session.start(port, config_dir, host_id, bind="0.0.0.0", udp_port=0)`, `stop()` (idempotent), `running()`, `port()`, `udp_port()`.
+  - Pairing and discovery: `advertise(host, blend)`, `discovery_error()`, `enable_pairing()`, `disable_pairing()`, `pairing_code()`.
+  - Reads and status: `poll_event()`, `latest_pose()`, `stats()`, `host_clock_ns()`, `update_status(...)`. Also `NativeError`, and the private `_panic_probe()` test hook (like `_frame_probe`).
+  - Plan names covered: `start`/`latest_pose`/`stats`/`pairing_code`/`stop`. The rest is what 1.2.5b/1.3.x need to pair, advertise and acknowledge. `latest_control` is deferred to FR-BL-005 (1.3.x).
+- **Decisions:**
+  - Panics become `NativeError(RuntimeError)` via `catch_unwind`, because PyO3's default `PanicException` derives from `BaseException` and escapes `except Exception` in add-on code (confirmed in the PyO3 0.29.2 source, `src/panic.rs:14`).
+  - `io::ErrorKind::InvalidInput` maps to `ValueError`; every other kind uses PyO3's `OSError` family (checked against `src/err/impls.rs:52-66`).
+  - `start` and `stop` release the GIL with `Python::detach` (`src/marker.rs:562`). `stop` takes the server out of the mutex first. `advertise` keeps the GIL: it only queues registrations, and releasing the GIL while holding the session lock could deadlock a second Python caller (found and fixed before the first build).
+  - The pyclass is `frozen` with `Mutex<Option<ControlServer>>`, so it's `Send + Sync` without `unsendable`. No new dependencies.
+- **Files changed:** `native/vcam-py/src/lib.rs`, `tests/blender/session_native.py` (new), `.github/workflows/ci.yml` (`blender-smoke` runs `session_native.py` after `smoke_native.py`), `IMPLEMENTATION_PROGRESS.md` (FR-BL-002, NFR-REL-001, NFR-REL-002, NFR-QA-001), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `cargo fmt --check`: OK. `cargo clippy --all-targets -D warnings`: clean. `cargo test`: 48 passed, 0 failed (new `guard_turns_panics_into_errors_and_passes_results_through`).
+  - maturin wheel + extension install + headless Blender 5.2.2: `smoke_native.py` gave `VCAM_NATIVE_OK 0.1.0`, exit 0. `session_native.py` gave `VCAM_SESSION_OK tcp=62213 udp=50488 stop_ms=50 panic=NativeError refused=ConnectionRefusedError`, exit 0. It covers real bind/connect, `ValueError`/`OSError` mapping (short host_id, bad IP, port in use, oversize TXT, 64-byte camera name, `update_status` with no session), pairing code, stats/pose/event before a device, advertise/update, panic caught by `except Exception` with the session still alive, stop < 1 s, idempotent stop, `RuntimeError` after stop, refused TCP after stop, and same-port restart.
+  - Mutation check in Blender (rebuilt each time, source restored and `cmp`-verified): removing the panic guard, `stop()` leaving the server running, and `InvalidInput` staying `OSError`. All 3 failed `session_native.py` (exit 1).
+  - `actionlint ci.yml`: OK. `pytest BlenderAddOn/tests`: 12 passed. `tools/gen_testdata.py --check`: up to date (18 files). `xcodebuild test` (iPhone 17 Pro sim): 11 tests, 0 failures, `** TEST SUCCEEDED **`.
+- **Not verified:**
+  - `latest_pose()`/`poll_event()`/`stats()` with a real paired device. The Python side has no device client yet; the Rust paths are covered by `vcam-net` tests. The first end-to-end check through Python is the fake iPhone (1.2.7) / integration test (1.3.5).
+  - That the GIL is actually released during `stop` isn't observed from Python (stop takes about 50 ms). The code uses `detach`.
+  - `session_native.py` on Windows/Linux CI (awaiting push).
+- **Blocked:** none.
+- **Next task:** 1.2.5b — add-on register/unregister wiring of `Session` (stable host_id + config dir in Blender's user config, `stop()` on unregister, main-thread timer poll), tested headlessly with enable → disable → re-enable. No second task started.
+- **Owner actions:** push (this commit makes 15 ahead; CI will run `session_native.py` on 3 OSes). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.

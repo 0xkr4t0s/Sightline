@@ -196,7 +196,7 @@ jobs:
               echo "BLENDER=/Volumes/Blender/Blender.app/Contents/MacOS/Blender" >> "${GITHUB_ENV}"
               ;;
           esac
-      - name: Install the extension and import vcam_native
+      - name: Install the extension, import vcam_native, exercise Session
         env:
           BLENDER_USER_RESOURCES: ${{ runner.temp }}/blender-user
         run: |
@@ -204,6 +204,8 @@ jobs:
           "${BLENDER}" --command extension install-file -r user_default -e "${zip}"
           "${BLENDER}" --background --factory-startup --python-exit-code 1 \
             --python tests/blender/smoke_native.py
+          "${BLENDER}" --background --factory-startup --python-exit-code 1 \
+            --python tests/blender/session_native.py
 
   python:
     runs-on: ubuntu-latest
