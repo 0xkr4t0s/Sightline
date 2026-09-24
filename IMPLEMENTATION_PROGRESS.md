@@ -19,7 +19,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | C++ `legacy/DesktopReceiver/` (incl. CMIO extension) | Retire | Moved to `legacy/` in task 0.1.2 (ARC-006). Port the parsers, their tests, and the test-pattern generator to Rust, then delete the directory. |
 | Repo / CI | Partial | One git repo at the root (task 0.1.1). `VCamIOS` history imported under `VCamIOS/` (commits `ae4d81c`, `984145a`, `5ba2672`). CI workflow `.github/workflows/ci.yml` is written and lint-clean but has never run on GitHub (no remote yet). |
 
-**Maturity:** early prototype. All of Phase 0 is open.
+**Maturity:** early prototype. Phase 0 tasks 0.1.1–0.1.6 are done locally; CI hasn't run on GitHub; spikes S-2 and S-3 are open, S-1 is done for macOS.
 
 **Environment on the owner's Mac (2026-09-24):** Blender 5.2.2 LTS at `/Applications/Blender.app`; cargo/rustc 1.97.1; `.venv.nosync/` with pytest + maturin; Xcode 27.0 (via `DEVELOPER_DIR`) with the iOS 27.0 simulator.
 
@@ -80,7 +80,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | FR-BL-006/007 | Not started | |
 | FR-REN-* | Not started | S-1 (SRS §13.1) shows headless `GPUOffScreen` + `draw_view3d` + `read()` works, and zero-copy access through `vcam_native._frame_probe` works (`native/vcam-py/src/lib.rs:18-32`). Production code comes in Phase 2. **Flag:** EEVEE draw (76 ms at 540p) conflicts with FR-REN-004/NFR-PERF-002. |
 | FR-TAKE-* | Not started | |
-| UI text | Replace | `operators/tracking_receiver.py:23` mentions "Live Link". |
+| UI text | Done | "Live Link" removed. `operators/tracking_receiver.py:23` now reads "Begin receiving FreeD camera tracking data over UDP" (task 0.1.6). The FreeD path itself goes away in 1.3.1. |
 
 ### §6 Protocol
 

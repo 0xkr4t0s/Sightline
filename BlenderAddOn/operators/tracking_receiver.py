@@ -20,7 +20,7 @@ class VCAM_OT_start_tracking(bpy.types.Operator):
 
     bl_idname = "vcam.start_tracking"
     bl_label = "Start Camera Tracking"
-    bl_description = "Begin receiving FreeD/Live Link tracking data over UDP"
+    bl_description = "Begin receiving FreeD camera tracking data over UDP"
     bl_options = {'REGISTER'}
 
     _timer = None
