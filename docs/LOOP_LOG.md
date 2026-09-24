@@ -13,6 +13,7 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 | S-2 H.264 software-fallback licensing | Resolved 2026-09-24 | Option A: hardware H.264, JPEG fallback; NET-VID-003 updated. |
 | S-3b Developer ID signing + notarization of the macOS wheel | BLOCKED (needs owner) | Needs an Apple Developer account and credentials. Re-run `tests/s3_macos_loading.sh --gui` with a signed and notarized `.so`. |
 | S-3c Windows SmartScreen / Mark-of-the-Web | BLOCKED (needs owner) | Needs a Windows machine. |
+| Local coverage-guided fuzzing (1.1.3c) | Needs owner OK | Installing a nightly toolchain is outside the loop's allowed installs. CI's `fuzz` job covers it once pushed. |
 
 ---
 
@@ -526,3 +527,35 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Files changed:** `native/vcam-protocol/{Cargo.toml,src/lib.rs,src/control.rs,src/pairing.rs,tests/pairing.rs}`, `native/Cargo.lock`, `tools/gen_testdata.py`, `testdata/vcp/pairing.json`, `docs/protocol/vcp.md` (O-3 row), `IMPLEMENTATION_PROGRESS.md` (PR-001..003/006, FR-UX-001/002, NFR-SEC-001 split out), `docs/LOOP_LOG.md`.
 - **Owner action:** push (5 commits will be ahead of `origin`).
 - **Next task:** 1.1.3c, `native/fuzz/` with cargo-fuzz targets for `Endpoint::open`, `ControlMessage::decode`, and the pairing inputs (`HostPairing::verify` with arbitrary `PairProof`). It needs nightly plus `cargo install cargo-fuzz` (allowed by the loop prompt); the fuzz crate stays outside the workspace. Time-box the runs and record executions/s and coverage.
+
+## 2026-09-24 — Iteration 19 — 1.1.3c (PR-005, NFR-QA-002) — done, except the coverage-guided run
+
+- **Orient:** `main` is still 5 ahead of `origin` (unpushed). No new CI run. The only toolchain is `stable-aarch64-apple-darwin` 1.97.1, and `cargo-fuzz` isn't installed.
+- **Constraint:** `cargo fuzz` needs a nightly toolchain (sanitizer-coverage flags). The loop prompt allows `cargo install cargo-fuzz` and `rustup component add` only; installing a new **toolchain** (`rustup toolchain install nightly`) is "ask first". So I didn't install it locally, and didn't install cargo-fuzz either, since it's useless without nightly. Logged as blocked in the table. CI installs nightly on the runner instead.
+- **Dependency (fuzz crate only, pinned):** `libfuzzer-sys = "=0.4.13"` ((MIT OR Apache-2.0) AND NCSA). It isn't linked into the wheel or any workspace crate.
+- **Work:**
+  - `native/fuzz/` (the `cargo fuzz init` layout, with its own `[workspace]` so the main workspace is unchanged: `cargo metadata` still lists the 5 crates). Targets:
+    - `udp_open`: `Endpoint::open` from both roles; anything accepted must satisfy `open(seal(msg)) == msg`.
+    - `control_decode`: `ControlMessage::decode`; `frame_len` must agree with `decode`, and accepted frames must round-trip through `encode`.
+    - `pairing_inputs`: arbitrary `PAIR_PROOF` against a fixed `HostPairing` (a random `M1` must never verify) and arbitrary `PAIR_CHALLENGE` into `device_pair`.
+  - `.github/workflows/ci.yml`: new job `fuzz` (ubuntu): `rustup toolchain install nightly --profile minimal`, `cargo install cargo-fuzz --version 0.13.2 --locked`, seeds `fuzz/corpus/<target>` from `testdata/vcp` (the UDP `.bin` files, the TCP messages from `pairing.json`/`session.json`, and one proof and one challenge seed), then `cargo +nightly fuzz run <target> -- -max_total_time=60` for each target. It uploads `fuzz/artifacts/` on failure. The corpus/artifact paths were confirmed in `cargo-fuzz-0.13.2/src/project.rs:17,1017-1028,1083`.
+  - `.gitignore`: `native/fuzz/{corpus,artifacts,coverage}/`. `native/fuzz/Cargo.lock` is committed.
+- **Verification this iteration (stable only):**
+  - In `native/fuzz`: `cargo fmt --check` passes; `cargo clippy --all-targets -- -D warnings -W clippy::unwrap_used` shows `Finished`, 0 warnings.
+  - `cargo build --release --bins` builds the three libFuzzer binaries (libFuzzer's C++ is compiled by `libfuzzer-sys`'s build script).
+  - **Seed replay** (`-runs=0`): `udp_open` `Done 9 runs`, `control_decode` `Done 11 runs`, `pairing_inputs` `Done 3 runs`, all exit 0. The seed count + 1 is libFuzzer's empty input.
+  - **Coverage-blind** mutation, 60 s per target in parallel (`-max_total_time=60`):
+    - `udp_open`: 274,500,204 execs (4.5M/s);
+    - `control_decode`: 279,870,211 execs (4.59M/s);
+    - `pairing_inputs`: 45,093 execs (739/s, one 3072-bit modpow per input);
+    - all exit 0, 0 artifacts.
+
+    **This is not coverage-guided fuzzing.** Without sancov, most mutations die at the size/magic/tag checks, as the high exec rate suggests. It's a smoke check only.
+  - `.venv.nosync/bin/actionlint .github/workflows/ci.yml`: exit 0.
+  - The main workspace and Python/Blender aren't affected (no changes outside `native/fuzz`, CI, `.gitignore`), so they weren't re-run.
+- **Files changed:** `native/fuzz/{Cargo.toml,Cargo.lock,fuzz_targets/udp_open.rs,fuzz_targets/control_decode.rs,fuzz_targets/pairing_inputs.rs}` (new), `.github/workflows/ci.yml`, `.gitignore`, `IMPLEMENTATION_PROGRESS.md` (PR-005, NFR-QA-002), `docs/LOOP_LOG.md`.
+- **Owner actions:**
+  1. Push (6 commits ahead). CI will then run the guided fuzz job and confirm the iteration-15 clippy fix.
+  2. Optional: OK installing a nightly toolchain locally (`rustup toolchain install nightly --profile minimal` plus `cargo install cargo-fuzz --version 0.13.2 --locked`), so the loop can run guided fuzzing without a push.
+- **1.1.3 status:** 1.1.3a, b, c are done. `vcam-protocol` covers DM-001 (pose type) and PR-001..006. The DM-002/003 "conversions" part is iOS-side by design (DM-002: the conversion happens once on the iPhone), so the Rust coordinate code is only needed for the Blender apply step (1.3.2).
+- **Next task:** 1.1.4, the Swift `VCP` module in VCamIOS (encoder/decoder + ARKit→canonical conversion) with XCTests on `testdata/` (folder reference in the test bundle). Split it: 1.1.4a UDP messages + HMAC + coords tests; 1.1.4b pairing via `swift-srp` (needs owner review of that dependency per iteration 14).

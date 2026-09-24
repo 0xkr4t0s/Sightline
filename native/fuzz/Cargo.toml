@@ -1,0 +1,38 @@
+[package]
+name = "vcam-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+vcam-protocol = { path = "../vcam-protocol" }
+
+# Not part of the main workspace (native/Cargo.toml): cargo-fuzz builds this with nightly and
+# sanitizer flags. Run from native/: `cargo +nightly fuzz run <target>` (PR-005, NFR-QA-002).
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "udp_open"
+path = "fuzz_targets/udp_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "control_decode"
+path = "fuzz_targets/control_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pairing_inputs"
+path = "fuzz_targets/pairing_inputs.rs"
+test = false
+doc = false
+bench = false

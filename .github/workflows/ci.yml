@@ -49,6 +49,48 @@ jobs:
         working-directory: native
         run: cargo test
 
+  fuzz:
+    # PR-005 / NFR-QA-002: time-boxed cargo-fuzz run per target, seeded from testdata/.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install nightly and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Seed corpora from testdata/
+        working-directory: native/fuzz
+        run: |
+          mkdir -p corpus/udp_open corpus/control_decode corpus/pairing_inputs
+          for f in ../../testdata/vcp/*.bin; do
+            case "$(basename "$f")" in
+              hello_pair.bin|error_not_paired.bin) cp "$f" corpus/control_decode/ ;;
+              *) cp "$f" corpus/udp_open/ ;;
+            esac
+          done
+          python3 - <<'EOF'
+          import json
+          for name, keys in (("session", ["HELLO", "SESSION_CHALLENGE", "SESSION_PROOF", "SESSION_ACCEPT"]),
+                             ("pairing", ["HELLO", "PAIR_CHALLENGE", "PAIR_PROOF", "PAIR_ACCEPT"])):
+              msgs = json.load(open(f"../../testdata/vcp/{name}.json"))["messages"]
+              for key in keys:
+                  open(f"corpus/control_decode/{name}_{key}.bin", "wb").write(bytes.fromhex(msgs[key]))
+          pairing = json.load(open("../../testdata/vcp/pairing.json"))["messages"]
+          open("corpus/pairing_inputs/proof.bin", "wb").write(b"\x00" + bytes.fromhex(pairing["PAIR_PROOF"])[12:])
+          open("corpus/pairing_inputs/challenge.bin", "wb").write(b"\x01" + bytes.fromhex(pairing["PAIR_CHALLENGE"])[12:] + bytes(32))
+          EOF
+      - name: cargo fuzz run (60 s per target)
+        working-directory: native
+        run: |
+          for target in udp_open control_decode pairing_inputs; do
+            cargo +nightly fuzz run "$target" -- -max_total_time=60 -rss_limit_mb=2048
+          done
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: fuzz-artifacts
+          path: native/fuzz/artifacts/
+
   wheels:
     strategy:
       fail-fast: false
