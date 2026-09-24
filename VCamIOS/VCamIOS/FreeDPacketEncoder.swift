@@ -37,7 +37,7 @@ enum FreeDPacketEncoder {
         let sum = bytes.prefix(28).reduce(0) { partialResult, byte in
             partialResult + UInt32(byte)
         }
-        return UInt8((0x40 - sum) & 0xFF)
+        return UInt8((0x40 &- sum) & 0xFF)
     }
 
     private static func encodeSigned24(_ value: Int32, into bytes: inout [UInt8], at offset: Int) {
