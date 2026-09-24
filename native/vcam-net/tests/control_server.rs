@@ -6,7 +6,9 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
-use vcam_net::{ControlEvent, ControlServer, MemoryStore, ServerConfig};
+use vcam_net::{
+    ControlEvent, ControlServer, FileStore, MemoryStore, PairedDevice, PairingStore, ServerConfig,
+};
 use vcam_protocol::{
     ControlErrorMsg, ControlMessage, Endpoint, HEADER_LEN, Hello, Message, Pose, Role,
     SessionHandshake, SessionKeys, device_pair,
@@ -344,4 +346,233 @@ fn codes_are_six_digits_and_vary() {
         "50 random codes should almost never collide ({} distinct)",
         codes.len()
     );
+}
+
+// A unique config root, removed after all FileStore/server handles in the test are dropped.
+struct ConfigDir(std::path::PathBuf);
+
+impl ConfigDir {
+    fn new() -> Self {
+        let mut nonce = [0u8; 16];
+        getrandom::fill(&mut nonce).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "vcam-pairings-test-{:032x}",
+            u128::from_le_bytes(nonce)
+        ));
+        std::fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+
+    fn snapshot(&self) -> std::path::PathBuf {
+        self.0.join("vcam-pairings/pairings.v1")
+    }
+
+    fn server(&self) -> ControlServer {
+        ControlServer::start(
+            "127.0.0.1:0".parse().unwrap(),
+            ServerConfig::new([0xF0; 16], UDP_PORT),
+            Box::new(FileStore::open(&self.0).unwrap()),
+        )
+        .unwrap()
+    }
+}
+
+impl Drop for ConfigDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn paired(id: u8, name: &str, key: u8) -> PairedDevice {
+    PairedDevice {
+        device_id: [id; 16],
+        device_name: name.into(),
+        pk: [key; 32],
+    }
+}
+
+#[test]
+fn file_pairing_survives_server_restart_without_a_new_code() {
+    let config = ConfigDir::new();
+    let mut first = config.server();
+    let mut client = Client::connect(&first);
+    let pk = client.pair(&first.enable_pairing().unwrap());
+    // Receipt of PAIR_ACCEPT guarantees the key is already on disk, not merely queued.
+    assert_eq!(
+        FileStore::open(&config.0).unwrap().get(&DEVICE).unwrap().pk,
+        pk
+    );
+    let old_keys = client.session(&pk);
+    drop(client);
+    first.stop();
+    drop(first);
+
+    let second = config.server();
+    assert_eq!(second.pairing_code(), None);
+    let new_keys = Client::connect(&second).session(&pk);
+    assert_ne!(old_keys.k_d2h, new_keys.k_d2h);
+    assert!(
+        matches!(next_event(&second), ControlEvent::SessionStarted { keys, .. } if keys == new_keys)
+    );
+}
+
+#[test]
+fn storage_failure_closes_without_accepting_and_allows_retry() {
+    let config = ConfigDir::new();
+    let server = config.server();
+    let code = server.enable_pairing().unwrap();
+    // A directory at the target forces a real rename failure on all supported OSes.
+    std::fs::create_dir(config.snapshot()).unwrap();
+    let mut client = Client::connect(&server);
+    let h = hello(Hello::MODE_PAIR, [0xA1; 16]);
+    client.send(&ControlMessage::Hello(h.clone()));
+    let ControlMessage::PairChallenge(challenge) = client.recv() else {
+        panic!("expected challenge")
+    };
+    let (proof, _) = device_pair(&code, &h, &challenge, &[0x5E; 32]).unwrap();
+    client.send(&ControlMessage::PairProof(proof));
+    let mut byte = [0];
+    assert_eq!(
+        client.0.read(&mut byte).unwrap(),
+        0,
+        "must not send PAIR_ACCEPT on storage failure"
+    );
+    assert!(matches!(
+        next_event(&server),
+        ControlEvent::PairingStorageFailed {
+            device_id: DEVICE,
+            ..
+        }
+    ));
+    assert!(
+        server.try_event().is_none(),
+        "failed persistence must not emit Paired"
+    );
+    let mut unknown = Client::connect(&server);
+    unknown.send(&ControlMessage::Hello(hello(Hello::MODE_SESSION, [0; 16])));
+    unknown.expect_error(ControlErrorMsg::NOT_PAIRED);
+    assert_eq!(server.pairing_code().as_deref(), Some(code.as_str()));
+
+    std::fs::remove_dir(config.snapshot()).unwrap();
+    let mut retry = Client::connect(&server);
+    let pk = retry.pair(&code);
+    let keys = retry.session(&pk);
+    assert!(matches!(
+        next_event(&server),
+        ControlEvent::Paired {
+            device_id: DEVICE,
+            ..
+        }
+    ));
+    assert!(
+        matches!(next_event(&server), ControlEvent::SessionStarted { keys: host_keys, .. } if host_keys == keys)
+    );
+}
+
+#[test]
+fn file_store_replaces_one_pairing_without_losing_other_devices() {
+    let config = ConfigDir::new();
+    let mut store = FileStore::open(&config.0).unwrap();
+    let original = paired(1, "phone", 2);
+    let other = paired(3, "", 4);
+    let replacement = paired(1, &"é\n".repeat(21), 5); // 63 UTF-8 bytes, including newlines
+    store.put(original).unwrap();
+    store.put(other.clone()).unwrap();
+    store.put(replacement.clone()).unwrap();
+    drop(store);
+    let reopened = FileStore::open(&config.0).unwrap();
+    assert_eq!(reopened.get(&replacement.device_id), Some(replacement));
+    assert_eq!(reopened.get(&other.device_id), Some(other));
+    assert_eq!(reopened.get(&[9; 16]), None);
+}
+
+#[test]
+fn failed_replace_keeps_previous_key_in_memory_and_on_disk() {
+    let config = ConfigDir::new();
+    let mut store = FileStore::open(&config.0).unwrap();
+    let original = paired(1, "phone", 2);
+    store.put(original.clone()).unwrap();
+    let backup = config.0.join("saved");
+    std::fs::rename(config.snapshot(), &backup).unwrap();
+    std::fs::create_dir(config.snapshot()).unwrap();
+    assert!(store.put(paired(1, "replacement", 3)).is_err());
+    assert_eq!(store.get(&original.device_id), Some(original.clone()));
+    std::fs::remove_dir(config.snapshot()).unwrap();
+    std::fs::rename(backup, config.snapshot()).unwrap();
+    drop(store);
+    assert_eq!(
+        FileStore::open(&config.0).unwrap().get(&original.device_id),
+        Some(original)
+    );
+    assert_eq!(
+        std::fs::read_dir(config.0.join("vcam-pairings"))
+            .unwrap()
+            .count(),
+        1,
+        "failed write must remove its temporary key file"
+    );
+}
+
+#[test]
+fn corrupt_store_is_rejected_without_overwriting_keys() {
+    let config = ConfigDir::new();
+    let mut store = FileStore::open(&config.0).unwrap();
+    store.put(paired(1, "phone", 2)).unwrap();
+    drop(store);
+    let good = std::fs::read(config.snapshot()).unwrap();
+    // Every truncated prefix, including the header and full-record boundary, must fail closed.
+    let mut invalid: Vec<Vec<u8>> = (0..good.len()).map(|n| good[..n].to_vec()).collect();
+    let mut unknown_version = good.clone();
+    unknown_version[6] = b'2';
+    invalid.push(unknown_version);
+    let mut trailing = good.clone();
+    trailing.push(0);
+    invalid.push(trailing);
+    let mut duplicate = good.clone();
+    duplicate[8..12].copy_from_slice(&2u32.to_le_bytes());
+    duplicate.extend_from_slice(&good[12..]);
+    invalid.push(duplicate);
+    let mut bad_utf8 = good.clone();
+    bad_utf8[61] = 0xff;
+    invalid.push(bad_utf8);
+    let mut long_name = good.clone();
+    long_name[60] = 65;
+    invalid.push(long_name);
+    for bytes in invalid {
+        std::fs::write(config.snapshot(), &bytes).unwrap();
+        assert!(FileStore::open(&config.0).is_err());
+        assert_eq!(
+            std::fs::read(config.snapshot()).unwrap(),
+            bytes,
+            "corruption must not reset the store"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn key_files_are_private_and_symlink_stores_are_rejected() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let config = ConfigDir::new();
+    let mut store = FileStore::open(&config.0).unwrap();
+    store.put(paired(1, "phone", 2)).unwrap();
+    store.put(paired(1, "new phone", 3)).unwrap();
+    let directory = config.0.join("vcam-pairings");
+    assert_eq!(
+        std::fs::metadata(directory).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        std::fs::metadata(config.snapshot())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    drop(store);
+    let outside = config.0.join("outside");
+    std::fs::rename(config.snapshot(), &outside).unwrap();
+    symlink(&outside, config.snapshot()).unwrap();
+    assert!(FileStore::open(&config.0).is_err());
 }

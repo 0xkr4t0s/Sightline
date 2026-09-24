@@ -3,7 +3,7 @@
 //!
 //! A listener thread accepts connections and serves each on its own thread. Results reach the
 //! caller as [`ControlEvent`]s through a non-blocking queue (C-2). Pairing keys live behind a
-//! [`PairingStore`]; persistence to Blender's config directory comes in task 1.2.2b.
+//! [`PairingStore`]; [`crate::FileStore`] persists them in the caller's config directory.
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -33,10 +33,11 @@ pub struct PairedDevice {
 /// Where pairing keys are kept (NFR-SEC-001).
 pub trait PairingStore: Send {
     fn get(&self, device_id: &[u8; 16]) -> Option<PairedDevice>;
-    fn put(&mut self, device: PairedDevice);
+    /// Commit the pairing before returning success; an error must leave the old pairing intact.
+    fn put(&mut self, device: PairedDevice) -> io::Result<()>;
 }
 
-/// In-memory store (tests, and the fallback when there is no config directory).
+/// Explicitly ephemeral store for tests and callers that do not need remembered pairings.
 #[derive(Debug, Default)]
 pub struct MemoryStore(HashMap<[u8; 16], PairedDevice>);
 
@@ -45,8 +46,9 @@ impl PairingStore for MemoryStore {
         self.0.get(device_id).cloned()
     }
 
-    fn put(&mut self, device: PairedDevice) {
+    fn put(&mut self, device: PairedDevice) -> io::Result<()> {
         self.0.insert(device.device_id, device);
+        Ok(())
     }
 }
 
@@ -84,6 +86,8 @@ pub enum ControlEvent {
         device_id: [u8; 16],
         device_name: String,
     },
+    /// Persistence failed: no PAIR_ACCEPT was sent and the connection is closed.
+    PairingStorageFailed { device_id: [u8; 16], error: String },
     /// Build the session's host `Endpoint` from `keys` and start receiving on `udp_port`.
     SessionStarted {
         device_id: [u8; 16],
@@ -381,15 +385,23 @@ impl Conn<'_> {
         let mut inner = self.shared.lock();
         inner.pairing_busy = false;
         match result {
-            Ok(device) => {
-                inner.pairing = None; // single use (§9.4)
-                inner.store.put(device.clone());
+            Ok((device, m2)) => {
+                if let Err(error) = inner.store.put(device.clone()) {
+                    drop(inner);
+                    let _ = self.events.send(ControlEvent::PairingStorageFailed {
+                        device_id: device.device_id,
+                        error: error.to_string(),
+                    });
+                    // v1 has no storage-error wire code. Close without acknowledging.
+                    return Err(End::Close);
+                }
+                inner.pairing = None; // single use after the pairing is committed (§9.4)
                 drop(inner);
                 let _ = self.events.send(ControlEvent::Paired {
                     device_id: device.device_id,
                     device_name: device.device_name,
                 });
-                Ok(())
+                self.write(&ControlMessage::PairAccept { m2 })
             }
             Err(PairFailure::Proof) => {
                 if let Some(w) = inner.pairing.as_mut() {
@@ -409,7 +421,7 @@ impl Conn<'_> {
         hello: &Hello,
         code: &str,
         deadline: Instant,
-    ) -> Result<PairedDevice, PairFailure> {
+    ) -> Result<(PairedDevice, [u8; 32]), PairFailure> {
         let host = HostPairing::new(
             code,
             hello,
@@ -430,12 +442,14 @@ impl Conn<'_> {
                 return Err(End::Error(ControlErrorMsg::MALFORMED, "cannot verify").into());
             }
         };
-        self.write(&ControlMessage::PairAccept { m2 })?;
-        Ok(PairedDevice {
-            device_id: hello.device_id,
-            device_name: hello.device_name.clone(),
-            pk,
-        })
+        Ok((
+            PairedDevice {
+                device_id: hello.device_id,
+                device_name: hello.device_name.clone(),
+                pk,
+            },
+            m2,
+        ))
     }
 
     fn session(&mut self, hello: &Hello, deadline: Instant) -> Result<(), End> {
