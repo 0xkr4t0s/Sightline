@@ -4,11 +4,17 @@
 //! returns an error instead of panicking on malformed input (PR-005).
 #![forbid(unsafe_code)]
 
+mod control;
 mod endpoint;
 mod fresh;
 mod message;
+mod pairing;
 mod wire;
 
+pub use control::{
+    ControlError, ControlErrorMsg, ControlMessage, Hello, MAX_CONTROL_PAYLOAD, PairChallenge,
+    PairProof, SRP_PUBLIC_LEN, SessionChallenge, control_type,
+};
 pub use endpoint::{
     DropReason, Endpoint, HEADER_LEN, MAGIC, MAX_DATAGRAM, PROTOCOL_VERSION, Role, SealError,
     TAG_LEN,
@@ -16,6 +22,9 @@ pub use endpoint::{
 pub use fresh::{EpochWatcher, SeqFilter};
 pub use message::{
     Clock, ClockSample, ControlState, Message, PayloadError, Pose, Status, msg_type,
+};
+pub use pairing::{
+    HostPairing, PairError, PendingPair, SessionHandshake, SessionKeys, device_pair,
 };
 
 /// Version of the Rust workspace, shared by every `vcam-*` crate.

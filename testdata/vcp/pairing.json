@@ -37,7 +37,7 @@
     "x": "2A5020B72F3CC940AA38D64D0E0E56235BED329723BD67D535716E77222B90D5"
   },
   "wrong_code": {
-    "M1": "f169a55619a5f28ed8d09392aed8adfa14525cf97971beeccb87fa04cd3bae6e",
+    "M1": "d124ad6ff6457d42e83172473b121ea8d43fc3fc27e50caca64713e16b562e35",
     "code": "042918",
     "expect": "host rejects with ERROR 2 (M1 differs from the correct one)"
   }

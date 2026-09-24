@@ -494,3 +494,35 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Next task:** 1.1.3b. TCP messages (`HELLO`, `PAIR_*`, `SESSION_*`, `ERROR`) and the pairing/session crypto against `testdata/vcp/pairing.json`, `session.json`, and `srp-rfc5054-appendix-b.json`.
   - This needs `hkdf` (RFC 5869) and a big-integer modpow for SRP. The RustCrypto `srp 0.6.0` defaults don't match RFC 5054 (iteration 14), so either use its group constants with our own formulas over `num-bigint`, or use `crypto-bigint`. Pick one, pin it, log it.
   - Constant-time modpow matters for the host's secret `b`; prefer `crypto-bigint`'s constant-time ops if the API allows it.
+
+## 2026-09-24 — Iteration 18 — 1.1.3b (PR-001..003, PR-006, NFR-SEC-001, FR-UX-002) — done
+
+- **Orient:** `main` is still 4 ahead of `origin` (unpushed). No new CI run.
+- **Dependencies added (pinned; plan names HMAC and the PAKE/HKDF pairing, PR-006 / 1.2.2):**
+  - `hkdf = "=0.13.0"` (RustCrypto, MIT OR Apache-2.0).
+  - `crypto-bigint = "=0.7.5"` (RustCrypto, Apache-2.0 OR MIT; default features). Chosen over `num-bigint` for constant-time modular exponentiation: `FixedMontyForm::pow_bounded_exp` does fixed work for a fixed bit bound (`modular/fixed_monty_form/pow.rs:27`).
+  - Dev-only: `sha1 = "=0.11.0"`, just to run RFC 5054 Appendix B (SHA-1) through the same code.
+  - APIs confirmed in the sources: `MontyParams::new(Odd<Uint>)`, `FixedMontyForm::{new, mul, add, sub, pow_bounded_exp, retrieve}`, `Uint::{from_be_slice (panics on wrong length, so only called on exact-width buffers), from_be_hex, to_be_bytes, rem_vartime (constant-time in self for a fixed modulus), wrapping_mul/add, is_zero_vartime}`, `Odd/NonZero::new → CtOption::into_option`, and `Hkdf::<Sha256>::{new, expand}`.
+- **Work (`native/vcam-protocol`):**
+  - `src/control.rs`: TCP frames per vcp.md §9–§11: `ControlMessage::{encode, payload, decode, frame_len}` (`session_id` 0, len ≤ 4096, forward-compatible tails, str8 limits 64/127).
+  - `src/pairing.rs`:
+    - generic `SrpGroup<L>` over group size and `Digest` (RFC 5054 formulas with `PAD`);
+    - VCP `HostPairing::{new, challenge, verify}`, `device_pair` → `PendingPair::finish`;
+    - `SessionHandshake::{device_proof, host_proof, verify_*, keys}`;
+    - secrets (`a`, `b`, salt, nonces) are injected by the caller (no RNG or I/O in this crate);
+    - rejects `A ≡ 0`, `B ≡ 0`, `u = 0`, and codes that aren't exactly 6 ASCII digits.
+  - `tests/pairing.rs`: 5 tests. Full host↔device pairing byte-exact against `pairing.json` (HELLO, PAIR_CHALLENGE, PAIR_PROOF, PAIR_ACCEPT, M1, M2, PK on both ends); wrong code; tampered M2; session proofs and keys, with the keys opening the vector's first POSE and wrong keys failing; control frames from `messages.json`; malformed-frame rejection plus a no-panic sweep. Unit tests: RFC 5054 Appendix B (k, x, v, A, B, u, client S, server S) and bad-code / zero-value rejection.
+- **Bug found in the golden vectors and fixed:** `tools/gen_testdata.py` built the wrong-code case by re-running SRP with the wrong code on **both** sides, which also changed the host's verifier and B. The Rust test (an independent implementation) disagreed. Fix: the device uses the wrong code against the host's real B and u. A new generator self-check requires the wrong-code S and M1 to differ from the correct ones. Only `wrong_code.M1` in `testdata/vcp/pairing.json` changed (`git diff --stat`: 1 line).
+- **Spec:** `vcp.md` open item O-3 is marked verified on the Rust side (Swift still open).
+- **Commands run:**
+  - In `native/`: `cargo fmt --check` passes; `cargo clippy --all-targets -- -D warnings` shows `Finished`, 0 warnings (fixed along the way: a `from_*` naming lint, so the helper was renamed `reduce_be`, and one type annotation); `cargo test`: `vcam-protocol` lib `ok. 3 passed`, `golden` `ok. 7 passed`, `pairing` `ok. 5 passed`, plus 4 × `ok. 1 passed` in the other crates.
+  - **Mutation check** (temporary, reverted):
+    - an altered M2 label failed `pairing_transcript_matches_vector`;
+    - dropping `session_id` from the HKDF info failed `session_setup_matches_vector_and_keys_open_first_pose`;
+    - after restoring, all green.
+  - `python3 tools/gen_testdata.py` then `--check`: up to date (17 files).
+  - `maturin build`: `Built wheel`. Blender smoke: `VCAM_NATIVE_OK 0.1.0`, exit 0. `.venv.nosync/bin/pytest -q -p no:cacheprovider BlenderAddOn/tests`: `12 passed`.
+- **Noted for later (not done):** secrets aren't zeroized (`crypto-bigint`'s `zeroize` feature is off). Consider it when `vcam-net` stores `PK` and the SRP state (1.2.2).
+- **Files changed:** `native/vcam-protocol/{Cargo.toml,src/lib.rs,src/control.rs,src/pairing.rs,tests/pairing.rs}`, `native/Cargo.lock`, `tools/gen_testdata.py`, `testdata/vcp/pairing.json`, `docs/protocol/vcp.md` (O-3 row), `IMPLEMENTATION_PROGRESS.md` (PR-001..003/006, FR-UX-001/002, NFR-SEC-001 split out), `docs/LOOP_LOG.md`.
+- **Owner action:** push (5 commits will be ahead of `origin`).
+- **Next task:** 1.1.3c, `native/fuzz/` with cargo-fuzz targets for `Endpoint::open`, `ControlMessage::decode`, and the pairing inputs (`HostPairing::verify` with arbitrary `PairProof`). It needs nightly plus `cargo install cargo-fuzz` (allowed by the loop prompt); the fuzz crate stays outside the workspace. Time-box the runs and record executions/s and coverage.

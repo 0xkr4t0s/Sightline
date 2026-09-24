@@ -380,9 +380,14 @@ def build_pairing() -> tuple[dict, dict]:
     proof = pad(r["A"]) + m1
     assert len(challenge) == 416 and len(proof) == 416
 
-    wrong = srp(N3072, G3072, hashlib.sha256, I, b"042918", s, a, b)
-    k_wrong = hashlib.sha256(pad(wrong["S"])).digest()
+    # Wrong code on the device only: the host keeps the correct verifier and B, so u is unchanged
+    # and the device computes S = (B - k*g^x')^(a + u*x') with x' from the wrong code.
+    x_wrong = int.from_bytes(hashlib.sha256(s + hashlib.sha256(I + b":" + b"042918").digest()).digest(), "big")
+    s_wrong = pow((r["B"] - r["k"] * pow(G3072, x_wrong, N3072)) % N3072, a + r["u"] * x_wrong, N3072)
+    k_wrong = hashlib.sha256(pad(s_wrong)).digest()
     m1_wrong = hmac.new(k_wrong, b"VCP1 pair M1" + t_pair, hashlib.sha256).digest()
+    if s_wrong == r["S"] or m1_wrong == m1:
+        raise SystemExit("SELF-CHECK FAILED: wrong-code pairing produced the correct secret")
 
     vec = {
         "params": {"group": "RFC 5054 3072-bit", "g": G3072, "hash": "SHA-256", "N": format(N3072, "X"),

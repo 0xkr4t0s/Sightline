@@ -400,7 +400,7 @@ Example session keys used in the §6 examples (test values only, never used for 
 |---|---|---|
 | O-1 | Which system clock `ARFrame.timestamp` uses. The device's `CLOCK` timestamps must come from the same one. The SDK header doesn't say. | 1.4.2 (device check) |
 | O-2 | ARKit camera-local axes for the landscape orientation the app uses (§7) | 1.4.2 (device check) |
-| O-3 | Interop between `swift-srp` and the Rust SRP code against these exact formulas: RFC 5054 test vectors plus `testdata/vcp/pairing-*` | 1.1.3 / 1.4.x |
+| O-3 | Interop between `swift-srp` and the Rust SRP code against these exact formulas: RFC 5054 test vectors plus `testdata/vcp/pairing.json`. **Rust side verified 2026-09-24** (`vcam-protocol`: RFC 5054 App. B through the same generic code path, and a full byte-exact `pairing.json` transcript). Swift side still open. | 1.4.x |
 | O-4 | `VIDEO_FRAGMENT` layout, `ACK_KEYFRAME_REQ`, and T2/T3 `CONTROL_STATE` fields | Phase 2/3 |
 
 ## 14. Change log
