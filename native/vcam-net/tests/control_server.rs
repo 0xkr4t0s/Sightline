@@ -505,7 +505,7 @@ fn stop_closes_active_and_idle_connections_and_releases_both_ports() {
     let _other = Client::connect(&server);
     std::thread::sleep(Duration::from_millis(100));
     let t = Instant::now();
-    server.stop();
+    server.stop().unwrap();
     assert!(
         t.elapsed() < Duration::from_secs(1),
         "stop took {:?} (NFR-REL-002)",
@@ -524,6 +524,11 @@ fn stop_closes_active_and_idle_connections_and_releases_both_ports() {
     assert_eq!(active.0.read(&mut buf).unwrap(), 0);
     assert_eq!(server.latest_pose(), None);
     assert_eq!(server.stats().session_id, None);
+    assert_eq!(
+        server.advertise("Stopped host", "").unwrap_err().kind(),
+        std::io::ErrorKind::NotConnected,
+        "discovery cannot expose a stopped server"
+    );
     let mut restarted = ControlServer::start(
         server.local_addr(),
         ServerConfig::new([0xF0; 16], server.udp_addr().port()),
@@ -535,7 +540,7 @@ fn stop_closes_active_and_idle_connections_and_releases_both_ports() {
     let keys = client.session(&pk);
     send_pose(&tx, &restarted, &keys, 1);
     wait_until("pose after re-enable", || restarted.latest_pose().is_some());
-    restarted.stop();
+    restarted.stop().unwrap();
 }
 
 #[test]
@@ -611,7 +616,7 @@ fn file_pairing_survives_server_restart_without_a_new_code() {
     );
     let old_keys = client.session(&pk);
     drop(client);
-    first.stop();
+    first.stop().unwrap();
     drop(first);
 
     let second = config.server();

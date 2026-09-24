@@ -2,6 +2,7 @@
 //! Runs its I/O on its own threads, never on Blender's main thread.
 
 mod control;
+mod discovery;
 mod store;
 mod udp;
 

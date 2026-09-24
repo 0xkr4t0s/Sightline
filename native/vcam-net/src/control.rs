@@ -19,6 +19,7 @@ use vcam_protocol::{
     PROTOCOL_VERSION, PairError, Role, SessionChallenge, SessionHandshake,
 };
 
+use crate::discovery::{self, Discovery};
 use crate::{ControlSample, HostStatus, PoseSample, ReceiverStats, UdpReceiver};
 
 const POLL: Duration = Duration::from_millis(50);
@@ -143,6 +144,7 @@ pub struct ControlServer {
     events: Receiver<ControlEvent>,
     listener: Option<JoinHandle<()>>,
     local_addr: SocketAddr,
+    discovery: Option<Discovery>,
 }
 
 impl ControlServer {
@@ -180,6 +182,7 @@ impl ControlServer {
             events,
             listener: Some(thread),
             local_addr,
+            discovery: None,
         })
     }
 
@@ -191,6 +194,37 @@ impl ControlServer {
     #[must_use]
     pub fn udp_addr(&self) -> SocketAddr {
         self.shared.udp().local_addr()
+    }
+
+    /// Enable DNS-SD while listening, or update the machine/blend names already advertised.
+    /// Ports come from the bound sockets. Empty blend denotes an unsaved file.
+    /// TXT entries must fit DNS-SD's 255-byte limit including key and '='; invalid input
+    /// leaves existing records unchanged. Later daemon errors are available via discovery_error.
+    pub fn advertise(&mut self, host: &str, blend: &str) -> io::Result<()> {
+        if self.shared.stop.load(Ordering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "server stopped",
+            ));
+        }
+        let services = discovery::services(
+            self.shared.config.host_id,
+            self.local_addr(),
+            self.udp_addr(),
+            host,
+            blend,
+        )?;
+        if let Some(discovery) = &self.discovery {
+            discovery.publish(services)
+        } else {
+            self.discovery = Some(Discovery::start(services)?);
+            Ok(())
+        }
+    }
+
+    /// Next asynchronous DNS-SD socket/interface error, if any. Never blocks.
+    pub fn discovery_error(&self) -> Option<String> {
+        self.discovery.as_ref().and_then(Discovery::error)
     }
 
     #[must_use]
@@ -243,19 +277,25 @@ impl ControlServer {
         self.events.try_recv().ok()
     }
 
-    /// Stops accepting, closes every connection, and joins every thread. Idempotent.
-    pub fn stop(&mut self) {
+    /// Stops all sockets/workers and withdraws DNS-SD. Idempotent.
+    /// Returns DNS-SD shutdown errors after still stopping TCP/UDP; call again to retry.
+    pub fn stop(&mut self) -> io::Result<()> {
         self.shared.stop.store(true, Ordering::Release);
         self.shared.udp().stop();
         if let Some(thread) = self.listener.take() {
             let _ = thread.join();
         }
+        if let Some(discovery) = &mut self.discovery {
+            discovery.stop()?;
+        }
+        self.discovery = None;
+        Ok(())
     }
 }
 
 impl Drop for ControlServer {
     fn drop(&mut self) {
-        self.stop();
+        let _ = self.stop();
     }
 }
 
