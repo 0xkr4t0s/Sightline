@@ -539,6 +539,28 @@ Findings:
 
 Still open for S-2: JPEG on Windows and Linux and Media Foundation on Windows (S-2d/e, owner machines). VA-API on Linux is untested (no Linux GPU here). Owner decision on the H.264 software-fallback licensing.
 
+### 13.3 S-3 results — 2026-09-24 (S-3a: unsigned/ad-hoc loading on macOS 27 arm64; Developer ID signing, notarization, and Windows SmartScreen pending)
+
+Setup: macOS 27.0 arm64, Blender 5.2.2. Blender has the hardened runtime and the entitlement `com.apple.security.cs.disable-library-validation = true`, so library validation doesn't block non-Apple-team libraries. As built by rustc/maturin, `vcam_native`'s `.so` carries only the linker's ad-hoc signature (`flags=0x20002(adhoc,linker-signed)`), and `spctl -a -t install` rejects it. Each scenario installs the extension zip with `blender --command extension install-file` (the same extraction code as *Install from Disk*) into a fresh user dir, then imports `vcam_native` via `tests/blender/smoke_native.py`, headless and in the GUI. Harness: `tests/s3_macos_loading.sh`. Raw data and syspolicyd excerpts: `reports/s3-macos-loading-2026-09-24.txt`.
+
+| Scenario | Loads? (3 background runs; 1 GUI run) |
+|---|---|
+| Baseline (no quarantine) | Yes, every time |
+| Zip quarantined (a browser download), installed by Blender | Yes, every time: Blender's extraction does **not** copy `com.apple.quarantine` to the extracted `.so` |
+| Extracted `.so` itself quarantined, linker-signed | Non-deterministic: FAIL, PASS, PASS; GUI PASS |
+| Extracted `.so` quarantined, re-signed ad-hoc (`codesign -s -`) | Non-deterministic: PASS, FAIL, PASS; GUI PASS |
+| Extracted `.so` quarantined, signature removed | Never (`missing code signature`) |
+
+When a quarantined `.so` fails, the error is `library load disallowed by system policy`. syspolicyd logs `GK evaluateScanResult: 1`, then `Prompt shown … waiting for response`, then `Adding Gatekeeper denial breadcrumb`, and it **shows a Gatekeeper dialog on the desktop even for `--background` runs**. Some prompts were later cleared (`Clearing Gatekeeper denial breadcrumb`), possibly because someone answered the dialog; the logs can't tell. So the pass/fail pattern for quarantined `.so` files isn't reliable data, only proof that Gatekeeper gets involved.
+
+Findings:
+
+- **The supported install path works without Developer ID signing on this macOS:** download the zip (quarantined), then install it through Blender. The quarantine flag stops at the zip.
+- **A quarantined `.so` is not safe with any ad-hoc signature.** It can trigger a Gatekeeper prompt and a denial. This happens when quarantine reaches the file itself, for example if a user unzips the extension in Finder (Archive Utility propagates quarantine) and copies the folder into Blender's extensions directory. Developer ID signing plus notarization (XP-004) is what removes this failure mode; it needs the owner's Apple credentials.
+- **An unsigned `.so` never loads on arm64.** The build must not strip the linker signature (for example with `strip` after linking) unless it re-signs.
+
+Still open for S-3: the same scenarios with a Developer ID–signed and notarized `.so` (owner credentials), an older supported macOS, Blender's drag-and-drop install and online-repository install paths, and Windows SmartScreen / Mark-of-the-Web for the `.pyd`.
+
 ---
 
 ## Appendix A — What changed

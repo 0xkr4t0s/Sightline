@@ -1,0 +1,23 @@
+# S-3a macOS native-module loading, 2026-09-24, macOS 27.0 arm64, Blender 5.2.2 (hardened runtime, team 68UA947AUU, entitlement com.apple.security.cs.disable-library-validation=true)
+# vcam_native .so as built by maturin/rustc: flags=0x20002(adhoc,linker-signed); spctl -a -t install: rejected
+# cmd: tests/s3_macos_loading.sh [--gui]; install path = blender --command extension install-file (same extraction code as Install from Disk)
+## run 1 (background only, 11:3x)
+S3_RESULT baseline background PASS exit=0 inherited_quarantine=none so_quarantine=none sig=flags=0x20002(adhoc,linker-signed)
+S3_RESULT zip_quarantined background PASS exit=0 inherited_quarantine=none so_quarantine=none sig=flags=0x20002(adhoc,linker-signed)
+S3_RESULT so_quarantined background FAIL exit=1 inherited_quarantine=none so_quarantine=0083 sig=flags=0x20002(adhoc,linker-signed) :: ImportError: dlopen(<so>, 0x0002): not valid for use in process: library load disallowed by system policy)
+S3_RESULT unsigned_so_quarantined background FAIL exit=1 inherited_quarantine=none so_quarantine=0083 sig=not signed at all :: ImportError: dlopen(<so>, 0x0002): missing code signature
+S3_RESULT adhoc_resigned_so_quarantined background PASS exit=0 inherited_quarantine=none so_quarantine=0083 sig=flags=0x2(adhoc)
+## run 2 (background valid; gui column invalid: exit 127 = no GNU timeout on macOS, fixed afterwards)
+S3_RESULT so_quarantined background PASS; adhoc_resigned_so_quarantined background FAIL (library load disallowed by system policy); unsigned FAIL (missing code signature); baseline/zip_quarantined PASS
+## run 3 (--gui, valid)
+S3_RESULT baseline background PASS exit=0 inherited_quarantine=none so_quarantine=none sig=flags=0x20002(adhoc,linker-signed)
+S3_RESULT baseline gui PASS exit=0 inherited_quarantine=none so_quarantine=none sig=flags=0x20002(adhoc,linker-signed)
+S3_RESULT zip_quarantined background PASS exit=0 inherited_quarantine=none so_quarantine=none sig=flags=0x20002(adhoc,linker-signed)
+S3_RESULT zip_quarantined gui PASS exit=0 inherited_quarantine=none so_quarantine=none sig=flags=0x20002(adhoc,linker-signed)
+S3_RESULT so_quarantined background PASS exit=0 inherited_quarantine=none so_quarantine=0083 sig=flags=0x20002(adhoc,linker-signed)
+S3_RESULT so_quarantined gui PASS exit=0 inherited_quarantine=none so_quarantine=0083 sig=flags=0x20002(adhoc,linker-signed)
+S3_RESULT unsigned_so_quarantined background FAIL exit=1 inherited_quarantine=none so_quarantine=0083 sig=not signed at all :: ImportError: dlopen(<so>, 0x0002): missing code signature
+S3_RESULT unsigned_so_quarantined gui FAIL exit=0 inherited_quarantine=none so_quarantine=0083 sig=not signed at all :: ImportError: dlopen(<so>, 0x0002): missing code signature
+S3_RESULT adhoc_resigned_so_quarantined background PASS exit=0 inherited_quarantine=none so_quarantine=0083 sig=flags=0x2(adhoc)
+S3_RESULT adhoc_resigned_so_quarantined gui PASS exit=0 inherited_quarantine=none so_quarantine=0083 sig=flags=0x2(adhoc)
+## syspolicyd excerpts (run 2 and 3): 'GK evaluateScanResult: 2' on allowed loads; 'GK evaluateScanResult: 1' -> 'Prompt shown (6, 0), waiting for response' -> 'Adding Gatekeeper denial breadcrumb (direct)' on quarantined .so files, including during --background runs; some prompts later 'Clearing Gatekeeper denial breadcrumb' (possibly answered at the desktop; not determinable from logs)

@@ -100,7 +100,9 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 |---|---|---|
 | XP-001 | Partial | `.github/workflows/ci.yml` jobs `wheels` (manylinux 2_28, Windows, macOS arm64) and `extension` (`--split-platforms`, manifest listing written by `tools/set_manifest_wheels.py`). Rehearsed locally on macOS with stand-in wheels. Not yet run on GitHub. |
 | XP-002 | Partial | `ci.yml` job `blender-smoke` installs the platform zip and runs `tests/blender/smoke_native.py` on 3 OSes. Only the macOS path has run (locally). Not yet run on GitHub. |
-| XP-003..006 | Not started | |
+| XP-003 | Not started | S-2 found that the recommended encoders link statically (turbojpeg) or are OS frameworks; no production dependency yet. |
+| XP-004 | Not started | S-3a (SRS §13.3): the linker-ad-hoc-signed `.so` loads when installed from a quarantined zip through Blender. A quarantined `.so` can hit a Gatekeeper prompt and denial, so Developer ID signing + notarization is still required (owner credentials). |
+| XP-005/006 | Not started | |
 
 ### §8–§10
 
