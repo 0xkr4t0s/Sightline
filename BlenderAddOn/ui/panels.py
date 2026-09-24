@@ -1,15 +1,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""N-panel UI for VCam tracking controls."""
+"""N-panel: session start/stop, connection settings and live status (task 1.3.1).
+
+The full panel (pairing code, device, latency, origin/scale/locks) is task 1.3.3.
+"""
 
 from __future__ import annotations
 
 import bpy
 
+from ..core import session
+
 
 class VCAM_PT_main_panel(bpy.types.Panel):
-    """VCam tracking connection and settings."""
+    """VCam session and status."""
 
-    bl_label = "VCam Tracking"
+    bl_label = "VCam"
     bl_idname = "VCAM_PT_main_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
@@ -18,81 +23,34 @@ class VCAM_PT_main_panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         props = context.scene.vcam_props
+        live = session.current()
 
-        # Connection section
         box = layout.box()
         box.label(text="Connection", icon='URL')
-
         col = box.column(align=True)
         row = col.row(align=True)
-        row.prop(props, "host", text="Host")
+        row.prop(props, "bind_address", text="Bind")
         row.prop(props, "port", text="Port")
-        row.enabled = not props.is_tracking
-
-        # Target camera
+        row.enabled = live is None
         col.prop(props, "target_camera", text="Camera", icon='CAMERA_DATA')
 
-        # Connect / Disconnect button
         layout.separator()
-        if props.is_tracking:
-            layout.operator("vcam.stop_tracking", text="Disconnect", icon='CANCEL')
-        else:
-            layout.operator("vcam.start_tracking", text="Connect", icon='PLAY')
-
-        # Transform settings
-        box = layout.box()
-        box.label(text="Transform", icon='ORIENTATION_GIMBAL')
-        box.prop(props, "euler_order")
-
-        # Lens mapping
-        box = layout.box()
-        box.label(text="Lens Mapping", icon='CAMERA_DATA')
-        col = box.column(align=True)
-        col.prop(props, "zoom_min_focal")
-        col.prop(props, "zoom_max_focal")
-        col.separator()
-        col.prop(props, "focus_min_distance")
-        col.prop(props, "focus_max_distance")
-
-
-class VCAM_PT_status_panel(bpy.types.Panel):
-    """Live tracking data readback for debugging."""
-
-    bl_label = "Status"
-    bl_idname = "VCAM_PT_status_panel"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = "VCam"
-    bl_parent_id = "VCAM_PT_main_panel"
-    bl_options = {'DEFAULT_CLOSED'}
-
-    def draw(self, context):
-        layout = self.layout
-        props = context.scene.vcam_props
-
-        if not props.is_tracking:
-            layout.label(text="Not connected", icon='INFO')
+        if live is None:
+            op = layout.operator("vcam.session_start", text="Start Session", icon='PLAY')
+            op.port = props.port
+            op.bind = props.bind_address
             return
+        layout.operator("vcam.session_stop", text="Stop Session", icon='CANCEL')
 
-        # Position
+        state = session.state
+        stats = live.stats()
         box = layout.box()
-        box.label(text="Position (m)", icon='EMPTY_ARROWS')
-        row = box.row()
-        row.prop(props, "last_pos_x", text="X")
-        row.prop(props, "last_pos_y", text="Y")
-        row.prop(props, "last_pos_z", text="Z")
-
-        # Rotation
-        box = layout.box()
-        box.label(text="Rotation (deg)", icon='DRIVER_ROTATIONAL_DIFFERENCE')
-        row = box.row()
-        row.prop(props, "last_pitch", text="P")
-        row.prop(props, "last_yaw", text="Y")
-        row.prop(props, "last_roll", text="R")
-
-        # Stats
-        box = layout.box()
-        box.label(text="Network", icon='WORLD_DATA')
+        box.label(text=f"Listening on TCP {live.port()}", icon='WORLD_DATA')
         col = box.column(align=True)
-        col.label(text=f"Received: {props.packets_received}")
-        col.label(text=f"Dropped: {props.packets_dropped}")
+        if state.session_id is None:
+            col.label(text="Waiting for the iPhone", icon='INFO')
+        else:
+            col.label(text=f"Device: {state.device_name}", icon='CAMERA_DATA')
+            col.label(text=f"Poses: {stats['rate_hz']:.0f} Hz, loss {stats['loss'] * 100:.1f} %")
+        if state.last_error:
+            col.label(text=state.last_error, icon='ERROR')

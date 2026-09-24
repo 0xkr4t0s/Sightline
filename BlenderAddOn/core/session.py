@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Host session lifecycle (task 1.2.5b; C-2, NFR-REL-002, NFR-SEC-003).
+"""Host session lifecycle (tasks 1.2.5b, 1.3.1; C-2, NFR-REL-002, NFR-SEC-003, FR-BL-002).
 
 At most one `vcam_native.Session` per Blender process. It starts only on request (NFR-SEC-003:
 listen only while a session is active), never when the add-on is enabled, and the add-on's
 `unregister()` always stops it (NFR-REL-002). Networking runs on native threads. This module
-touches `bpy` only on the main thread, from operators and a `bpy.app.timers` poll.
+touches `bpy` only on the main thread, from operators and a `bpy.app.timers` poll, which also
+applies the newest pose to the target camera (`core/apply.py`).
 
 `bpy` and `vcam_native` are imported lazily so the pure helpers can be tested outside Blender.
 """
@@ -13,12 +14,16 @@ from __future__ import annotations
 
 import os
 import socket
+import time
 from dataclasses import dataclass
+
+from .apply import Applier
 
 HOST_ID_FILE = "host_id"
 HOST_ID_LEN = 16
 DEFAULT_PORT = 47000
-POLL_INTERVAL = 0.1
+# The poll also applies poses, so it runs at the tracking rate.
+POLL_INTERVAL = 1.0 / 60.0
 # Events drained per poll; the rest wait for the next tick so one poll stays short.
 MAX_EVENTS_PER_POLL = 64
 
@@ -36,6 +41,7 @@ class SessionState:
 _package: str | None = None
 _session = None
 state = SessionState()
+_applier = Applier()
 
 
 def load_or_create_host_id(directory: str) -> bytes:
@@ -91,7 +97,7 @@ def current():
 
 def start(port: int = DEFAULT_PORT, bind: str = "0.0.0.0") -> None:
     """Starts listening and advertising. Raises OSError/ValueError on failure, nothing started."""
-    global _session
+    global _session, _applier
     import bpy
     import vcam_native
 
@@ -100,6 +106,7 @@ def start(port: int = DEFAULT_PORT, bind: str = "0.0.0.0") -> None:
     directory = config_dir()
     session = vcam_native.Session.start(port, directory, load_or_create_host_id(directory), bind=bind)
     vars(state).update(vars(SessionState()))  # reset in place: importers keep the object
+    _applier = Applier()
     try:
         session.advertise(socket.gethostname(), bpy.path.basename(bpy.data.filepath))
     except (OSError, ValueError) as e:
@@ -128,7 +135,9 @@ def stop() -> None:
 
 
 def _poll() -> float | None:
-    """Timer callback on the main thread: drains control events. Never raises."""
+    """Timer callback on the main thread: drains events, applies the pose. Never raises."""
+    import bpy
+
     session = _session
     if session is None:
         return None
@@ -149,6 +158,7 @@ def _poll() -> float | None:
         error = session.discovery_error()
         if error:
             state.last_error = f"DNS-SD: {error}"
+        _applier.tick(session, state.session_id, bpy.context.scene, time.monotonic())
     except Exception as e:  # noqa: BLE001 - an exception would silently unregister the timer
         state.last_error = str(e)
     return POLL_INTERVAL

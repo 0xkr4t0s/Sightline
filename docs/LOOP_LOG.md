@@ -873,3 +873,29 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none.
 - **Next task:** 1.3.1 — replace `core/udp_client.py` + `core/freed_parser.py` with `vcam_native` and delete the FreeD path (PR-FD-001, FR-BL-002). No second task started.
 - **Owner actions:** push (this commit makes 18 ahead). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.
+
+## 2026-09-25 — Iteration 32 — 1.3.1 (PR-FD-001, FR-BL-002, ARC-003, FR-BL-003) — done
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 18 ahead of `origin`; no new CI run. Existing Phase 1 owner waiver applies.
+- **Scope:** replace the Python FreeD transport with `vcam_native` and delete the FreeD path. A minimal apply step replaces the FreeD apply. Not in: the `VCam_Origin` rig, scale and locks, and CONTROL_STATE apply (1.3.2); the full N-panel with pairing code (1.3.3); reload/undo handling (1.3.4); the CI integration test (1.3.5).
+- **Deleted** (kept in git history): `BlenderAddOn/core/{freed_parser,udp_client,transform}.py`, `operators/tracking_receiver.py`, `tests/test_freed_parser.py`, `tests/test_transform.py`, an empty `tests/test_data/`, and the root `tests/freed_test_sender.py`. The scene properties lost the FreeD-only fields (Euler order, zoom/focus encoder mapping, debug readbacks, `is_tracking`). `host` became `bind_address`, and the default port is now 47000 (TCP).
+- **New `BlenderAddOn/core/apply.py`:**
+  - `pose_matrix` is `Translation(position) @ Quaternion((w, x, y, z))`: canonical is Blender's axes, so there's no conversion.
+  - `target_camera` is the VCam target, else the scene camera; camera objects only.
+  - `Applier.tick` applies the smoothed pose when `seq` advances (reset per session) and publishes STATUS with the actual applied seq, `error_code` 0/1 (no camera) and the camera name cut to 63 UTF-8 bytes. STATUS goes out at once on camera/error change and otherwise at most every 0.5 s, so a 60 Hz apply doesn't make 60 Hz STATUS.
+- **`core/session.py`:** the timer poll now runs at 60 Hz and calls the applier after draining events. `control_ack` stays 0 until CONTROL_STATE is applied (1.3.2).
+- **UI and manifest:** `ui/panels.py` is a minimal panel (bind/port, camera, start/stop, port, device, rate/loss, last error). The manifest's network permission text is updated; Blender limits it to 64 characters, which the first build hit and I fixed.
+- **Files changed:** the deletions above; `BlenderAddOn/core/apply.py` (new), `core/session.py`, `operators/__init__.py`, `properties/scene_props.py`, `ui/__init__.py`, `ui/panels.py`, `blender_manifest.toml`; `tests/blender/addon_apply.py` (new); `IMPLEMENTATION_PROGRESS.md` (summary, pytest row, ARC-003, FR-BL-002..005, UI text, PR-FD-001, NFR-QA-001, shifted `session.py` line anchors); `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `tests/blender/addon_apply.py` (new; runs the real fake iPhone at 120 Hz against the add-on in headless Blender 5.2.2, calling the poll itself because background scripts don't run timers): `VCAM_ADDON_APPLY_OK keyposes=5 max_err=6.30e-08 applied_pose_seq=390 camera=Camera`. All 5 keyposes match `scripted.json` `matrix_world`. The session ended cleanly, the device received STATUS with applied seq 390 and camera `Camera`, and a stub check covers no-camera error 1 and 2 Hz throttling.
+  - **Mutation check** (restored and `cmp`-verified): quaternion component order, the camera name not published, and STATUS not throttled. All 3 failed `addon_apply.py`.
+  - Other Blender scripts on the same fresh install: `VCAM_NATIVE_OK 0.1.0`, `VCAM_SESSION_OK ... stop_ms=59`, `VCAM_ADDON_SESSION_OK ... disable_ms=88`. All exit 0.
+  - `pytest BlenderAddOn/tests`: 2 passed (down from 14: 12 FreeD tests deleted with their code). `gen_testdata.py --check`: up to date (20 files). `actionlint`: OK.
+  - `cargo fmt --check` OK, clippy clean, `cargo test` 59 passed, 0 failed (no Rust changes). `xcodebuild test`: 11 tests, 0 failures, `** TEST SUCCEEDED **`.
+- **Not verified:**
+  - The timer-driven apply inside Blender's GUI event loop (background scripts don't run timers).
+  - The panel drawing, visually.
+  - `addon_apply.py` isn't in CI yet (it needs the fake binary in the Blender job; that's 1.3.5).
+- **Blocked:** none.
+- **Next task:** 1.3.2 — rig: create or find `VCam_Origin` + the camera; apply the canonical pose as the camera's local transform; motion scale and axis locks from CONTROL_STATE (FR-BL-003, FR-CTL-004). No second task started.
+- **Owner actions:** push (this commit makes 19 ahead). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.

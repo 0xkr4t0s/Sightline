@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import bpy
-from .panels import VCAM_PT_main_panel, VCAM_PT_status_panel
+from .panels import VCAM_PT_main_panel
 
 _classes = (
     VCAM_PT_main_panel,
-    VCAM_PT_status_panel,
 )
 
 
