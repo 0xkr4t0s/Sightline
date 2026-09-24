@@ -17,9 +17,9 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | Rust native module | Partial | `native/` workspace with 5 crates. `vcam-py` builds the PyO3 module `vcam_native` (only `version()` so far), which imports inside Blender 5.2.2 on macOS (task 0.1.4). |
 | Viewfinder stream (Blender → iPhone) | Not started | — |
 | C++ `legacy/DesktopReceiver/` (incl. CMIO extension) | Retire | Moved to `legacy/` in task 0.1.2 (ARC-006). Port the parsers, their tests, and the test-pattern generator to Rust, then delete the directory. |
-| Repo / CI | Partial | One git repo at the root (task 0.1.1). `VCamIOS` history imported under `VCamIOS/` (commits `ae4d81c`, `984145a`, `5ba2672`). CI workflow `.github/workflows/ci.yml` is written and lint-clean but has never run on GitHub (no remote yet). |
+| Repo / CI | Partial | One git repo, private remote `origin`. CI run `35958600428` (GitHub, 2026-09-24): 10 of 13 jobs green (wheels ×3, split extension, Blender smoke ×3, rust-fmt, pytest, iOS). `cargo clippy` failed on all 3 OSes because of a new Rust 1.98 lint; fixed locally in loop iteration 15, and it needs a push to confirm. |
 
-**Maturity:** early prototype. Phase 0 tasks 0.1.1–0.1.6 are done locally; CI hasn't run on GitHub; spikes S-2 and S-3 are open, S-1 is done for macOS.
+**Maturity:** early prototype. Phase 0 tasks 0.1.1–0.1.6 are done. The extension with the Rust module installs and imports on all 3 OSes in CI. CI is not fully green yet (clippy fix awaiting push). Spikes S-1, S-2, S-3 have macOS records; Windows/Linux parts are owner-blocked. Phase 1 started (1.1.1 done).
 
 **Environment on the owner's Mac (2026-09-24):** Blender 5.2.2 LTS at `/Applications/Blender.app`; cargo/rustc 1.97.1; `.venv.nosync/` with pytest + maturin; Xcode 27.0 (via `DEVELOPER_DIR`) with the iOS 27.0 simulator.
 
@@ -45,7 +45,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 
 | ID | Status | Evidence / gap |
 |---|---|---|
-| ARC-001 | Partial | Extension + PyO3 crate `native/vcam-py` (`src/lib.rs:7-18`, maturin config in `pyproject.toml`) bundled as a wheel (`BlenderAddOn/blender_manifest.toml:15-18`). macOS arm64 wheel only; per-platform wheels come with CI in 0.1.5. |
+| ARC-001 | Done | Extension + PyO3 crate `native/vcam-py` (`src/lib.rs`, maturin config in `pyproject.toml`), bundled as per-platform wheels. CI run `35958600428` built cp313 wheels for manylinux_2_28 x86-64, win_amd64, and macOS arm64, assembled them with `extension build --split-platforms`, and each platform zip imported `vcam_native` in Blender 5.2.2 (`blender-smoke` ×3). |
 | ARC-002 | Partial | Crates split as required (`native/Cargo.toml:3-9`). `vcam-protocol` is `#![forbid(unsafe_code)]` (`native/vcam-protocol/src/lib.rs:4`). Skeleton only; no protocol, net, or encoder code yet. |
 | ARC-003 | Not started | No canonical pose; FreeD frame structs used throughout. |
 | ARC-004 | Not started | iOS doesn't send a capture time or sequence number; Blender stamps receive time. |
@@ -75,7 +75,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 
 | ID | Status | Evidence / gap |
 |---|---|---|
-| FR-BL-001 | Partial | `blender_version_min = "5.2.0"`, `network` permission, `wheels` and `platforms` (`BlenderAddOn/blender_manifest.toml:9,15-18`); builds and installs on macOS arm64. Still missing `windows-x64` and `linux-x64` wheels (0.1.5). |
+| FR-BL-001 | Done | `blender_version_min = "5.2.0"`, `network` permission, `wheels`/`platforms`. CI writes all three platforms into the manifest (`tools/set_manifest_wheels.py`) and produced `windows-x64`, `linux-x64`, and `macos-arm64` zips that install and import (run `35958600428`). The committed manifest lists macOS only, for local builds. `windows-arm64` (SHOULD) not built. |
 | FR-BL-002 | Partial | Latest-sample semantics and main-thread apply are done in Python (`core/udp_client.py`, `operators/tracking_receiver.py`). Sockets must move into the Rust module. |
 | FR-BL-003 | Partial | Drives a chosen camera directly; no `VCam_Origin` rig; Euler rotation (`core/transform.py`). |
 | FR-BL-004 | Partial | N-panel with connection settings and status (`ui/panels.py`); no pairing or stats. |
@@ -100,8 +100,8 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 
 | ID | Status | Evidence / gap |
 |---|---|---|
-| XP-001 | Partial | `.github/workflows/ci.yml` jobs `wheels` (manylinux 2_28, Windows, macOS arm64) and `extension` (`--split-platforms`, manifest listing written by `tools/set_manifest_wheels.py`). Rehearsed locally on macOS with stand-in wheels. Not yet run on GitHub. |
-| XP-002 | Partial | `ci.yml` job `blender-smoke` installs the platform zip and runs `tests/blender/smoke_native.py` on 3 OSes. Only the macOS path has run (locally). Not yet run on GitHub. |
+| XP-001 | Done | CI run `35958600428`: `wheels` (manylinux 2_28, Windows, macOS arm64) and `extension` (`--split-platforms`) green. |
+| XP-002 | Partial | CI `blender-smoke` green on Linux, Windows, macOS: `VCAM_NATIVE_OK 0.1.0` in each (run `35958600428`). That's the import smoke test; the real integration test with the fake iPhone is task 1.3.5. |
 | XP-003 | Not started | S-2 found that the recommended encoders link statically (turbojpeg) or are OS frameworks; no production dependency yet. |
 | XP-004 | Not started | S-3a (SRS §13.3): the linker-ad-hoc-signed `.so` loads when installed from a quarantined zip through Blender. A quarantined `.so` can hit a Gatekeeper prompt and denial, so Developer ID signing + notarization is still required (owner credentials). |
 | XP-005/006 | Not started | |
@@ -118,7 +118,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | NFR-LAT-*, NFR-PERF-* | Not started | No latency measurements. Render/readback costs are measured by S-1 (SRS §13.1). |
 | NFR-REL-*, NFR-SEC-* | Not started | Any host can send poses; no pairing. |
 | NFR-QA-001 | Partial | One git repo. `xcodebuild test`, `cargo test` (in `native/`), and a headless Blender smoke test (`tests/blender/smoke_native.py`) all run. There's no single `blender --background … tests` runner for add-on logic yet. |
-| NFR-QA-002 | Partial | `ci.yml` covers fmt, clippy (`-D warnings`), and test on 3 OSes; Python tests; headless Blender on 3 OSes; iOS unit tests. Missing: `cargo fuzz` (no targets until 1.1.3). Not yet run on GitHub. |
+| NFR-QA-002 | Partial | `ci.yml` runs fmt, clippy (`-D warnings`), and test on 3 OSes, plus Python tests, headless Blender on 3 OSes, and iOS unit tests. The first GitHub run failed only on clippy (new Rust 1.98 lint, fixed locally, awaiting push). Missing: `cargo fuzz` (no targets until 1.1.3). |
 | NFR-QA-003 | Not started | |
 | NFR-QA-004 | Partial | Enforced by workspace lints: `unsafe_code` deny plus `clippy::undocumented_unsafe_blocks` deny (`native/Cargo.toml:22-32`). Checked with a throwaway probe: clippy rejected an uncommented `unsafe` block. |
 

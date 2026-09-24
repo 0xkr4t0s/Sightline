@@ -8,7 +8,7 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 |---|---|---|
 | S-1 on Windows and Linux (mid-range GPU) | BLOCKED (needs owner) | SRS §8.2 wants every OS. CI runners have no GPU, so this needs the owner's Windows/Linux machines: run `tests/bench_render.py` headless (recipe in its docstring) and commit the JSON to `reports/`. |
 | S-1 EEVEE vs. FR-REN-004/NFR-PERF-002 | Resolved 2026-09-24 | EEVEE exempt with a warning; SRS updated. |
-| 0.1.5 CI green on GitHub (P0 exit gate) | BLOCKED (needs owner) | Create a private GitHub remote and push; then fix whatever the first run finds (list in Iteration 8). |
+| 0.1.5 CI green on GitHub (P0 exit gate) | Needs owner push | First run `35958600428`: only `cargo clippy` failed (3 OSes); fixed locally in iteration 15. Push, then the loop reads the next run. |
 | S-2d Media Foundation H.264 and S-2e JPEG on Windows/Linux x86-64 | BLOCKED (needs owner) | Needs Windows/Linux machines or a CI remote. Run `cargo run --release -p vcam-video --example s2_jpeg -- <frames>` there (x86-64 needs `nasm`). |
 | S-2 H.264 software-fallback licensing | Resolved 2026-09-24 | Option A: hardware H.264, JPEG fallback; NET-VID-003 updated. |
 | S-3b Developer ID signing + notarization of the macOS wheel | BLOCKED (needs owner) | Needs an Apple Developer account and credentials. Re-run `tests/s3_macos_loading.sh --gui` with a signed and notarized `.so`. |
@@ -398,3 +398,23 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
   - No code changed, so the Rust, Python, iOS, and Blender suites weren't re-run.
 - **Blocked:** none new.
 - **Next task:** first read CI run `35958600428` (`gh run view --log-failed`) and fix any failures locally, since CI green is a P0 gate item. Otherwise 1.1.2: `testdata/vcp/*.bin` + `*.json` (the §6 examples, plus a full SRP-6a pairing transcript with fixed `a`, `b`, `s`, code, including RFC 5054 Appendix B vectors) and `testdata/coords/*.json` (DM-004 set). Generate them with a committed script, so the vectors are reproducible.
+
+## 2026-09-24 — Iteration 15 — 0.1.5 follow-up (XP-001/002, NFR-QA-002) — CI failure fixed locally
+
+- **CI run `35958600428`** (the owner's first push, read with `gh run view --json jobs` and `--log-failed`):
+  - **10 of 13 jobs green:** rust-fmt, `wheels` ×3 (manylinux_2_28 x86-64, Windows, macOS arm64), `extension` (`--split-platforms`), `blender-smoke` ×3, python, ios.
+  - `blender-smoke` printed `VCAM_NATIVE_OK 0.1.0` on Linux (`/home/runner/…`), Windows (`D:\a\_temp…`), and macOS (`/Users/runner/…`). **P0 gate item "the extension with the Rust module installs and imports on all three OSes" is met.**
+  - **3 failures:** `rust (ubuntu|windows|macos)`, step `cargo clippy`. Cause: new lint `clippy::chunks_exact_to_as_chunks` ("using `chunks_exact` with a constant chunk size"), which fired at `vcam-video/examples/s2_jpeg.rs:46` (×2) and `s2_videotoolbox.rs:396`.
+  - CI's `stable` is **rustc 1.98.1** (from the `wheels` logs), while this Mac has **1.97.1**, so local clippy couldn't see the new lint.
+- **Fix:** replaced `chunks_exact(4)` / `chunks_exact_mut(4)` with `as_chunks::<4>().0` / `as_chunks_mut::<4>().0` (`slice::as_chunks`, stable since 1.88.0, confirmed in the local `core/src/slice/mod.rs`). There are no other constant-size `chunks_exact` uses in `native/`.
+- **Verification:**
+  - In `native/` (rustc 1.97.1): `cargo fmt --check` passes; `cargo clippy --all-targets -- -D warnings` shows `Finished`, 0 warnings; `cargo test` shows 5 × `test result: ok. 1 passed`.
+  - **The 1.98 lint itself can't be checked locally** (only `stable-aarch64-apple-darwin` 1.97.1 is installed; `rustup toolchain list`). Confirmation needs the next CI run.
+  - Behaviour unchanged:
+    - `s2_jpeg` on `solid_960x540` and `material_1280x720`: all 12 rows' sizes and PSNR are identical to `reports/s2-jpeg-2026-09-24-macos-arm64.txt` (`diff`: no output).
+    - `s2_videotoolbox`: completed. Decoded frame 0 of the 540p stream has RGB means (102.1, 77.4, 73.7) vs. source (104.0, 80.0, 73.1), max diff 2.6; an R/B swap would give 30.3. `CHANNEL_ORDER_OK`.
+- **Files changed:** `native/vcam-video/examples/s2_jpeg.rs`, `native/vcam-video/examples/s2_videotoolbox.rs`, `IMPLEMENTATION_PROGRESS.md` (Repo/CI, maturity; ARC-001 and FR-BL-001 now **Done**; XP-001 **Done**; XP-002 and NFR-QA-002 evidence), `docs/LOOP_LOG.md` (blocked table, this entry).
+- **Owner actions:**
+  1. Push, so CI can confirm the clippy fix.
+  2. Optional, to stop this class of surprise: run `rustup update stable` on this Mac, so local clippy matches CI's stable. The loop may not update global toolchains without asking. The alternative is pinning `native/rust-toolchain.toml` to an exact version, which would change the plan's "stable" choice (0.1.3) — owner's call.
+- **Next task:** read the next CI run once pushed. Otherwise 1.1.2: `testdata/vcp/` and `testdata/coords/` golden vectors from a committed generator script.
