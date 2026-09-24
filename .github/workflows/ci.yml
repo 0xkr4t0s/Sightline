@@ -1,0 +1,183 @@
+# CI for VCam Blender (IMPLEMENTATION_PLAN.md task 0.1.5; SRS XP-001/002, NFR-QA-002).
+# Rust checks -> vcam_native wheels per OS -> Blender extension (split per platform)
+# -> headless Blender smoke test per OS. Plus Python unit tests and iOS unit tests.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BLENDER_VERSION: "5.2.2"
+  BLENDER_SERIES: "5.2"
+  PYTHON_VERSION: "3.13" # Blender 5.2's bundled Python
+  MATURIN_VERSION: "v1.15.0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: cargo fmt --check
+        working-directory: native
+        run: cargo fmt --check
+
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7 # pyo3's build script needs an interpreter
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native -> target.nosync
+      - name: cargo clippy
+        working-directory: native
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        working-directory: native
+        run: cargo test
+
+  wheels:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            manylinux: "2_28"
+          - os: windows-latest
+          - os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        id: python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: maturin build
+        uses: PyO3/maturin-action@v1
+        with:
+          maturin-version: ${{ env.MATURIN_VERSION }}
+          manylinux: ${{ matrix.manylinux }}
+          # Inside the Linux manylinux container, python3.13 is on PATH; elsewhere use setup-python's.
+          args: >-
+            --release -m native/vcam-py/Cargo.toml -o dist
+            -i ${{ runner.os == 'Linux' && 'python3.13' || steps.python.outputs.python-path }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheel-${{ runner.os }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  extension:
+    needs: wheels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wheel-*
+          path: BlenderAddOn/wheels
+          merge-multiple: true
+      - name: List every wheel in the manifest
+        run: python3 tools/set_manifest_wheels.py BlenderAddOn/blender_manifest.toml BlenderAddOn/wheels
+      - name: Install Blender
+        run: |
+          curl -fsSL -o blender.tar.xz "https://download.blender.org/release/Blender${BLENDER_SERIES}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+          tar -xf blender.tar.xz
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+            libx11-6 libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libsm6 libgl1 libegl1
+      - name: blender --command extension build --split-platforms
+        run: |
+          mkdir -p dist
+          "blender-${BLENDER_VERSION}-linux-x64/blender" --command extension build \
+            --split-platforms --source-dir BlenderAddOn --output-dir dist
+          ls -l dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: extension
+          path: dist/*.zip
+          if-no-files-found: error
+
+  blender-smoke:
+    needs: extension
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux_x64
+          - os: windows-latest
+            platform: windows_x64
+          - os: macos-latest
+            platform: macos_arm64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: extension
+          path: dist
+      - name: Install Blender
+        run: |
+          base="https://download.blender.org/release/Blender${BLENDER_SERIES}/blender-${BLENDER_VERSION}"
+          case "${RUNNER_OS}" in
+            Linux)
+              curl -fsSL -o blender.tar.xz "${base}-linux-x64.tar.xz"
+              tar -xf blender.tar.xz
+              sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+                libx11-6 libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libsm6 libgl1 libegl1
+              echo "BLENDER=${PWD}/blender-${BLENDER_VERSION}-linux-x64/blender" >> "${GITHUB_ENV}"
+              ;;
+            Windows)
+              curl -fsSL -o blender.zip "${base}-windows-x64.zip"
+              unzip -q blender.zip
+              echo "BLENDER=${PWD}/blender-${BLENDER_VERSION}-windows-x64/blender.exe" >> "${GITHUB_ENV}"
+              ;;
+            macOS)
+              curl -fsSL -o blender.dmg "${base}-macos-arm64.dmg"
+              hdiutil attach -nobrowse -quiet -mountpoint /Volumes/Blender blender.dmg
+              echo "BLENDER=/Volumes/Blender/Blender.app/Contents/MacOS/Blender" >> "${GITHUB_ENV}"
+              ;;
+          esac
+      - name: Install the extension and import vcam_native
+        env:
+          BLENDER_USER_RESOURCES: ${{ runner.temp }}/blender-user
+        run: |
+          zip=$(ls dist/vcam_blender-*-${{ matrix.platform }}.zip)
+          "${BLENDER}" --command extension install-file -r user_default -e "${zip}"
+          "${BLENDER}" --background --factory-startup --python-exit-code 1 \
+            --python tests/blender/smoke_native.py
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: python -m pip install pytest==9.1.1
+      - run: python -m pytest -q -p no:cacheprovider BlenderAddOn/tests
+
+  ios:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - name: xcodebuild test (unit tests; ARKit can't run in the simulator)
+        run: |
+          xcodebuild test -project VCamIOS/VCamIOS.xcodeproj -scheme VCamIOS \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro'

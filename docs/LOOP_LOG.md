@@ -8,6 +8,7 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 |---|---|---|
 | S-1 on Windows and Linux (mid-range GPU) | BLOCKED (needs owner) | SRS §8.2 wants every OS. CI runners have no GPU, so this needs the owner's Windows/Linux machines: run `tests/bench_render.py` headless (recipe in its docstring) and commit the JSON to `reports/`. |
 | S-1 EEVEE vs. FR-REN-004/NFR-PERF-002 | Decision needed (owner) | See SRS §13.1 "Conflict flagged". Not a stop condition; Phase 0 work continues. |
+| 0.1.5 CI green on GitHub (P0 exit gate) | BLOCKED (needs owner) | Create a private GitHub remote and push; then fix whatever the first run finds (list in Iteration 8). |
 
 ---
 
@@ -189,3 +190,41 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
   - No Rust or native change this iteration, so cargo and the smoke test weren't re-run.
 - **Blocked:** S-1c (Windows and Linux) and the EEVEE decision. Both are already in the Blocked items table.
 - **Next task:** 0.1.5 (CI workflow files: GitHub Actions matrix for fmt, clippy, test, maturin wheels, extension build, headless Blender smoke, plus a macOS `xcodebuild test` job). The files can be written and checked locally but can't be run remotely.
+
+## 2026-09-24 — Iteration 8 — 0.1.5 (XP-001/002, NFR-QA-002) — done locally; never run on GitHub
+
+- **Work:**
+  - `.github/workflows/ci.yml` jobs:
+    - `rust-fmt` (ubuntu);
+    - `rust` (clippy `-D warnings` and `cargo test` on ubuntu, windows, macos, with setup-python 3.13 for pyo3's build script and rust-cache on `native -> target.nosync`);
+    - `wheels` (maturin-action pinned to maturin v1.15.0; manylinux `2_28` on Linux; cp313);
+    - `extension` (download all wheels, run `tools/set_manifest_wheels.py`, install Blender 5.2.2 on Linux, `extension build --split-platforms`);
+    - `blender-smoke` (per OS: install Blender 5.2.2, `extension install-file -e` the matching `*-<platform>.zip`, run `tests/blender/smoke_native.py` with `--python-exit-code 1`);
+    - `python` (pytest 9.1.1);
+    - `ios` (`xcodebuild test` on `macos-26`, iPhone 17 Pro).
+  - `tools/set_manifest_wheels.py`: rewrites the manifest's `platforms`/`wheels` to the wheels present and re-validates with `tomllib`. It exists because Blender's build fails if any listed wheel is missing: `FATAL_ERROR: Error adding to archive, file not found: "wheels/…win_amd64.whl"`, tested with and without `--split-platforms`. So the committed manifest stays macOS-only for local builds, and CI expands it.
+- **Checked before use:**
+  - Blender URLs `https://download.blender.org/release/Blender5.2/blender-5.2.2-{linux-x64.tar.xz,windows-x64.zip,macos-arm64.dmg}` all return HTTP 200.
+  - Major tags exist via `git ls-remote`: `actions/checkout@v7`, `setup-python@v7`, `upload-artifact@v7`, `download-artifact@v8`, `PyO3/maturin-action@v1`, `Swatinem/rust-cache@v2`.
+  - maturin-action inputs (`maturin-version`, `manylinux`, `args`) come from its `action.yml`.
+  - Blender's tag→platform mapping (`manylinux_2_28_x86_64` → `linux-x64`) comes from `blender_ext.py:2143-2169`.
+- **Tool added (venv only, not a project dependency):** `actionlint-py` 1.7.12.25 in `.venv.nosync`, to lint the workflow.
+- **Commands run:**
+  - `.venv.nosync/bin/actionlint .github/workflows/ci.yml`: exit 0, no findings.
+  - Local rehearsal of `extension` + `blender-smoke` (macOS) in a temp copy, with stand-in Linux/Windows wheels copied from the macOS one:
+    - `set_manifest_wheels.py` listed 3 platforms and 3 wheels;
+    - `extension build --split-platforms` created `…-linux_x64.zip`, `…-macos_arm64.zip`, `…-windows_x64.zip`, each containing only its own wheel;
+    - installing the macOS zip and running the smoke test printed `VCAM_NATIVE_OK 0.1.0`, `SMOKE_EXIT=0`;
+    - `set_manifest_wheels.py` on an empty dir printed `no wheels in empty`, exit 1.
+  - `.venv.nosync/bin/pytest -q -p no:cacheprovider BlenderAddOn/tests`: `12 passed in 0.01s`.
+  - Rust: unchanged this iteration, so not re-run.
+- **Unverified until CI runs on GitHub. The owner creates the remote and pushes; the loop may not.** Most likely failure points:
+  1. `-i python3.13` inside the manylinux_2_28 container.
+  2. `-i <setup-python path>` on Windows.
+  3. The apt package list Blender needs on `ubuntu-latest`.
+  4. `macos-26` runner availability and its Xcode supporting the project's iOS 26.4 deployment target.
+  5. The Linux cp313 wheel loading in Blender's bundled Python (glibc ≥ 2.28 assumed).
+- **Not in CI yet:** `cargo fuzz` (NFR-QA-002), which needs targets from 1.1.3. The S-1 GPU benchmark stays off CI (no GPU on runners).
+- **Blocked:** running CI remotely (`git push` / creating a remote is owner-only). Added to the table below as a note; not a stop condition.
+- **Files changed:** `.github/workflows/ci.yml` (new), `tools/set_manifest_wheels.py` (new), `IMPLEMENTATION_PROGRESS.md` (Repo/CI; XP-001/002 and NFR-QA-002 now Partial), `docs/LOOP_LOG.md`.
+- **Next task:** 0.1.6. Remove the "Live Link" wording from `BlenderAddOn/operators/tracking_receiver.py:23`. It's next in Phase 0 table order; the rest of the "Immediate next steps" list is Phase 1.

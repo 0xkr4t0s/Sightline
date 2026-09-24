@@ -17,7 +17,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | Rust native module | Partial | `native/` workspace with 5 crates. `vcam-py` builds the PyO3 module `vcam_native` (only `version()` so far), which imports inside Blender 5.2.2 on macOS (task 0.1.4). |
 | Viewfinder stream (Blender → iPhone) | Not started | — |
 | C++ `legacy/DesktopReceiver/` (incl. CMIO extension) | Retire | Moved to `legacy/` in task 0.1.2 (ARC-006). Port the parsers, their tests, and the test-pattern generator to Rust, then delete the directory. |
-| Repo / CI | Partial | One git repo at the root (task 0.1.1). `VCamIOS` history imported under `VCamIOS/` (commits `ae4d81c`, `984145a`, `5ba2672`). No CI. |
+| Repo / CI | Partial | One git repo at the root (task 0.1.1). `VCamIOS` history imported under `VCamIOS/` (commits `ae4d81c`, `984145a`, `5ba2672`). CI workflow `.github/workflows/ci.yml` is written and lint-clean but has never run on GitHub (no remote yet). |
 
 **Maturity:** early prototype. All of Phase 0 is open.
 
@@ -95,7 +95,9 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 
 | ID | Status | Evidence / gap |
 |---|---|---|
-| XP-001..006 | Not started | |
+| XP-001 | Partial | `.github/workflows/ci.yml` jobs `wheels` (manylinux 2_28, Windows, macOS arm64) and `extension` (`--split-platforms`, manifest listing written by `tools/set_manifest_wheels.py`). Rehearsed locally on macOS with stand-in wheels. Not yet run on GitHub. |
+| XP-002 | Partial | `ci.yml` job `blender-smoke` installs the platform zip and runs `tests/blender/smoke_native.py` on 3 OSes. Only the macOS path has run (locally). Not yet run on GitHub. |
+| XP-003..006 | Not started | |
 
 ### §8–§10
 
@@ -109,7 +111,8 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | NFR-LAT-*, NFR-PERF-* | Not started | No latency measurements. Render/readback costs are measured by S-1 (SRS §13.1). |
 | NFR-REL-*, NFR-SEC-* | Not started | Any host can send poses; no pairing. |
 | NFR-QA-001 | Partial | One git repo. `xcodebuild test`, `cargo test` (in `native/`), and a headless Blender smoke test (`tests/blender/smoke_native.py`) all run. There's no single `blender --background … tests` runner for add-on logic yet. |
-| NFR-QA-002/003 | Not started | |
+| NFR-QA-002 | Partial | `ci.yml` covers fmt, clippy (`-D warnings`), and test on 3 OSes; Python tests; headless Blender on 3 OSes; iOS unit tests. Missing: `cargo fuzz` (no targets until 1.1.3). Not yet run on GitHub. |
+| NFR-QA-003 | Not started | |
 | NFR-QA-004 | Partial | Enforced by workspace lints: `unsafe_code` deny plus `clippy::undocumented_unsafe_blocks` deny (`native/Cargo.toml:22-32`). Checked with a throwaway probe: clippy rejected an uncommented `unsafe` block. |
 
 ---
