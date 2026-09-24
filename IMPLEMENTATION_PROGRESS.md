@@ -13,8 +13,8 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | Area | Status | Reality |
 |---|---|---|
 | iOS tracking (`VCamIOS/`) | Partial | Headless ARKit session sending FreeD over UDP. Good base for FR-TRK-001/005. The packet format and Euler conversion must be replaced with VCP + quaternions. |
-| Blender extension (`BlenderAddOn/`) | Partial | Background UDP thread + main-thread apply works. FreeD/JSON parsing in Python must be replaced by the Rust module. Manifest pins 5.1. |
-| Rust native module | Partial | `native/` workspace skeleton with 5 crates (task 0.1.3); fmt/clippy/test pass. No PyO3 module yet (0.1.4). maturin 1.15.0 is in `.venv.nosync/`. |
+| Blender extension (`BlenderAddOn/`) | Partial | Background UDP thread + main-thread apply works. FreeD/JSON parsing in Python must be replaced by the Rust module. Manifest targets 5.2 and bundles the `vcam_native` wheel (macOS arm64 only so far). |
+| Rust native module | Partial | `native/` workspace with 5 crates. `vcam-py` builds the PyO3 module `vcam_native` (only `version()` so far), which imports inside Blender 5.2.2 on macOS (task 0.1.4). |
 | Viewfinder stream (Blender → iPhone) | Not started | — |
 | C++ `legacy/DesktopReceiver/` (incl. CMIO extension) | Retire | Moved to `legacy/` in task 0.1.2 (ARC-006). Port the parsers, their tests, and the test-pattern generator to Rust, then delete the directory. |
 | Repo / CI | Partial | One git repo at the root (task 0.1.1). `VCamIOS` history imported under `VCamIOS/` (commits `ae4d81c`, `984145a`, `5ba2672`). No CI. |
@@ -29,6 +29,8 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 |---|---|---|
 | Legacy C++ (`legacy/DesktopReceiver`) | 9/9 pass (fresh temp build dir) | Re-run after the move to `legacy/`. To be retired. The stale in-repo `build/` was deleted. |
 | `BlenderAddOn/tests` (pytest, `.venv.nosync`) | 12/12 pass | Tests the non-standard FreeD layout; the code will be replaced. |
+| `native/` cargo fmt/clippy/test | Pass, 5/5 crates | Includes `vcam-py` with pyo3 0.29.2. |
+| Headless Blender `tests/blender/smoke_native.py` (macOS arm64) | Pass | Built extension zip, installed into a temporary user dir, enabled; printed `VCAM_NATIVE_OK 0.1.0`. |
 | VCamIOS `FreeDPacketEncoderTests` (iPhone 17 Pro sim, iOS 27.0) | 5/5 pass | After the checksum overflow fix (root commit `5ba2672`, was `ed349be` in the old `VCamIOS` repo). Will be replaced with VCP tests. |
 
 ---
@@ -39,7 +41,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 
 | ID | Status | Evidence / gap |
 |---|---|---|
-| ARC-001 | Partial | `BlenderAddOn/blender_manifest.toml` exists (extension format); no wheels or native module. |
+| ARC-001 | Partial | Extension + PyO3 crate `native/vcam-py` (`src/lib.rs:7-18`, maturin config in `pyproject.toml`) bundled as a wheel (`BlenderAddOn/blender_manifest.toml:15-18`). macOS arm64 wheel only; per-platform wheels come with CI in 0.1.5. |
 | ARC-002 | Partial | Crates split as required (`native/Cargo.toml:3-9`). `vcam-protocol` is `#![forbid(unsafe_code)]` (`native/vcam-protocol/src/lib.rs:4`). Skeleton only; no protocol, net, or encoder code yet. |
 | ARC-003 | Not started | No canonical pose; FreeD frame structs used throughout. |
 | ARC-004 | Not started | iOS doesn't send a capture time or sequence number; Blender stamps receive time. |
@@ -69,7 +71,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 
 | ID | Status | Evidence / gap |
 |---|---|---|
-| FR-BL-001 | Partial | Manifest has `blender_version_min = "5.1.0"` and the `network` permission; no wheels/platforms. |
+| FR-BL-001 | Partial | `blender_version_min = "5.2.0"`, `network` permission, `wheels` and `platforms` (`BlenderAddOn/blender_manifest.toml:9,15-18`); builds and installs on macOS arm64. Still missing `windows-x64` and `linux-x64` wheels (0.1.5). |
 | FR-BL-002 | Partial | Latest-sample semantics and main-thread apply are done in Python (`core/udp_client.py`, `operators/tracking_receiver.py`). Sockets must move into the Rust module. |
 | FR-BL-003 | Partial | Drives a chosen camera directly; no `VCam_Origin` rig; Euler rotation (`core/transform.py`). |
 | FR-BL-004 | Partial | N-panel with connection settings and status (`ui/panels.py`); no pairing or stats. |
@@ -105,7 +107,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | LNS-* | Not started | |
 | NFR-LAT-*, NFR-PERF-* | Not started | No measurements. |
 | NFR-REL-*, NFR-SEC-* | Not started | Any host can send poses; no pairing. |
-| NFR-QA-001 | Partial | One git repo: root `.git` with `VCamIOS` history. `xcodebuild test` and `cargo test` (in `native/`) work. Headless Blender tests (0.1.4) don't exist yet. |
+| NFR-QA-001 | Partial | One git repo. `xcodebuild test`, `cargo test` (in `native/`), and a headless Blender smoke test (`tests/blender/smoke_native.py`) all run. There's no single `blender --background … tests` runner for add-on logic yet. |
 | NFR-QA-002/003 | Not started | |
 | NFR-QA-004 | Partial | Enforced by workspace lints: `unsafe_code` deny plus `clippy::undocumented_unsafe_blocks` deny (`native/Cargo.toml:22-32`). Checked with a throwaway probe: clippy rejected an uncommented `unsafe` block. |
 

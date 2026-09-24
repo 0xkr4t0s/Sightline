@@ -5,6 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+# Python module `vcam_native`, built by maturin (see pyproject.toml).
+[lib]
+name = "vcam_native"
+crate-type = ["cdylib", "rlib"]
+
 [lints]
 workspace = true
 
@@ -12,3 +17,4 @@ workspace = true
 vcam-protocol.workspace = true
 vcam-net.workspace = true
 vcam-video.workspace = true
+pyo3 = "=0.29.2"

@@ -1,0 +1,12 @@
+[build-system]
+# maturin >= 1.9.4 sets PYO3_BUILD_EXTENSION_MODULE, so pyo3 needs no `extension-module` feature.
+requires = ["maturin>=1.9.4,<2"]
+build-backend = "maturin"
+
+[project]
+name = "vcam-native"
+requires-python = ">=3.13"
+dynamic = ["version"]
+
+[tool.maturin]
+module-name = "vcam_native"

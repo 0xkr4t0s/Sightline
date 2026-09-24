@@ -3,14 +3,19 @@ schema_version = "1.0.0"
 id = "vcam_blender"
 version = "0.1.0"
 name = "VCam Blender"
-tagline = "Real-time virtual camera tracking receiver for motion picture production"
+tagline = "iPhone virtual camera: ARKit tracking and a live viewfinder"
 maintainer = "VCamBlender Team"
 type = "add-on"
-blender_version_min = "5.1.0"
+blender_version_min = "5.2.0"
 
 license = ["SPDX:GPL-3.0-or-later"]
 
 tags = ["Camera", "Animation", "Import-Export"]
+
+# Rust native module `vcam_native` (native/vcam-py), built by maturin. CI (task 0.1.5)
+# adds the Windows and Linux wheels and platforms.
+platforms = ["macos-arm64"]
+wheels = ["./wheels/vcam_native-0.1.0-cp313-cp313-macosx_11_0_arm64.whl"]
 
 [permissions]
 network = "Receive camera tracking data over local UDP"

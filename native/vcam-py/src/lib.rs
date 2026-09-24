@@ -1,7 +1,20 @@
 //! PyO3 bindings exposed to the Blender extension as `vcam_native` (ARC-001/002).
-//! The PyO3 module itself is added in task 0.1.4.
+
+use pyo3::prelude::*;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Native core of the VCam Blender extension.
+#[pymodule]
+mod vcam_native {
+    use pyo3::prelude::*;
+
+    /// Version of the Rust native module.
+    #[pyfunction]
+    fn version() -> &'static str {
+        super::VERSION
+    }
+}
 
 #[cfg(test)]
 mod tests {
