@@ -210,9 +210,9 @@ No separate desktop application exists. The Rust module runs inside Blender's pr
 | ID | Priority | Tier | Requirement |
 |---|---|---|---|
 | FR-REN-001 | MUST | T2 | Render the VCam camera's view **offscreen** (`gpu.types.GPUOffScreen` + `draw_view3d` with the camera's view and projection matrices), independent of what the user's own 3D viewports show. |
-| FR-REN-002 | MUST | T2 | Selectable shading for the stream: Solid, Material Preview, Rendered (EEVEE). Selectable stream resolution (for example, 640×360, 960×540, 1280×720, 1920×1080) and fps cap (24/30/60). |
+| FR-REN-002 | MUST | T2 | Selectable shading for the stream: Solid (default), Material Preview, Rendered (EEVEE). EEVEE is an opt-in *preview-quality* mode: selecting it SHALL show a warning that Blender's UI may lag and the stream fps will drop, and it is exempt from FR-REN-004's budget and NFR-PERF-002 (owner decision 2026-09-24, §13.1). Selectable stream resolution (for example, 640×360, 960×540, 1280×720, 1920×1080) and fps cap (24/30/60). |
 | FR-REN-003 | MUST | T2 | Read back pixels and hand them to the native module with at most one copy on the Python side. Encoding SHALL happen off the main thread in Rust. **[SPIKE S-1]** |
-| FR-REN-004 | MUST | T2 | Stream rendering SHALL NOT make Blender's UI unusable: cap the main-thread cost per frame (configurable budget, default 12 ms), and skip frames rather than block. |
+| FR-REN-004 | MUST | T2 | Stream rendering SHALL NOT make Blender's UI unusable: cap the main-thread cost per frame (configurable budget, default 12 ms), and skip frames rather than block. Frame skipping SHALL adapt to the measured draw and `read()` time (§13.1). Applies to Solid and Material Preview; EEVEE is exempt (FR-REN-002). |
 | FR-REN-005 | SHOULD | T2 | Colour management: the stream SHALL match what Blender's viewport shows (view transform and look applied), tagged sRGB/Rec.709. |
 | FR-REN-006 | SHOULD | T3 | Overlays burnt in by choice: camera passepartout/safe areas from Blender, and an option to hide gizmos and helpers. |
 | FR-REN-007 | MAY | T4 | Stream while Blender plays the timeline, so the operator can "film" animated scenes (T3 covers recording; this covers smooth playback rendering under load). |
@@ -303,7 +303,7 @@ The results set the default stream resolution and fps, and are recorded in §13.
 |---|---|---|---|
 | NET-VID-001 | MUST | T2 | **Stage A (simplest, first):** per-frame JPEG (quality adjustable), fragmented into `VIDEO_FRAGMENT` datagrams. The iPhone drops any frame that is still incomplete when a newer one starts. Target: 960×540 @ 30 fps within ~15–25 Mbit/s on 5 GHz Wi-Fi. |
 | NET-VID-002 | MUST | T3 | **Stage B:** H.264 (Baseline/Main, no B-frames, periodic intra refresh or short GOP, low-latency rate control), sent with the same fragmentation plus a keyframe request (`ACK_KEYFRAME_REQ`) on loss. Target: 1280×720 @ 30–60 fps at 4–10 Mbit/s. |
-| NET-VID-003 | MUST | T3 | Encoder backends per OS, behind one Rust trait: VideoToolbox (macOS), Media Foundation H.264 MFT (Windows), and VA-API (Linux, when available). A software fallback (for example, OpenH264) SHALL be selectable when no hardware encoder is available. Check H.264 patent licensing before distributing a software encoder binary. **[SPIKE S-2]** |
+| NET-VID-003 | MUST | T3 | Encoder backends per OS, behind one Rust trait: VideoToolbox (macOS), Media Foundation H.264 MFT (Windows), and VA-API (Linux, when available). When no hardware H.264 encoder is available, the stream SHALL fall back to Stage A JPEG (NET-VID-001). No software H.264 encoder is shipped or downloaded (owner decision 2026-09-24, option A in §13.2; avoids H.264 patent exposure). |
 | NET-VID-004 | MUST | T2 | Every frame SHALL carry `frame_id`, `render_time_ns` (Blender clock), and `pose_seq` (ARC-004). |
 | NET-VID-005 | SHOULD | T2 | Adaptive quality: lower JPEG quality or H.264 bitrate, then resolution, on sustained fragment loss or rising M2P. Report changes in both UIs. |
 | NET-VID-006 | MAY | T4 | Wired option: iPhone over USB-C Ethernet adapter on the same LAN (no code change; document it as the lowest-latency setup). |
@@ -331,7 +331,7 @@ The results set the default stream resolution and fps, and are recorded in §13.
 | NFR-LAT-003 | MUST | T2 | **Motion-to-photon**, measured on the iPhone as (frame displayed) − (capture time of `pose_seq`): p95 ≤ 120 ms at 960×540 JPEG on Stage A; p95 ≤ 80 ms at 720p H.264 on Stage B (T3); goal ≤ 60 ms. |
 | NFR-LAT-004 | MUST | T2 | A latency harness SHALL log the pose leg, render/readback, encode, network, decode, and display as p50/p95/p99, and write a report artefact (`reports/latency-<date>.json`). |
 | NFR-PERF-001 | MUST | T2 | The iPhone SHALL sustain 60 Hz tracking + 30 fps stream decode for 60 minutes without reaching `.serious` thermal state on iPhone 15 Pro at room temperature. |
-| NFR-PERF-002 | MUST | T2 | With streaming at default settings on the reference machine, Blender's UI SHALL stay responsive (the main thread never blocks > 50 ms because of VCam). |
+| NFR-PERF-002 | MUST | T2 | With streaming at default settings on the reference machine, Blender's UI SHALL stay responsive (the main thread never blocks > 50 ms because of VCam). Default settings means Solid or Material Preview; EEVEE is exempt (FR-REN-002). |
 
 ### 10.2 Reliability
 
@@ -432,7 +432,7 @@ Findings:
 
 Proposed defaults (to confirm after the UI run and the other OSes): 960×540, Solid, 30 fps, deferred read (main thread about 3 ms per frame). Material Preview at 540p looks feasible at about 20 fps with deferral (GPU about 40–45 ms per frame).
 
-**Conflict flagged (not resolved here):** FR-REN-002 makes EEVEE a selectable stream mode, but on this machine a single EEVEE `draw_view3d` blocks the main thread for 76 ms median at 540p. That breaks FR-REN-004's 12 ms default budget and NFR-PERF-002's 50 ms limit, and frame skipping can't help because one frame already exceeds both. Material 720p/1080p also breaks the 12 ms budget. The owner must decide: exempt EEVEE (and heavy Material) from these limits with a UI warning, require lighter EEVEE settings (untested), or drop EEVEE streaming from T2.
+**Conflict flagged — resolved 2026-09-24 by the owner: EEVEE is exempt with a warning (see FR-REN-002, FR-REN-004, NFR-PERF-002).** Original note: FR-REN-002 makes EEVEE a selectable stream mode, but on this machine a single EEVEE `draw_view3d` blocks the main thread for 76 ms median at 540p. That breaks FR-REN-004's 12 ms default budget and NFR-PERF-002's 50 ms limit, and frame skipping can't help because one frame already exceeds both. Material 720p/1080p also breaks the 12 ms budget. The owner must decide: exempt EEVEE (and heavy Material) from these limits with a UI warning, require lighter EEVEE settings (untested), or drop EEVEE streaming from T2.
 
 #### S-1b — Blender UI with timers, macOS (2026-09-24)
 
@@ -538,6 +538,8 @@ Findings:
 **Licensing (not decided; options in `docs/LOOP_LOG.md` Iteration 12).** Cisco pays the MPEG LA H.264 royalties only for its own binary, and only if that binary is downloaded separately to the end user's device (not bundled), the user can enable and disable it, the UI shows "OpenH264 Video Codec provided by Cisco Systems, Inc.", and the licence text is reproduced (openh264.org FAQ and BINARY_LICENSE.txt v1.0). The patent grant also covers only personal use or uses that don't earn remuneration, while VCam users may be paid productions. Compiling the source build into the wheel gives no patent coverage at all.
 
 Still open for S-2: JPEG on Windows and Linux and Media Foundation on Windows (S-2d/e, owner machines). VA-API on Linux is untested (no Linux GPU here). Owner decision on the H.264 software-fallback licensing.
+
+**Owner decision 2026-09-24 — H.264 software fallback:** option A. Hardware H.264 only (VideoToolbox, Media Foundation, VA-API); where none exists, fall back to JPEG. No OpenH264 in the shipped extension; the `openh264` dev-dependency stays only for the S-2c benchmark example. NET-VID-003 updated.
 
 ### 13.3 S-3 results — 2026-09-24 (S-3a: unsigned/ad-hoc loading on macOS 27 arm64; Developer ID signing, notarization, and Windows SmartScreen pending)
 

@@ -14,7 +14,7 @@ You are working autonomously on VCam for Blender at "/Users/owner/iCloud Drive (
 - **Tasks you must NOT do. Mark them `BLOCKED (needs owner)` in the log and move on:**
   - anything needing a physical iPhone or a human in front of the Blender UI: device testing, real-Wi-Fi latency (S-4), thermal runs, and the manual checklists in exit gates;
   - Apple Developer signing, notarization, TestFlight/App Store, or any credentials;
-  - `git push`, creating remote repos or PRs, or publishing an extension repository. You MAY write CI workflow files, but can't run them remotely;
+  - `git push`, creating remote repos or PRs, or publishing an extension repository. You MAY write CI workflow files, and you MAY read CI results read-only (`gh run list`, `gh run view <id> --log-failed`) to fix failures locally; the owner pushes;
   - licence decisions (spike S-5): write up the options in the log instead;
   - installing global tools other than `cargo install cargo-fuzz` / `rustup component add` (ask first for anything else, for example Homebrew packages). Python packages go only into the project venv `.venv.nosync/` (pytest and maturin are already there).
 - If a task is bigger than one iteration, split it into sub-steps in the log and do only the first.
