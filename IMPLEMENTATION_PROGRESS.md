@@ -16,7 +16,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | Blender extension (`BlenderAddOn/`) | Partial | Background UDP thread + main-thread apply works. FreeD/JSON parsing in Python must be replaced by the Rust module. Manifest pins 5.1. |
 | Rust native module | Not started | No `native/` workspace yet. Rust 1.97.1 is installed; maturin 1.15.0 is in `.venv.nosync/`. |
 | Viewfinder stream (Blender → iPhone) | Not started | — |
-| C++ `DesktopReceiver/` (incl. CMIO extension) | Retire | Out of scope in v3 (ARC-006). Port anything worth keeping, then remove. |
+| C++ `legacy/DesktopReceiver/` (incl. CMIO extension) | Retire | Moved to `legacy/` in task 0.1.2 (ARC-006). Port the parsers, their tests, and the test-pattern generator to Rust, then delete the directory. |
 | Repo / CI | Partial | One git repo at the root (task 0.1.1). `VCamIOS` history imported under `VCamIOS/` (commits `ae4d81c`, `984145a`, `5ba2672`). No CI. |
 
 **Maturity:** early prototype. All of Phase 0 is open.
@@ -27,7 +27,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 
 | Suite | Result | Note |
 |---|---|---|
-| Legacy C++ (`DesktopReceiver`) | 9/9 pass (fresh build dir) | To be retired. The in-repo `DesktopReceiver/build/` is stale (configured from `~/Downloads`). |
+| Legacy C++ (`legacy/DesktopReceiver`) | 9/9 pass (fresh temp build dir) | Re-run after the move to `legacy/`. To be retired. The stale in-repo `build/` was deleted. |
 | `BlenderAddOn/tests` (pytest, `.venv.nosync`) | 12/12 pass | Tests the non-standard FreeD layout; the code will be replaced. |
 | VCamIOS `FreeDPacketEncoderTests` (iPhone 17 Pro sim, iOS 27.0) | 5/5 pass | After the checksum overflow fix (root commit `5ba2672`, was `ed349be` in the old `VCamIOS` repo). Will be replaced with VCP tests. |
 
@@ -44,7 +44,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | ARC-003 | Not started | No canonical pose; FreeD frame structs used throughout. |
 | ARC-004 | Not started | iOS doesn't send a capture time or sequence number; Blender stamps receive time. |
 | ARC-005 | Partial | Swift 5 mode with default `MainActor` isolation; every AR frame hops to the main actor to send (`VCamIOS/VCamIOS/TrackingSessionController.swift`). |
-| ARC-006 | Not started | `DesktopReceiver/` still present. |
+| ARC-006 | Partial | Moved to `legacy/DesktopReceiver/`, with a retirement note at `legacy/DesktopReceiver/README.md:1-6`. Porting to Rust and deleting the directory are still open. |
 | ARC-007 | Not started | Optional. |
 
 ### §4 iOS app
@@ -85,7 +85,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 |---|---|---|
 | DM-001..004 | Not started | |
 | PR-001..006 | Not started | |
-| PR-FD-001 | Replace | Non-standard FreeD in `BlenderAddOn/core/freed_parser.py`, `VCamIOS/VCamIOS/FreeDPacketEncoder.swift`, `DesktopReceiver/src/protocol/FreeDParser.cpp`. |
+| PR-FD-001 | Replace | Non-standard FreeD in `BlenderAddOn/core/freed_parser.py`, `VCamIOS/VCamIOS/FreeDPacketEncoder.swift`, `legacy/DesktopReceiver/src/protocol/FreeDParser.cpp`. |
 | PR-FD-002, PR-OTIO-001 | Not started | Optional, T4. |
 
 ### §7 Cross-platform

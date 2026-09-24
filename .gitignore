@@ -21,7 +21,6 @@ BlenderAddOn/wheels/*.whl
 *.zip
 
 # Legacy C++ build output
-DesktopReceiver/build/
 legacy/DesktopReceiver/build/
 
 # Loop control file (local only)
