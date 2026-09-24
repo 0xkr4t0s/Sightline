@@ -784,3 +784,35 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none.
 - **Next task:** 1.2.5b — add-on register/unregister wiring of `Session` (stable host_id + config dir in Blender's user config, `stop()` on unregister, main-thread timer poll), tested headlessly with enable → disable → re-enable. No second task started.
 - **Owner actions:** push (this commit makes 15 ahead; CI will run `session_native.py` on 3 OSes). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.
+
+## 2026-09-24 — Iteration 29 — 1.2.5b (NFR-REL-002, NFR-SEC-003, NFR-SEC-001, FR-BL-002, C-2) — done
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 15 ahead of `origin`; no new CI run. Existing Phase 1 owner waiver applies.
+- **Scope:** add-on lifecycle only.
+  - In: a stable host ID and pairing directory, start/stop operators, a main-thread event poll, and a stop in `unregister()`.
+  - Not in: the N-panel toggle and pairing-code UI (1.3.3), replacing the FreeD path and applying poses (1.3.1/1.3.2), and `load_post` re-advertising after a file reload (1.3.4).
+- **Design:**
+  - **`BlenderAddOn/core/session.py` (new):** one `vcam_native.Session` per process. Nothing listens until `vcam.session_start` runs (NFR-SEC-003).
+  - **Storage:** `config_dir()` is `bpy.utils.extension_path_user(__package__, create=True)`, which survives extension updates (confirmed in `bpy/utils/__init__.py:952-998`). It holds `host_id` (16 bytes, created once atomically, mode 0600; a damaged file raises `ValueError` rather than silently invalidating paired devices) and `vcam-pairings/`.
+  - **Start:** `start()` advertises the hostname and `.blend` basename. A DNS-SD failure is recorded in `state.last_error` and doesn't abort the session: manual host entry still works (FR-UX-001).
+  - **Poll:** a persistent `bpy.app.timers` callback (0.1 s, at most 64 events per tick, never raises) updates `SessionState` in place.
+  - **Stop:** `stop()` unregisters the timer, then stops the session; it never raises. `unregister()` calls it before any class is unregistered.
+  - **Defaults:** operators `vcam.session_start(port=47000, bind="0.0.0.0")` and `vcam.session_stop`. TCP default 47000 is a stable port for manual entry; UDP uses any free port, which is sent in `SESSION_CHALLENGE`.
+- **Files changed:** `BlenderAddOn/core/session.py` (new), `BlenderAddOn/operators/session.py` (new), `BlenderAddOn/operators/__init__.py`, `BlenderAddOn/__init__.py`, `BlenderAddOn/tests/test_session_host_id.py` (new), `tests/blender/addon_session.py` (new), `.github/workflows/ci.yml` (`blender-smoke` also runs `addon_session.py`), `IMPLEMENTATION_PROGRESS.md` (FR-UX-001/002, FR-BL-002, NET-002, NFR-REL-002, NFR-SEC-001, NFR-SEC-003 split from 002, NFR-QA-001), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `pytest BlenderAddOn/tests`: 14 passed (2 new). The first run hit a collection error: the new test imported `BlenderAddOn.core` instead of the existing `sys.path` convention. Fixed.
+  - Headless Blender 5.2.2 with a fresh wheel and extension install:
+    - `smoke_native.py`: `VCAM_NATIVE_OK 0.1.0`.
+    - `session_native.py`: `VCAM_SESSION_OK ... stop_ms=55`.
+    - `addon_session.py`: `VCAM_ADDON_SESSION_OK tcp=62440 udp=50541 disable_ms=84 host_id_stable=true`. All exit 0.
+  - `addon_session.py` covers: no listening after enable; start; a real TCP connect; the config dir under the user resources; host_id 16 bytes and 0600; the pairings dir; the timer registered and `_poll` returning 0.1; a second start refused by poll; disable < 1 s with the socket closed, the timer removed and the port refused; re-enable with the same host ID on the same port; the stop operator.
+  - Mutation check (source restored and `cmp`-verified): `unregister` not stopping, the timer left registered, and the host ID regenerated on every start. Each failed `addon_session.py`; the last also failed 2 pytest tests.
+  - `cargo fmt --check` OK; `cargo clippy -D warnings` clean; `cargo test` 48 passed, 0 failed. `actionlint` OK. `gen_testdata.py --check`: up to date (18 files). `xcodebuild test`: 11 tests, 0 failures, `** TEST SUCCEEDED **`.
+- **Not verified:**
+  - The timer firing inside Blender's event loop (background scripts don't run timers; `_poll` was called directly).
+  - Behaviour with a connected device (needs 1.2.7).
+  - The new Blender tests on Windows/Linux CI (awaiting push).
+- **1.2.5 status:** 1.2.5a and 1.2.5b are both done, so task 1.2.5 is complete.
+- **Blocked:** none.
+- **Next task:** 1.2.6 — optional One-Euro smoothing in Rust (FR-BL-006). No second task started.
+- **Owner actions:** push (this commit makes 16 ahead; CI will run `session_native.py` and `addon_session.py` on 3 OSes). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.

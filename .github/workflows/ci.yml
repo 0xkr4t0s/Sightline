@@ -206,6 +206,8 @@ jobs:
             --python tests/blender/smoke_native.py
           "${BLENDER}" --background --factory-startup --python-exit-code 1 \
             --python tests/blender/session_native.py
+          "${BLENDER}" --background --factory-startup --python-exit-code 1 \
+            --python tests/blender/addon_session.py
 
   python:
     runs-on: ubuntu-latest
