@@ -12,7 +12,7 @@ from __future__ import annotations
 import bpy
 
 from ..core import session
-from ..core.apply import ORIGIN_NAME
+from ..core.apply import camera_status, find_origin
 from ..core.status import code_label, locks_label, scale_label, tracking_label
 
 
@@ -38,6 +38,9 @@ class VCAM_PT_main_panel(bpy.types.Panel):
         row.prop(props, "port", text="Port")
         row.enabled = live is None
         col.prop(props, "target_camera", text="Camera", icon='CAMERA_DATA')
+        camera, warning = camera_status(context.scene)
+        if warning:
+            col.label(text=warning, icon='ERROR')  # FR-BL-007
         col.prop(props, "smoothing")
 
         if live is None:
@@ -79,7 +82,7 @@ class VCAM_PT_main_panel(bpy.types.Panel):
         col = box.column(align=True)
         col.label(text=f"Motion scale: {scale_label(controls.motion_scale)}")
         col.label(text=f"Locks: {locks_label(controls.lock_flags)}")
-        origin = bpy.data.objects.get(ORIGIN_NAME)
+        origin = find_origin(camera)
         if origin is not None:
             col.label(text=f"Origin object: {origin.name}")
         row = box.row(align=True)

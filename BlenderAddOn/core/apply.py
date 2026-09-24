@@ -27,6 +27,8 @@ MAX_CAMERA_NAME = 63  # bytes of UTF-8 (vcp.md §6.4)
 ORIGIN_NAME = "VCam_Origin"
 ZERO_POSITION_KEY = "vcam_zero_position"
 ZERO_YAW_KEY = "vcam_zero_yaw"
+# Marks the rig empty, so it is still found after the user renames it (FR-BL-007).
+RIG_KEY = "vcam_origin"
 
 
 def pose_matrix(position, orientation):
@@ -42,24 +44,62 @@ def camera_name(name: str) -> str:
     return name.encode("utf-8")[:MAX_CAMERA_NAME].decode("utf-8", "ignore")
 
 
-def target_camera(scene):
-    """The VCam target camera, else the scene camera; None unless it's a camera object."""
+def _in_scene(scene, obj) -> bool:
+    # A camera deleted in the UI keeps existing while the target pointer uses it, but leaves
+    # every scene; scene.camera can still point at it.
+    return scene.objects.get(obj.name) == obj
+
+
+def camera_status(scene):
+    """(camera to drive, warning): the VCam target camera, else the scene camera (FR-BL-007).
+
+    The camera is None, with a warning short enough for the N-panel, when the choice is unset,
+    not a camera, or no longer in the scene. A deleted target does not fall back to the scene
+    camera: that would move a camera the operator didn't pick.
+    """
     props = getattr(scene, "vcam_props", None)
-    obj = (props.target_camera if props is not None else None) or scene.camera
-    return obj if obj is not None and obj.type == 'CAMERA' else None
+    target = props.target_camera if props is not None else None
+    obj = target if target is not None else scene.camera
+    if obj is None:
+        return None, "No camera to drive"
+    if obj.type != 'CAMERA':
+        return None, f'"{obj.name}" is not a camera'
+    if not _in_scene(scene, obj):
+        return None, f'"{obj.name}" is in another scene' if obj.users_scene else f'"{obj.name}" was deleted'
+    return obj, None
+
+
+def target_camera(scene):
+    """The camera to drive, or None (see `camera_status`)."""
+    return camera_status(scene)[0]
+
+
+def find_origin(camera):
+    """The rig empty: `camera`'s marked parent, else `VCam_Origin`, else a marked (renamed) rig."""
+    import bpy
+
+    parent = camera.parent if camera is not None else None
+    if parent is not None and parent.get(RIG_KEY):
+        return parent
+    origin = bpy.data.objects.get(ORIGIN_NAME)
+    if origin is None:  # only until a camera is parented: then the first branch finds it
+        origin = next((o for o in bpy.data.objects if o.get(RIG_KEY)), None)
+    return origin
 
 
 def ensure_rig(scene, camera):
-    """Finds (or creates, at the camera's position) `VCam_Origin` and parents the camera to it."""
+    """Finds (or creates, at the camera's position) the rig empty and parents the camera to it."""
     import bpy
     from mathutils import Matrix
 
-    origin = bpy.data.objects.get(ORIGIN_NAME)
+    origin = find_origin(camera)
     if origin is None:
         origin = bpy.data.objects.new(ORIGIN_NAME, None)
         origin.empty_display_type = 'PLAIN_AXES'
         origin.location = camera.matrix_world.translation
-    if scene.objects.get(origin.name) is None:
+    if not origin.get(RIG_KEY):
+        origin[RIG_KEY] = True
+    if not _in_scene(scene, origin):
         scene.collection.objects.link(origin)
     if camera.parent != origin:
         camera.parent = origin

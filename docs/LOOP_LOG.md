@@ -985,3 +985,36 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none.
 - **Next task:** 1.3.4 — robustness: file reload (`load_post`), undo, camera deleted or renamed (FR-BL-007). No second task started.
 - **Owner actions:** push (this commit makes 22 ahead). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.
+
+## 2026-09-25 — Iteration 36 — 1.3.4 (FR-BL-007, NET-004) — done
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 22 ahead of `origin`. The existing Phase 1 owner waiver applies.
+- **API probes (headless Blender 5.2.2, throwaway):**
+  - `bpy.app.handlers.persistent(f)` returns `f` and marks it.
+  - `undo_post`, `redo_post` and `load_post` exist and fire in background mode (undo args are `(scene, None)`; load args are `(filepath, None)`).
+  - Persistent timers and handlers survive `open_mainfile` and `read_homefile`.
+  - After `ed.undo()` an old Python reference raises `ReferenceError: StructRNA of type Object has been removed`.
+  - `object.delete` on a camera that a PointerProperty uses: the object stays in `bpy.data` with 1 user and `users_scene == ()`, and `scene.camera` still names it. `bpy.data.objects.remove` clears the pointer to None.
+  - A renamed object keeps its `session_uid` and the pointer follows it.
+- **Bug found:** before this change, a camera deleted in the UI kept being "driven" as an invisible orphan, and STATUS told the device everything was fine. A renamed `VCam_Origin` made the add-on create a second rig and re-parent the camera to it (the camera jumped).
+- **Code:**
+  - `core/apply.py`: `camera_status(scene)` returns (camera, warning) and requires the camera to be in the scene. A deleted target is not replaced by the scene camera. `target_camera` wraps it. `find_origin(camera)` looks for the camera's parent marked `vcam_origin`, then `VCam_Origin`, then any marked object. `ensure_rig` marks the rig.
+  - `core/session.py`: persistent `load_post` (re-apply, the new file's smoothing, re-advertise the file name) and `undo_post`/`redo_post` (re-apply) handlers, added in `register` and removed in `unregister`. `clear_origin` uses `find_origin`.
+  - `ui/panels.py`: the camera warning under the camera picker; the origin row uses `find_origin`. `operators/session.py`: the Clear Origin poll uses `find_origin`.
+- **Files changed:** `BlenderAddOn/core/{apply.py,session.py}`, `BlenderAddOn/operators/session.py`, `BlenderAddOn/ui/panels.py`, `tests/blender/addon_robust.py` (new), `IMPLEMENTATION_PROGRESS.md` (FR-BL-007 Done, NET-004 reload evidence, NFR-QA-001, re-anchored `apply.py`/`session.py` line numbers), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `tests/blender/addon_robust.py` (headless, fake iPhone at 60 Hz, 30 s linger): `VCAM_ADDON_ROBUST_OK final_seq=390 rename=cam+rig undo=reapplied reload=same_session deleted=no_camera empty_file=no_camera`, exit 0. The log has no handler tracebacks.
+  - **Mutation check** (restored and `cmp`-verified):
+    - no re-apply on load: `reload: pose not re-applied`;
+    - undo handler does nothing: `undo: pose not re-applied`;
+    - `_in_scene` always true: the deleted-camera assertion failed;
+    - handlers not persistent: `the reloaded file's smoothing setting was not applied`;
+    - rig found by name only (no marker lookup): `a second rig was created`.
+    - Removing only the parent branch of `find_origin` survives, because the marker scan finds the rig. The branch is kept as the O(1) path, so the scan isn't run every tick.
+  - **Incident:** my first mutation batch ran 5 mutations in parallel on shared files and a shared backup file. That emptied `core/apply.py` and `core/session.py`, and all 5 results were invalid. I restored both from `HEAD`, re-applied the edits, snapshotted them, and re-ran the mutations one at a time. The results above come from that sequential run.
+  - **GUI visual check** (Blender 5.2.2 with its window; the panel was moved to the Item tab by the throwaway script, since `region.active_panel_category` is read-only; the file was opened from the command line, so there was no splash): after deleting the target camera, the panel shows `⚠ "Camera" was deleted` under the camera picker. An earlier wording was cut off in the middle by the sidebar width, so the messages were shortened.
+  - After the final edit: Blender `smoke_native`, `session_native`, `addon_session`, `addon_apply` and `addon_panel` all pass (`VCAM_ADDON_PANEL_OK latency_ms=1.24 …`). `pytest BlenderAddOn/tests`: 19 passed. `gen_testdata.py --check`: `testdata/ up to date (21 files)`. In `native/`: `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean; `cargo test`: 60 passed, 0 failed (no Rust changes). `xcodebuild test`: `Executed 11 tests, with 0 failures`, `** TEST SUCCEEDED **`.
+- **Not verified:** Windows/Linux; interactive Ctrl+Z in the GUI (background `ed.undo` exercises the same memfile undo and `undo_post`); a DNS-SD re-advertise of the new file name as seen by a browser (the call is made; loopback tests don't browse).
+- **Blocked:** none.
+- **Next task:** 1.3.5 — headless integration test with the fake iPhone that asserts `matrix_world` for each scripted keypose and runs in CI on 3 OSes (XP-002). No second task started.
+- **Owner actions:** push (this commit makes 23 ahead). Still pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.

@@ -7,6 +7,10 @@ listen only while a session is active), never when the add-on is enabled, and th
 touches `bpy` only on the main thread, from operators and a `bpy.app.timers` poll, which also
 applies the newest pose to the target camera (`core/apply.py`).
 
+File reload, undo and redo (FR-BL-007, NET-004): the session and its timer are persistent, so
+they survive `load_post`; nothing here holds `bpy` data across ticks (reload and undo free it),
+and after either the current pose is re-applied to whatever camera the restored file names.
+
 `bpy` and `vcam_native` are imported lazily so the pure helpers can be tested outside Blender.
 """
 
@@ -17,7 +21,7 @@ import socket
 import time
 from dataclasses import dataclass
 
-from .apply import ORIGIN_NAME, Applier, clear_zero
+from .apply import Applier, clear_zero, find_origin, target_camera
 from .status import pose_latency_ms
 
 HOST_ID_FILE = "host_id"
@@ -158,7 +162,7 @@ def clear_origin() -> None:
     """Drop the stored zero, so the rig follows the device's own world origin again."""
     import bpy
 
-    origin = bpy.data.objects.get(ORIGIN_NAME)
+    origin = find_origin(target_camera(bpy.context.scene))
     if origin is not None:
         clear_zero(origin)
     _applier.reapply()
@@ -221,12 +225,51 @@ def _poll() -> float | None:
     return POLL_INTERVAL
 
 
+def _on_load_post(*_args) -> None:
+    """A new file keeps the running session: take its smoothing and name, re-apply the pose."""
+    import bpy
+
+    _applier.reapply()
+    if not running():
+        return
+    props = getattr(bpy.context.scene, "vcam_props", None)
+    try:
+        set_smoothing(bool(props.smoothing) if props is not None else False)
+    except Exception as e:  # noqa: BLE001 - a handler must not break file loading
+        state.last_error = f"smoothing: {e}"
+    try:
+        _session.advertise(socket.gethostname(), bpy.path.basename(bpy.data.filepath))
+    except Exception as e:  # noqa: BLE001 - discovery is a convenience (FR-UX-001)
+        state.last_error = f"DNS-SD: {e}"
+
+
+def _on_undo_redo(*_args) -> None:
+    """Undo restored an older camera transform and zero; show the live pose under that zero."""
+    _applier.reapply()
+
+
+_HANDLERS = (("load_post", _on_load_post), ("undo_post", _on_undo_redo), ("redo_post", _on_undo_redo))
+
+
 def register(package: str) -> None:
     global _package
+    import bpy
+
     _package = package
+    for name, handler in _HANDLERS:
+        bpy.app.handlers.persistent(handler)  # keep it across file loads
+        handlers = getattr(bpy.app.handlers, name)
+        if handler not in handlers:
+            handlers.append(handler)
 
 
 def unregister() -> None:
     global _package
+    import bpy
+
     stop()
+    for name, handler in _HANDLERS:
+        handlers = getattr(bpy.app.handlers, name)
+        if handler in handlers:
+            handlers.remove(handler)
     _package = None

@@ -6,7 +6,7 @@ from __future__ import annotations
 import bpy
 
 from ..core import session
-from ..core.apply import ORIGIN_NAME, ZERO_YAW_KEY
+from ..core.apply import ZERO_YAW_KEY, find_origin, target_camera
 from ..core.status import code_label
 
 
@@ -124,7 +124,7 @@ class VCAM_OT_origin_clear(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        origin = bpy.data.objects.get(ORIGIN_NAME)
+        origin = find_origin(target_camera(context.scene))
         return origin is not None and ZERO_YAW_KEY in origin
 
     def execute(self, context):
