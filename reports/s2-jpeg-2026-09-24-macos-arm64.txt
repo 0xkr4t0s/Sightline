@@ -1,0 +1,46 @@
+# S-2a JPEG encode, 2026-09-24, macOS arm64 (Apple M4 Pro), single thread, 4:2:0, 100 iterations after 5 warm-up
+# frames: Blender 5.2.2 readback via tests/bench_render.py --dump-raw; encoders: turbojpeg 1.5.1 (vendored libjpeg-turbo 3.1.0, static), jpeg-encoder 0.7.1 (scalar on arm64)
+# cmd: cargo run --release -p vcam-video --example s2_jpeg -- <frames>
+S2_HEADER frame,encoder,quality,median_ms,p95_ms,bytes,mbit_s_at_30fps,psnr_db
+S2_FLIP solid_960x540 median_ms=0.045 p95_ms=0.063
+S2_ROW solid_960x540,turbojpeg,70,1.020,1.139,42087,10.1,38.10
+S2_ROW solid_960x540,jpeg-encoder,70,2.901,3.022,42144,10.1,37.91
+S2_ROW solid_960x540,turbojpeg,80,1.051,1.174,52220,12.5,39.19
+S2_ROW solid_960x540,jpeg-encoder,80,2.977,3.098,52293,12.6,38.91
+S2_ROW solid_960x540,turbojpeg,90,1.127,1.281,76252,18.3,41.04
+S2_ROW solid_960x540,jpeg-encoder,90,3.168,3.304,76554,18.4,40.55
+S2_FLIP solid_1280x720 median_ms=0.087 p95_ms=0.097
+S2_ROW solid_1280x720,turbojpeg,70,1.815,1.979,64532,15.5,39.20
+S2_ROW solid_1280x720,jpeg-encoder,70,5.015,5.223,64639,15.5,38.98
+S2_ROW solid_1280x720,turbojpeg,80,1.876,2.054,79952,19.2,40.29
+S2_ROW solid_1280x720,jpeg-encoder,80,5.196,5.380,80104,19.2,40.00
+S2_ROW solid_1280x720,turbojpeg,90,2.004,2.216,116721,28.0,42.10
+S2_ROW solid_1280x720,jpeg-encoder,90,5.497,5.706,117255,28.1,41.64
+S2_FLIP material_960x540 median_ms=0.046 p95_ms=0.051
+S2_ROW material_960x540,turbojpeg,70,0.992,1.085,34333,8.2,40.18
+S2_ROW material_960x540,jpeg-encoder,70,2.750,2.871,34325,8.2,40.16
+S2_ROW material_960x540,turbojpeg,80,1.012,1.140,41929,10.1,41.56
+S2_ROW material_960x540,jpeg-encoder,80,2.836,2.939,41946,10.1,41.54
+S2_ROW material_960x540,turbojpeg,90,1.075,1.245,60644,14.6,44.55
+S2_ROW material_960x540,jpeg-encoder,90,2.992,3.138,60734,14.6,44.50
+S2_FLIP material_1280x720 median_ms=0.086 p95_ms=0.092
+S2_ROW material_1280x720,turbojpeg,70,1.749,1.868,51288,12.3,41.24
+S2_ROW material_1280x720,jpeg-encoder,70,4.811,4.986,51314,12.3,41.23
+S2_ROW material_1280x720,turbojpeg,80,1.794,1.940,62311,15.0,42.60
+S2_ROW material_1280x720,jpeg-encoder,80,4.911,5.102,62348,15.0,42.58
+S2_ROW material_1280x720,turbojpeg,90,1.918,2.076,90394,21.7,45.46
+S2_ROW material_1280x720,jpeg-encoder,90,5.223,5.390,90547,21.7,45.39
+S2_FLIP rendered_960x540 median_ms=0.043 p95_ms=0.049
+S2_ROW rendered_960x540,turbojpeg,70,0.982,1.076,32605,7.8,42.72
+S2_ROW rendered_960x540,jpeg-encoder,70,2.737,2.843,32402,7.8,42.70
+S2_ROW rendered_960x540,turbojpeg,80,1.020,1.099,39137,9.4,44.05
+S2_ROW rendered_960x540,jpeg-encoder,80,2.788,2.900,39025,9.4,44.03
+S2_ROW rendered_960x540,turbojpeg,90,1.070,1.162,55152,13.2,46.77
+S2_ROW rendered_960x540,jpeg-encoder,90,2.919,3.044,55158,13.2,46.76
+S2_FLIP rendered_1280x720 median_ms=0.084 p95_ms=0.092
+S2_ROW rendered_1280x720,turbojpeg,70,1.739,1.826,49554,11.9,43.64
+S2_ROW rendered_1280x720,jpeg-encoder,70,4.783,4.975,49220,11.8,43.61
+S2_ROW rendered_1280x720,turbojpeg,80,1.721,1.874,59192,14.2,44.97
+S2_ROW rendered_1280x720,jpeg-encoder,80,4.872,5.040,58994,14.2,44.95
+S2_ROW rendered_1280x720,turbojpeg,90,1.878,2.007,83186,20.0,47.59
+S2_ROW rendered_1280x720,jpeg-encoder,90,5.091,5.289,83212,20.0,47.58

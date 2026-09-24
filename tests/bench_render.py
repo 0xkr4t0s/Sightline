@@ -47,6 +47,7 @@ def parse_args():
     p.add_argument("--warmup", type=int, default=5)
     p.add_argument("--json", help="write results here")
     p.add_argument("--save-dir", help="save one PNG per mode at 540p for visual checks")
+    p.add_argument("--dump-raw", help="write each cell's last frame as raw RGBA (bottom-up rows) for S-2")
     p.add_argument("--interval", type=float, help="seconds between frames (default: 0 headless, 1/30 UI)")
     return p.parse_args(argv)
 
@@ -235,6 +236,8 @@ def run_all(args, ctx, info):
             yield from bench(mode, w, h, args, ctx, out)
             results.append(out["result"])
             print("S1_RESULT", json.dumps(out["result"]), flush=True)
+            if args.dump_raw:
+                out["pixels"].tofile(f"{args.dump_raw}/{mode.lower()}_{w}x{h}.rgba")
             if args.save_dir and label == "540p":
                 save_png(out["pixels"], w, h, f"{args.save_dir}/s1_{mode.lower()}_{label}.png")
     if args.json:

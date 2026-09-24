@@ -463,6 +463,34 @@ Updated proposal: default 960×540, Solid, 30 fps, pipelined, with adaptive fps 
 
 Still open for S-1: Windows and Linux on mid-range GPUs.
 
+### 13.2 S-2 results — 2026-09-24 (S-2a: JPEG on macOS arm64; H.264 pending)
+
+Setup: Apple M4 Pro, one thread, 4:2:0, 100 timed encodes after 5 warm-up. Input: real Blender 5.2.2 readbacks from the S-1 scene (`tests/bench_render.py --dump-raw`). Encoders: `turbojpeg` 1.5.1 (vendored libjpeg-turbo 3.1.0, NEON, linked statically; `otool -L` shows no JPEG dylib) and `jpeg-encoder` 0.7.1 (pure Rust; its `simd` feature is x86-only, so scalar here). Every output was decoded with libjpeg-turbo, size-checked, and PSNR-scored. Script: `native/vcam-video/examples/s2_jpeg.rs`. Raw data: `reports/s2-jpeg-2026-09-24-macos-arm64.txt`.
+
+Encode time in ms (median/p95), size, and bitrate at 30 fps, quality 80:
+
+| Frame | turbojpeg | jpeg-encoder | Size | Mbit/s @ 30 fps | PSNR (dB) |
+|---|---|---|---|---|---|
+| Solid 960×540 | 1.05/1.17 | 2.98/3.10 | 52 KB | 12.5 | 39.2 |
+| Material 960×540 | 1.01/1.14 | 2.84/2.94 | 42 KB | 10.1 | 41.6 |
+| EEVEE 960×540 | 1.02/1.10 | 2.79/2.90 | 39 KB | 9.4 | 44.1 |
+| Solid 1280×720 | 1.88/2.05 | 5.20/5.38 | 80 KB | 19.2 | 40.3 |
+| Material 1280×720 | 1.79/1.94 | 4.91/5.10 | 62 KB | 15.0 | 42.6 |
+| EEVEE 1280×720 | 1.72/1.87 | 4.87/5.04 | 59 KB | 14.2 | 45.0 |
+
+Quality 70 → 90 changes Solid 540p from 10.1 to 18.3 Mbit/s and time by < 0.1 ms. Both encoders produce the same size and PSNR to within 1%. The vertical flip of Blender's bottom-up rows costs 0.05 ms at 540p (0.09 at 720p) and folds into the single copy out of Blender's buffer (§13.1).
+
+Findings:
+
+- **Stage A JPEG fits NET-VID-001 easily.** 960×540 at quality 80 is 9–13 Mbit/s (target 15–25), and quality 90 still fits at 13–18 Mbit/s. Encoding is about 1 ms on a worker thread, so the encoder is not the bottleneck: render/readback is (§13.1). Caveat: the test scene is untextured with a flat background; textured scenes will be larger, and NET-VID-005 adaptive quality covers that.
+- **Recommendation: `turbojpeg` (vendored, static)** is 2.8× faster than `jpeg-encoder` at identical output. Costs:
+  - it needs `cmake` at build time;
+  - on x86-64 (Windows, Linux CI) it needs `nasm`, because the crate's default `require-simd` feature fails the build without SIMD. CI must install `nasm` in the manylinux container and on Windows before wheels build.
+  - Licences: `turbojpeg`/`turbojpeg-sys` are Unlicense OR MIT; libjpeg-turbo is IJG + BSD-3-Clause + zlib. All are GPL-compatible, but the IJG/BSD notices must ship with the extension.
+- **Fallback:** `jpeg-encoder` ((MIT OR Apache-2.0) AND IJG) is 3 ms at 540p, which is still acceptable, if the C build proves painful on a platform.
+
+Still open for S-2: JPEG on Windows and Linux (x86-64, with `nasm`), and the H.264 prototypes (VideoToolbox, Media Foundation, OpenH264) with the licensing check.
+
 ---
 
 ## Appendix A — What changed

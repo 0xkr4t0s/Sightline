@@ -9,4 +9,6 @@ publish.workspace = true
 workspace = true
 
 [dev-dependencies]
+jpeg-encoder = "=0.7.1"
+turbojpeg = "=1.5.1"
 vcam-protocol.workspace = true
