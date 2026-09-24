@@ -844,3 +844,32 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none.
 - **Next task:** 1.2.7 — `vcam-fake-iphone` binary: pairs, then streams scripted motion (pan, tilt, dolly, crane) from `testdata/`. No second task started.
 - **Owner actions:** push (this commit makes 17 ahead). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.
+
+## 2026-09-25 — Iteration 31 — 1.2.7 (SRS §11, XP-002, NFR-QA-003) — done
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 17 ahead of `origin`; no new CI run. Existing Phase 1 owner waiver applies.
+- **Scope:** the `vcam-fake-iphone` binary plus the scripted motion in `testdata/`. Not in: the Blender `matrix_world` CI test (1.3.5), CONTROL_STATE changes over time (scale/locks/origin, later with FR-CTL), and impairment/soak (NFR-REL-003).
+- **Motion vectors** (`tools/gen_testdata.py` `build_motion`): canonical axes at 60 Hz, 390 frames, written as `testdata/motion/scripted.json` (frames plus keyposes with `matrix_world`, for Python/Blender) and `scripted.bin` (the same f32 frames in a small LE format, so the Rust binary needs no JSON dependency).
+  - **Moves:** a level start (looking +Y), then pan 90° left, tilt 30° down, dolly 2 m, crane 1.5 m. Each is a 1 s move followed by a 0.5 s hold; each keypose is the last hold frame.
+  - **Self-checks:** the look direction at start/pan/tilt and the final position. `--check` now also covers `testdata/motion/`.
+- **Binary** (`native/vcam-fake-iphone/src/main.rs`), with args `--host --state [--code] --motion [--rate] [--linger] [--name]`:
+  - **Pairing:** with `--code`, a new random device_id, SRP pairing (CSPRNG `a` and nonces), and `device_id‖PK` saved atomically (0600). Without a code, the stored pairing is loaded.
+  - **Session:** verifies the host proof, then opens a device `Endpoint`.
+  - **Streaming:** frames at the rate (the default is the file's), seq from 1, and `capture_time_ns` from its own monotonic clock at +1000 s. It sends a complete CONTROL_STATE at 2 Hz, answers CLOCK with t2 at receipt and t3 at send, and records the newest STATUS.
+  - **Output:** `FAKE_IPHONE_PAIRED` / `FAKE_IPHONE_SESSION` / `FAKE_IPHONE_DONE ...` on stdout; errors go to stderr with exit 1.
+- **Dependencies:** `getrandom = "=0.4.3"`, the same pinned crate `vcam-net` already uses, so nothing new enters the lockfile. `vcam-net` moved to dev-dependencies (tests only).
+- **Files changed:** `tools/gen_testdata.py`, `testdata/motion/scripted.{json,bin}` (new), `native/vcam-fake-iphone/{Cargo.toml,src/main.rs,tests/fake_iphone.rs (new)}`, `native/Cargo.lock`, `IMPLEMENTATION_PROGRESS.md` (XP-002, NFR-QA-003), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `cargo fmt --check` OK; `cargo clippy --all-targets -D warnings` clean; `cargo test`: 59 passed, 0 failed. New tests:
+    - a motion-file parser unit test (390 frames, last position, truncated/magic/count rejected);
+    - `pairs_streams_the_script_answers_clock_and_reconnects_without_a_code`: Paired, SessionStarted, SessionEnded; last pose seq 390 at [-2, 0, 3.1]; full CONTROL_STATE; ≥ 2 clock replies; offset > 900 s; STATUS applied_pose_seq 42 / ack 1 / camera Cam seen by the device; the stored pairing reconnects with no Paired event;
+    - `wrong_code_fails_cleanly_and_stores_nothing`.
+  - The first run failed one assertion: SessionEnded arrives just after the process exits, and the test stopped draining events too early. Fixed in the test by waiting up to 2 s. Then 5/5 repeated runs passed.
+  - **Mutation check** (restored and `cmp`-verified): no CLOCK replies, pairing not stored, and no CONTROL_STATE were all caught. The last needed a second attempt, because my first `sed` didn't match the rustfmt-wrapped line.
+  - **One-off Blender end to end** (throwaway script, deleted): headless Blender 5.2.2 ran `vcam_native.Session` (smoothing on) against the real binary: `VCAM_E2E_OK events=['paired', 'session_started'] seq=390 clock_offset_s=999.595 jitter_us=16 poses_applied=390`, with all `latest_pose()` keys, smoothed values settled on the final hold, and `update_status` reaching the device. This closes the 1.2.5a gap "Python reads with a connected device".
+  - `pytest BlenderAddOn/tests`: 14 passed. `gen_testdata.py --check`: up to date (20 files). Blender: `VCAM_NATIVE_OK 0.1.0`, `VCAM_SESSION_OK ... stop_ms=53`, `VCAM_ADDON_SESSION_OK ... disable_ms=76`, all exit 0. `xcodebuild test`: 11 tests, 0 failures, `** TEST SUCCEEDED **`.
+- **Not verified:** the binary on Windows/Linux (CI runs `cargo test` there once pushed).
+- **Section 1.2 status:** 1.2.1–1.2.7 are done, so section 1.2 is complete.
+- **Blocked:** none.
+- **Next task:** 1.3.1 — replace `core/udp_client.py` + `core/freed_parser.py` with `vcam_native` and delete the FreeD path (PR-FD-001, FR-BL-002). No second task started.
+- **Owner actions:** push (this commit makes 18 ahead). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.

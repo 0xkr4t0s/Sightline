@@ -31,6 +31,10 @@ testdata/vcp/pairing.json    one full SRP-6a pairing (vcp.md §9) with fixed sec
 testdata/vcp/session.json    one session setup (vcp.md §10) from the pairing key above.
 testdata/vcp/srp-rfc5054-appendix-b.json   the RFC 5054 vectors (SHA-1, 1024-bit).
 testdata/coords/arkit_to_canonical.json    DM-004 cases (vcp.md §7).
+testdata/motion/scripted.json   fake-iPhone motion (task 1.2.7): canonical frames at rate_hz and the
+                             named keyposes (frame index, position, orientation, matrix_world).
+testdata/motion/scripted.bin    the same frames for vcam-fake-iphone: "VCMO", u16 version 1,
+                             u16 rate_hz, u32 count, then count x (3 f32 position, 4 f32 x,y,z,w), LE.
 
 Big integers are big-endian hex strings. Floats are JSON numbers; compare with the stated
 tolerance. Quaternions are [x, y, z, w] with w >= 0 (q and -q are the same rotation).
@@ -596,6 +600,73 @@ def rnd(v, nd=9):
     return out
 
 
+def build_motion() -> tuple[dict, bytes]:
+    """Scripted camera moves for vcam-fake-iphone and the headless Blender test (1.2.7/1.3.5).
+
+    Level start (identity looks down -Z; +90 deg about X looks along +Y, up +Z), then pan,
+    tilt, dolly and crane, each a 1 s move followed by a 0.5 s hold. The keypose is the last
+    frame of each hold, so the receiver has settled on it.
+    """
+    rate, move, hold = 60, 60, 30
+    q = qaxis((1, 0, 0), 90)
+    p = (0.0, 0.0, 1.6)
+    frames, keys = [], []
+
+    def emit(pos, rot):
+        rot = qcanon(rot)
+        frames.append((tuple(f32(c) for c in pos), tuple(f32(c) for c in rot)))
+
+    def hold_at(name):
+        for _ in range(hold):
+            emit(p, q)
+        pos, rot = frames[-1]
+        keys.append({"name": name, "frame": len(frames) - 1, "position": list(pos),
+                     "orientation": list(rot), "matrix_world": [rnd(r) for r in qmatrix(rot, pos)]})
+
+    def ramp(fn):
+        for i in range(1, move + 1):
+            emit(*fn(i / move))
+
+    hold_at("start")
+    ramp(lambda t: (p, qmul(qaxis((0, 0, 1), 90 * t), q)))  # pan left 90 deg about world Z
+    q = qmul(qaxis((0, 0, 1), 90), q)
+    hold_at("pan")
+    ramp(lambda t: (p, qmul(q, qaxis((1, 0, 0), -30 * t))))  # tilt down 30 deg about camera X
+    q = qmul(q, qaxis((1, 0, 0), -30))
+    hold_at("tilt")
+    start = p
+    ramp(lambda t: ((start[0] - 2.0 * t, start[1], start[2]), q))  # dolly 2 m along the pan heading
+    p = (start[0] - 2.0, start[1], start[2])
+    hold_at("dolly")
+    start = p
+    ramp(lambda t: ((start[0], start[1], start[2] + 1.5 * t), q))  # crane up 1.5 m
+    p = (start[0], start[1], start[2] + 1.5)
+    hold_at("crane")
+
+    def forward(k):
+        return qrot(k["orientation"], (0, 0, -1))
+
+    by = {k["name"]: k for k in keys}
+    assert all(abs(a - b) < 1e-6 for a, b in zip(forward(by["start"]), (0, 1, 0)))
+    assert all(abs(a - b) < 1e-6 for a, b in zip(forward(by["pan"]), (-1, 0, 0)))
+    c, s30 = math.cos(math.radians(30)), math.sin(math.radians(30))
+    assert all(abs(a - b) < 1e-6 for a, b in zip(forward(by["tilt"]), (-c, 0, -s30)))
+    assert by["crane"]["position"] == [f32(-2.0), 0.0, f32(3.1)], by["crane"]["position"]
+
+    blob = b"VCMO" + struct.pack("<HHI", 1, rate, len(frames))
+    for pos, rot in frames:
+        blob += struct.pack("<7f", *pos, *rot)
+    doc = {
+        "note": "Canonical axes (vcp.md §7). Stream frames in order at rate_hz (seq = index + 1). "
+                "Each keypose is the last frame of a 0.5 s hold; matrix_world is row-major with "
+                "an identity rig (VCam_Origin at the world origin, scale 1).",
+        "rate_hz": rate,
+        "frames": [{"position": list(pos), "orientation": list(rot)} for pos, rot in frames],
+        "keyposes": keys,
+    }
+    return doc, blob
+
+
 def build_coords() -> dict:
     q_c = qaxis((1, 0, 0), 90)
 
@@ -685,6 +756,7 @@ def build_all() -> dict[str, bytes]:
     messages, bins = build_messages()
     self_check_spec(messages)
     pairing, ctx = build_pairing()
+    motion, motion_bin = build_motion()
     files = {
         "vcp/messages.json": dumps(messages).encode(),
         "vcp/receive.json": dumps(build_receive()).encode(),
@@ -694,6 +766,8 @@ def build_all() -> dict[str, bytes]:
         "vcp/session.json": dumps(build_session(ctx)).encode(),
         "vcp/srp-rfc5054-appendix-b.json": dumps(rfc).encode(),
         "coords/arkit_to_canonical.json": dumps(build_coords()).encode(),
+        "motion/scripted.json": dumps(motion).encode(),
+        "motion/scripted.bin": motion_bin,
     }
     files.update({f"vcp/{name}": data for name, data in bins.items()})
     return files
@@ -706,7 +780,7 @@ def main():
     files = build_all()
     if args.check:
         stale = [p for p, data in files.items() if not (OUT / p).exists() or (OUT / p).read_bytes() != data]
-        extra = [str(p.relative_to(OUT)) for d in ("vcp", "coords") for p in (OUT / d).glob("*")
+        extra = [str(p.relative_to(OUT)) for d in ("vcp", "coords", "motion") for p in (OUT / d).glob("*")
                  if str(p.relative_to(OUT)) not in files]
         if stale or extra:
             print(f"testdata/ is out of date. stale={stale} extra={extra}. Run tools/gen_testdata.py")

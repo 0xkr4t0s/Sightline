@@ -9,5 +9,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# Same pinned CSPRNG as vcam-net (SRP secret `a` and HELLO nonces).
+getrandom = "=0.4.3"
 vcam-protocol.workspace = true
+
+[dev-dependencies]
+# The integration tests run the binary against a real host.
 vcam-net.workspace = true
