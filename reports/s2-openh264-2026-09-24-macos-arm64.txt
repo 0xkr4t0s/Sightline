@@ -1,0 +1,24 @@
+# S-2c OpenH264 2.6.0, 2026-09-24, macOS arm64 (Apple M4 Pro). openh264 crate 0.9.8: 'source' = bundled C (no asm on arm64), 'cisco' = Cisco libopenh264-2.6.0-mac-arm64.dylib (sha256 052e98bf..., loaded via from_blob_path; dyld confirmed)
+# RC_BITRATE_MODE, CameraVideoRealTime, GOP 60, skip_frames(false), 30 fps real-time pacing, 150 timed frames after 10 warm-up; input: Blender Solid readbacks shifted 2 px/frame
+# cmd: cargo run --release -p vcam-video --example s2_openh264 -- <frames dir> <cisco dylib>
+S2C_HEADER backend,threads,res,target_mbit,encode_med_ms,encode_p95_ms,encode_max_ms,convert_med_ms,convert_p95_ms,actual_mbit,idr_frames,empty_frames
+S2C_ROW source,1,960x540,3.11,1.51,3.03,4.97,0.60,1.73,0.97,3,0
+S2C_STREAM /tmp/s2/oh264_source_960x540.h264
+S2C_ROW source,4,960x540,3.11,1.57,3.85,4.91,0.61,2.21,0.97,3,0
+S2C_ROW cisco,1,960x540,3.11,1.50,3.30,6.59,0.60,1.95,0.97,3,0
+S2C_STREAM /tmp/s2/oh264_cisco_960x540.h264
+S2C_ROW cisco,4,960x540,3.11,2.78,3.85,4.60,1.74,2.07,0.97,3,0
+S2C_ROW source,1,1280x720,5.53,3.26,5.38,9.21,2.80,4.17,1.57,3,0
+S2C_STREAM /tmp/s2/oh264_source_1280x720.h264
+S2C_ROW source,4,1280x720,5.53,3.05,5.58,8.39,2.32,3.66,1.57,3,0
+S2C_ROW cisco,1,1280x720,5.53,3.05,5.44,8.67,2.29,3.57,1.57,3,0
+S2C_STREAM /tmp/s2/oh264_cisco_1280x720.h264
+S2C_ROW cisco,4,1280x720,5.53,2.88,5.46,7.76,1.37,3.52,1.57,3,0
+S2C_ROW source,1,1920x1080,12.44,5.91,7.90,16.29,2.75,3.14,3.17,3,0
+S2C_STREAM /tmp/s2/oh264_source_1920x1080.h264
+S2C_ROW source,4,1920x1080,12.44,5.49,7.67,16.03,2.51,3.02,3.17,3,0
+S2C_ROW cisco,1,1920x1080,12.44,5.46,7.67,15.61,2.54,3.16,3.17,3,0
+S2C_STREAM /tmp/s2/oh264_cisco_1920x1080.h264
+S2C_ROW cisco,4,1920x1080,12.44,5.62,7.75,16.83,2.48,2.81,3.17,3,0
+# ffprobe: all 6 streams (source/cisco x 540p/720p/1080p, threads=1) Constrained Baseline, has_b_frames=0, 160 frames (3 I, 157 P); ffmpeg -xerror decode OK
+# re-run of the first two rows under DYLD_PRINT_LIBRARIES: source,1,960x540 encode med 3.24 ms; source,4 2.99 ms (run-to-run variance)

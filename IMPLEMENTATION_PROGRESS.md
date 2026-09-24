@@ -34,6 +34,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | S-1 `tests/bench_render.py` (macOS arm64) | Pass, 9/9 cells in each of 3 runs | Runs: headless as fast as possible (S-1a); headless at 30 fps and in the GUI with timers (S-1b). Numbers in SRS §13.1, JSON in `reports/s1-render-2026-09-24-macos-arm64*.json`. |
 | S-2a `vcam-video` example `s2_jpeg` (macOS arm64) | Pass, 6 frames × 3 qualities × 2 encoders | Every JPEG decoded at the right size; PSNR 37.9–47.6 dB. Numbers in SRS §13.2 and `reports/s2-jpeg-2026-09-24-macos-arm64.txt`. |
 | S-2b `vcam-video` example `s2_videotoolbox` (macOS arm64) | Pass, 3 res × 2 configs (RGBA input unsupported, reported) | 160/160 frames, 0 dropped; ffmpeg decoded all 3 streams without errors (Main, no B-frames). Numbers in SRS §13.2 and `reports/s2-videotoolbox-2026-09-24-macos-arm64.txt`. |
+| S-2c `vcam-video` example `s2_openh264` (macOS arm64) | Pass, 3 res × 2 builds × 2 thread counts | 160 frames each; ffmpeg decoded all 6 streams without errors (Constrained Baseline, no B-frames). Numbers in SRS §13.2 and `reports/s2-openh264-2026-09-24-macos-arm64.txt`. |
 | VCamIOS `FreeDPacketEncoderTests` (iPhone 17 Pro sim, iOS 27.0) | 5/5 pass | After the checksum overflow fix (root commit `5ba2672`, was `ed349be` in the old `VCamIOS` repo). Will be replaced with VCP tests. |
 
 ---
@@ -108,7 +109,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | NET-001 | Not started | |
 | NET-002 | Partial | UDP, newest sample wins (Python client). |
 | NET-003/004 | Not started | |
-| NET-VID-* | Not started | S-2a/b (SRS §13.2): Stage A JPEG 540p q80 encodes in about 1 ms at 9–13 Mbit/s @ 30 fps. Stage B VideoToolbox H.264 720p low-latency is 3.6 ms median / 5.6 ms p95 submit-to-output (macOS). Production encoder code comes in Phases 2–3. |
+| NET-VID-* | Not started | S-2a/b/c (SRS §13.2), macOS: Stage A JPEG 540p q80 is about 1 ms at 9–13 Mbit/s @ 30 fps. Stage B VideoToolbox H.264 720p is 3.6/5.6 ms (med/p95). The OpenH264 fallback at 720p is about 3/5.5 ms plus 2–3 ms conversion. The software-fallback licensing is an open owner decision. Production encoder code comes in Phases 2–3. |
 | LNS-* | Not started | |
 | NFR-LAT-*, NFR-PERF-* | Not started | No latency measurements. Render/readback costs are measured by S-1 (SRS §13.1). |
 | NFR-REL-*, NFR-SEC-* | Not started | Any host can send poses; no pairing. |

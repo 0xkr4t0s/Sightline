@@ -463,7 +463,7 @@ Updated proposal: default 960×540, Solid, 30 fps, pipelined, with adaptive fps 
 
 Still open for S-1: Windows and Linux on mid-range GPUs.
 
-### 13.2 S-2 results — 2026-09-24 (JPEG and VideoToolbox H.264 on macOS arm64; OpenH264 and Windows/Linux pending)
+### 13.2 S-2 results — 2026-09-24 (JPEG, VideoToolbox, OpenH264 on macOS arm64; Windows/Linux pending)
 
 Setup: Apple M4 Pro, one thread, 4:2:0, 100 timed encodes after 5 warm-up. Input: real Blender 5.2.2 readbacks from the S-1 scene (`tests/bench_render.py --dump-raw`). Encoders: `turbojpeg` 1.5.1 (vendored libjpeg-turbo 3.1.0, NEON, linked statically; `otool -L` shows no JPEG dylib) and `jpeg-encoder` 0.7.1 (pure Rust; its `simd` feature is x86-only, so scalar here). Every output was decoded with libjpeg-turbo, size-checked, and PSNR-scored. Script: `native/vcam-video/examples/s2_jpeg.rs`. Raw data: `reports/s2-jpeg-2026-09-24-macos-arm64.txt`.
 
@@ -510,7 +510,34 @@ Findings:
 - **RGBA input is not supported:** the session's pixel-buffer pool fails with `kCVReturnInvalidPixelFormat` (-6680) for `kCVPixelFormatType_32RGBA`, at every resolution. Blender's readback is RGBA (§13.1), so the one copy out of Blender must swizzle to BGRA. With the flip that costs 0.3 ms at 540p and 0.5 ms at 720p (scalar Rust). It runs on the encoder thread, not the main thread.
 - **Not measured:** bitrate accuracy on real content. The synthetic input (one image translating) is almost free to predict, so actual bitrates came out far below target (0.45–2.3 Mbit/s). Rate-control behaviour and the latency effect of large residuals need live Blender content; do that in task 3.4.
 
-Still open for S-2: OpenH264 fallback timing and the H.264 licensing write-up (S-2c); JPEG on Windows and Linux and Media Foundation on Windows (S-2d/e, owner machines).
+#### S-2c — OpenH264 software fallback, macOS (2026-09-24)
+
+Setup: same frames, pacing (30 fps real time), motion (2 px per frame), bitrate target, and GOP 60 as S-2b. `openh264` crate 0.9.8 (OpenH264 2.6.0), `RC_BITRATE_MODE`, `CameraVideoRealTime`, frame skipping off, threads 1 and 4. Two builds:
+
+- **source:** the crate's bundled C, compiled into our binary. On arm64 the crate builds no assembly.
+- **cisco:** Cisco's `libopenh264-2.6.0-mac-arm64.dylib`, SHA-256 checked by the crate; dyld confirmed it was loaded.
+
+The encoder is synchronous, so latency = the `encode` call. Convert = flip + shift + RGBA→YUV 4:2:0 (the crate's converter). Script: `native/vcam-video/examples/s2_openh264.rs`. Raw data: `reports/s2-openh264-2026-09-24-macos-arm64.txt`.
+
+| Build, threads | 960×540 encode med/p95 (ms) | 1280×720 | 1920×1080 | Convert med 540p/720p/1080p (ms) |
+|---|---|---|---|---|
+| source, 1 | 1.51/3.03 | 3.26/5.38 | 5.91/7.90 | 0.60/2.80/2.75 |
+| source, 4 | 1.57/3.85 | 3.05/5.58 | 5.49/7.67 | 0.61/2.32/2.51 |
+| cisco, 1 | 1.50/3.30 | 3.05/5.44 | 5.46/7.67 | 0.60/2.29/2.54 |
+| cisco, 4 | 2.78/3.85 | 2.88/5.46 | 5.62/7.75 | 1.74/1.37/2.48 |
+
+All 12 runs: 160 frames, 3 IDR, no empty frames. All 6 dumped streams (threads 1) decoded with ffmpeg without errors: Constrained Baseline, `has_b_frames=0`, 3 I + 157 P, image upright with correct colours. A repeat of the first two rows measured 540p source encode at 3.24 / 2.99 ms median, so run-to-run variance is about 2× at 540p.
+
+Findings:
+
+- **OpenH264 is fast enough as a fallback on this CPU:** 720p in about 3 ms median / 5.5 ms p95, 1080p in about 5.5 / 7.7 ms, plus 2–3 ms for colour conversion, all on a worker thread. The caveat from S-2b applies more strongly here: the translating test image is cheap to encode, so real Blender content will cost more. Mid-range x86 CPUs are untested (S-2d/e).
+- **Source vs. Cisco binary performs the same here, and 4 threads don't help.** Threading in OpenH264 needs multiple slices, which this config doesn't set. So the choice between them is a licensing choice, not a performance one.
+- **Bitrate isn't enforced without frame skipping.** OpenH264 logs "bitrate can't be controlled … without enabling skip frame". Actual bitrates came out at 0.97–3.17 Mbit/s against 3.1–12.4 targets, again flattered by easy content. Real rate control needs `skip_frames(true)`, which drops frames under load; decide that in task 3.4.
+- **Output profile is Constrained Baseline.** That meets NET-VID-002 ("Baseline/Main").
+
+**Licensing (not decided; options in `docs/LOOP_LOG.md` Iteration 12).** Cisco pays the MPEG LA H.264 royalties only for its own binary, and only if that binary is downloaded separately to the end user's device (not bundled), the user can enable and disable it, the UI shows "OpenH264 Video Codec provided by Cisco Systems, Inc.", and the licence text is reproduced (openh264.org FAQ and BINARY_LICENSE.txt v1.0). The patent grant also covers only personal use or uses that don't earn remuneration, while VCam users may be paid productions. Compiling the source build into the wheel gives no patent coverage at all.
+
+Still open for S-2: JPEG on Windows and Linux and Media Foundation on Windows (S-2d/e, owner machines). VA-API on Linux is untested (no Linux GPU here). Owner decision on the H.264 software-fallback licensing.
 
 ---
 
