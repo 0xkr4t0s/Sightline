@@ -816,3 +816,31 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none.
 - **Next task:** 1.2.6 — optional One-Euro smoothing in Rust (FR-BL-006). No second task started.
 - **Owner actions:** push (this commit makes 16 ahead; CI will run `session_native.py` and `addon_session.py` on 3 OSes). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.
+
+## 2026-09-25 — Iteration 30 — 1.2.6 (FR-BL-006) — done
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 16 ahead of `origin`; no new CI run. Existing Phase 1 owner waiver applies.
+- **Scope:** native One-Euro smoothing with a per-session toggle, keeping raw data (FR-BL-006, SHOULD). Not in: N-panel UI (1.3.3), applying poses (1.3.2), and device tuning of the defaults (needs real ARKit data). No new dependencies.
+- **Design:** `native/vcam-net/src/smooth.rs` (new). One-Euro (Casiez et al., CHI 2012): `alpha = 1/(1 + tau/dt)`, `tau = 1/(2π·cutoff)`, `cutoff = min_cutoff + beta·|filtered speed|`.
+  - **Position:** 3 scalar channels.
+  - **Orientation:** `q` is flipped into the last output's hemisphere, speed is angle/dt, and the output is slerped by alpha.
+  - **Timing:** dt comes from `capture_time_ns` (device clock), not arrival time. A restart at the raw sample happens on dt > 0.5 s, a non-increasing capture time, or a `tracking_state` change.
+  - **Defaults (untuned):** position min_cutoff 1 Hz, beta 2 per m/s; rotation 1 Hz, 0.5 per rad/s; d_cutoff 1 Hz.
+  - **Receiver:** `UdpReceiver::set_smoothing(Option<Smoothing>)` validates the parameters (`InvalidInput` becomes `ValueError` in Python). A new `State::reset()` keeps the setting through expiry/revocation/replacement/stop and clears the filter; set_session copies the setting.
+  - **Raw kept:** `PoseSample` gains `smoothed` (equal to `pose` when off); `pose` stays raw.
+  - **Python:** `Session.set_smoothing(enabled, position_min_cutoff=1.0, position_beta=2.0, rotation_min_cutoff=1.0, rotation_beta=0.5, d_cutoff=1.0)`, `smoothing()`, and `latest_pose()` gains `smoothed_position`/`smoothed_orientation`.
+- **Files changed:** `native/vcam-net/src/{smooth.rs (new),udp.rs,control.rs,lib.rs}`, `native/vcam-net/tests/udp_receiver.rs`, `native/vcam-py/src/lib.rs`, `tests/blender/session_native.py`, `IMPLEMENTATION_PROGRESS.md` (FR-BL-006 split from FR-BL-007), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `cargo fmt --check` OK; `cargo clippy --all-targets -D warnings` clean; `cargo test`: 56 passed, 0 failed (8 new filter unit tests, 1 new loopback test).
+  - **Mutation check, round 1:** rotation cutoff ignoring speed, position cutoff ignoring speed, and no capture-time-reversal restart were caught. Three survived:
+    - removing the hemisphere flip (the test used exactly −q, which slerp handles by accident);
+    - `reset()` dropping the setting (only `set_session`'s explicit copy was exercised);
+    - re-setting the parameters not restarting the filter.
+  - **Round 2:** I strengthened the tests (−yaw(1.1) after yaw(1.0) must land in [1.0, 1.1); a `clear_session` path; re-set then raw passthrough). All 3 are now caught, and the sources were restored and `cmp`-verified.
+  - `pytest BlenderAddOn/tests`: 14 passed. `gen_testdata.py --check`: up to date (18 files).
+  - Headless Blender 5.2.2 (fresh wheel and install): `VCAM_NATIVE_OK 0.1.0`; `VCAM_SESSION_OK ... stop_ms=50` (now also covers smoothing off by default, the defaults readback, `ValueError` on 0 cutoff and NaN beta keeping the old setting, and turning it off); `VCAM_ADDON_SESSION_OK ... disable_ms=63`. All exit 0.
+  - `xcodebuild test`: 11 tests, 0 failures, `** TEST SUCCEEDED **`.
+- **Not verified:** the filter on real ARKit motion; the default parameters are unverified starting points. Smoothed output through Python with a connected device (needs 1.2.7).
+- **Blocked:** none.
+- **Next task:** 1.2.7 — `vcam-fake-iphone` binary: pairs, then streams scripted motion (pan, tilt, dolly, crane) from `testdata/`. No second task started.
+- **Owner actions:** push (this commit makes 17 ahead). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.

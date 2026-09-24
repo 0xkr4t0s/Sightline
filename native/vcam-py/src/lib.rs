@@ -41,7 +41,9 @@ mod vcam_native {
     use pyo3::exceptions::{PyRuntimeError, PyValueError};
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
-    use vcam_net::{ControlEvent, ControlServer, FileStore, HostStatus, ServerConfig};
+    use vcam_net::{
+        ControlEvent, ControlServer, FileStore, HostStatus, OneEuro, ServerConfig, Smoothing,
+    };
 
     use super::guard;
 
@@ -250,7 +252,9 @@ mod vcam_native {
         }
 
         /// The newest pose (highest `seq`) as a dict, or None. Canonical axes (vcp.md §7),
-        /// quaternion `(x, y, z, w)`, `age_s` since it arrived.
+        /// quaternion `(x, y, z, w)`, `age_s` since it arrived. `position`/`orientation` are
+        /// raw (keep them for recording); apply `smoothed_position`/`smoothed_orientation`,
+        /// which equal the raw values while smoothing is off (FR-BL-006).
         fn latest_pose<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
             let Some(sample) = self.with(|s| Ok(s.latest_pose()))? else {
                 return Ok(None);
@@ -261,6 +265,8 @@ mod vcam_native {
             d.set_item("capture_time_ns", p.capture_time_ns)?;
             d.set_item("position", p.position_m)?;
             d.set_item("orientation", p.orientation)?;
+            d.set_item("smoothed_position", sample.smoothed.position_m)?;
+            d.set_item("smoothed_orientation", sample.smoothed.orientation)?;
             d.set_item("tracking_state", p.tracking_state)?;
             d.set_item("flags", p.flags)?;
             d.set_item("age_s", sample.received_at.elapsed().as_secs_f64())?;
@@ -298,6 +304,55 @@ mod vcam_native {
             d.set_item("clock", clock)?;
             d.set_item("clock_rejected", s.clock_rejected)?;
             Ok(d)
+        }
+
+        /// Turns One-Euro pose smoothing on or off (FR-BL-006). It applies to this and later
+        /// device sessions; raw poses are always kept. Cutoffs are in Hz; beta raises the cutoff
+        /// per m/s (position) or rad/s (rotation). Invalid values raise `ValueError`.
+        #[pyo3(signature = (
+            enabled,
+            position_min_cutoff = 1.0,
+            position_beta = 2.0,
+            rotation_min_cutoff = 1.0,
+            rotation_beta = 0.5,
+            d_cutoff = 1.0
+        ))]
+        fn set_smoothing(
+            &self,
+            enabled: bool,
+            position_min_cutoff: f64,
+            position_beta: f64,
+            rotation_min_cutoff: f64,
+            rotation_beta: f64,
+            d_cutoff: f64,
+        ) -> PyResult<()> {
+            let smoothing = enabled.then_some(Smoothing {
+                position: OneEuro {
+                    min_cutoff: position_min_cutoff,
+                    beta: position_beta,
+                    d_cutoff,
+                },
+                rotation: OneEuro {
+                    min_cutoff: rotation_min_cutoff,
+                    beta: rotation_beta,
+                    d_cutoff,
+                },
+            });
+            self.with(|s| s.set_smoothing(smoothing).map_err(io_err))
+        }
+
+        /// The active smoothing parameters as a dict, or None when smoothing is off.
+        fn smoothing<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+            let Some(s) = self.with(|s| Ok(s.smoothing()))? else {
+                return Ok(None);
+            };
+            let d = PyDict::new(py);
+            d.set_item("position_min_cutoff", s.position.min_cutoff)?;
+            d.set_item("position_beta", s.position.beta)?;
+            d.set_item("rotation_min_cutoff", s.rotation.min_cutoff)?;
+            d.set_item("rotation_beta", s.rotation.beta)?;
+            d.set_item("d_cutoff", s.position.d_cutoff)?;
+            Ok(Some(d))
         }
 
         /// The host clock (ns) that `stats()["clock"]["offset_ns"]` relates device capture

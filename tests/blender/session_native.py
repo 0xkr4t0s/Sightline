@@ -70,6 +70,17 @@ with tempfile.TemporaryDirectory() as config_dir:
     assert s.pairing_code() is None
     raises(ValueError, s.update_status, 1, 0, 0, 0, "x" * 64)  # camera name over 63 bytes
 
+    # FR-BL-006: smoothing is optional, off by default, validated, and can be turned off again.
+    assert s.smoothing() is None
+    s.set_smoothing(True)
+    assert s.smoothing() == {"position_min_cutoff": 1.0, "position_beta": 2.0,
+                             "rotation_min_cutoff": 1.0, "rotation_beta": 0.5, "d_cutoff": 1.0}
+    raises(ValueError, s.set_smoothing, True, position_min_cutoff=0.0)
+    raises(ValueError, s.set_smoothing, True, rotation_beta=float("nan"))
+    assert s.smoothing()["position_beta"] == 2.0  # a rejected change keeps the old setting
+    s.set_smoothing(False)
+    assert s.smoothing() is None
+
     # DNS-SD: records are queued; asynchronous errors are pollable, never raised later.
     s.advertise("Blender session test", "")
     s.advertise("Blender session test", "Updated.blend")

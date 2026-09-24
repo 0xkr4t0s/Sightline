@@ -3,12 +3,14 @@
 
 mod control;
 mod discovery;
+mod smooth;
 mod store;
 mod udp;
 
 pub use control::{
     ControlEvent, ControlServer, MemoryStore, PairedDevice, PairingStore, ServerConfig,
 };
+pub use smooth::{OneEuro, Smoothing};
 pub use store::FileStore;
 pub use udp::{ControlSample, DropCounts, HostStatus, PoseSample, ReceiverStats, UdpReceiver};
 

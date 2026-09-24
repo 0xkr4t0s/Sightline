@@ -18,6 +18,8 @@ use vcam_protocol::{
     Message, Pose, SeqFilter, Status,
 };
 
+use crate::smooth::{PoseFilter, Smoothing};
+
 /// How often the thread checks for `stop` while idle (NFR-REL-002: stop within 1 s).
 const POLL: Duration = Duration::from_millis(50);
 /// Window for pose rate and loss.
@@ -66,7 +68,10 @@ impl HostStatus {
 /// The newest accepted pose, when it arrived, and from where.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PoseSample {
+    /// Exactly as received: always kept for recording (FR-BL-006).
     pub pose: Pose,
+    /// What to apply: `pose` after smoothing, or equal to `pose` when smoothing is off.
+    pub smoothed: Pose,
     pub received_at: Instant,
     pub source: SocketAddr,
 }
@@ -165,17 +170,29 @@ struct State {
     control: Option<ControlSample>,
     pose_filter: SeqFilter,
     control_filter: SeqFilter,
+    /// Per-receiver setting; survives session changes (see `reset`).
+    smoothing: Option<Smoothing>,
+    /// Per-session filter state.
+    pose_smoother: PoseFilter,
     /// (arrival, seq) of accepted poses within `WINDOW`.
     window: VecDeque<(Instant, u32)>,
     stats: ReceiverStats,
 }
 
 impl State {
+    /// Clears everything session-related but keeps the smoothing setting.
+    fn reset(&mut self) {
+        *self = Self {
+            smoothing: self.smoothing,
+            ..Self::default()
+        };
+    }
+
     fn expire(&mut self, now: Instant) {
         if self.active.as_ref().is_some_and(|s| {
             now.saturating_duration_since(s.last_received.unwrap_or(s.started_at)) >= IDLE_TIMEOUT
         }) {
-            *self = Self::default();
+            self.reset();
         }
     }
 
@@ -197,8 +214,13 @@ impl State {
         match msg {
             Message::Pose(pose) => {
                 if self.pose_filter.accept(pose.seq) {
+                    let smoothed = match &self.smoothing {
+                        Some(params) => self.pose_smoother.apply(&pose, params),
+                        None => pose,
+                    };
                     self.pose = Some(PoseSample {
                         pose,
+                        smoothed,
                         received_at: now,
                         source: from,
                     });
@@ -242,7 +264,7 @@ impl State {
             if let Message::Status(status) = &mut active.status {
                 let Some(next) = status.status_seq.checked_add(1) else {
                     // Never wrap to a sequence the device would discard as stale.
-                    *self = Self::default();
+                    self.reset();
                     return;
                 };
                 status.status_seq = next;
@@ -366,6 +388,7 @@ impl UdpReceiver {
                 last_clock: None,
                 clock: ClockEstimator::default(),
             }),
+            smoothing: state.smoothing,
             ..State::default()
         };
         Ok(())
@@ -379,7 +402,7 @@ impl UdpReceiver {
             .as_ref()
             .is_some_and(|s| s.endpoint.session_id() == session_id)
         {
-            *state = State::default();
+            state.reset();
         }
     }
 
@@ -424,6 +447,24 @@ impl UdpReceiver {
         Ok(())
     }
 
+    /// Turns pose smoothing on (`Some`) or off (`None`) for this and later sessions
+    /// (FR-BL-006). Raw poses are always kept in `PoseSample::pose`. Changing it restarts the
+    /// filter at the next pose. Invalid parameters are `InvalidInput`.
+    pub fn set_smoothing(&self, smoothing: Option<Smoothing>) -> io::Result<()> {
+        if let Some(s) = &smoothing {
+            s.validate()?;
+        }
+        let mut state = lock(&self.state);
+        state.smoothing = smoothing;
+        state.pose_smoother = PoseFilter::default();
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn smoothing(&self) -> Option<Smoothing> {
+        lock(&self.state).smoothing
+    }
+
     #[must_use]
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
@@ -461,7 +502,7 @@ impl UdpReceiver {
             // recover here and the socket is closed either way.
             let _ = thread.join();
         }
-        *lock(&self.state) = State::default();
+        lock(&self.state).reset();
     }
 }
 

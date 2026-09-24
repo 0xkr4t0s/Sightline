@@ -4,7 +4,7 @@
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
-use vcam_net::{HostStatus, UdpReceiver};
+use vcam_net::{HostStatus, OneEuro, Smoothing, UdpReceiver};
 use vcam_protocol::{Clock, ControlState, Endpoint, Message, Pose, Role, Status};
 
 const SID: u32 = 0x1234_ABCD;
@@ -151,6 +151,76 @@ fn reply_address_follows_the_latest_authenticated_source() {
         rx.stats().source == Some(b.local_addr().unwrap())
     });
     assert_eq!(rx.latest_pose().unwrap().source, b.local_addr().unwrap());
+}
+
+/// A pose at 60 Hz capture time `seq` with x position `x`.
+fn pose_at(seq: u32, x: f32) -> Message {
+    Message::Pose(Pose {
+        seq,
+        capture_time_ns: 1_000_000_000 + u64::from(seq) * 16_666_667,
+        position_m: [x, 0.0, 1.5],
+        orientation: [0.0, 0.0, 0.0, 1.0],
+        tracking_state: Pose::TRACKING_NORMAL,
+        flags: 0,
+    })
+}
+
+#[test]
+fn smoothing_is_optional_keeps_raw_and_survives_session_changes() {
+    let rx = start();
+    let tx = sender();
+    let send = |seq: u32, x: f32| {
+        tx.send_to(&datagram(&pose_at(seq, x)), rx.local_addr())
+            .unwrap();
+        wait_until("pose", || {
+            rx.latest_pose().is_some_and(|p| p.pose.seq == seq)
+        });
+        rx.latest_pose().unwrap()
+    };
+    // Off by default: what to apply is exactly what arrived.
+    assert_eq!(rx.smoothing(), None);
+    let p = send(1, 0.0);
+    assert_eq!(p.smoothed, p.pose);
+    let p = send(2, 1.0);
+    assert_eq!(p.smoothed, p.pose);
+
+    rx.set_smoothing(Some(Smoothing::default())).unwrap();
+    let first = send(3, 1.0); // the filter restarts at the raw sample
+    assert_eq!(first.smoothed, first.pose);
+    let p = send(4, 2.0);
+    assert_eq!(p.pose.position_m[0], 2.0, "raw is kept for recording");
+    let x = p.smoothed.position_m[0];
+    assert!(1.0 < x && x < 2.0, "smoothed toward the new sample: {x}");
+    // Re-setting the parameters restarts the filter at the next pose.
+    rx.set_smoothing(Some(Smoothing::default())).unwrap();
+    let p = send(5, 3.0);
+    assert_eq!(p.smoothed, p.pose);
+
+    // Revocation and a new session keep the setting but not the filter state.
+    rx.clear_session(SID);
+    assert_eq!(rx.smoothing(), Some(Smoothing::default()));
+    rx.set_session(host()).unwrap();
+    assert_eq!(rx.smoothing(), Some(Smoothing::default()));
+    let p = send(1, 7.0);
+    assert_eq!(p.smoothed, p.pose);
+    let p = send(2, 8.0);
+    assert!(p.smoothed.position_m[0] < 8.0);
+
+    let mut bad = Smoothing::default();
+    bad.position = OneEuro {
+        min_cutoff: -1.0,
+        ..bad.position
+    };
+    let err = rx.set_smoothing(Some(bad)).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        rx.smoothing(),
+        Some(Smoothing::default()),
+        "rejected change keeps the old one"
+    );
+    rx.set_smoothing(None).unwrap();
+    let p = send(3, 9.0);
+    assert_eq!(p.smoothed, p.pose);
 }
 
 #[test]

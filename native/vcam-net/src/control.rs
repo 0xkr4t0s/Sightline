@@ -248,6 +248,16 @@ impl ControlServer {
         self.shared.udp().host_clock_ns()
     }
 
+    /// Pose smoothing on/off for this and later sessions (FR-BL-006); raw poses are kept.
+    pub fn set_smoothing(&self, smoothing: Option<crate::Smoothing>) -> io::Result<()> {
+        self.shared.udp().set_smoothing(smoothing)
+    }
+
+    #[must_use]
+    pub fn smoothing(&self) -> Option<crate::Smoothing> {
+        self.shared.udp().smoothing()
+    }
+
     /// Publish state applied by Blender for the current session (not just received samples).
     pub fn update_status(&self, session_id: u32, status: HostStatus) -> io::Result<()> {
         self.shared.udp().update_status(session_id, status)
