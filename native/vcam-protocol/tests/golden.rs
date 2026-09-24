@@ -5,8 +5,9 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use vcam_protocol::{
-    Clock, ClockSample, ControlState, DropReason, Endpoint, EpochWatcher, Message, Pose, Role,
-    SealError, SeqFilter, Status,
+    CLOCK_OUTSTANDING, CLOCK_REPLY_TIMEOUT_NS, CLOCK_WINDOW, Clock, ClockEstimator, ClockReject,
+    ClockSample, ControlState, DropReason, Endpoint, EpochWatcher, Message, Pose, Role, SealError,
+    SeqFilter, Status,
 };
 
 fn load(name: &str) -> Value {
@@ -269,6 +270,58 @@ fn freshness_sequences_match_vectors() {
             assert_eq!(got, want, "{}", seq["message"]);
         }
     }
+}
+
+#[test]
+fn clock_sync_matches_vectors() {
+    let vectors = load("clock_sync.json");
+    assert_eq!(uint(&vectors["outstanding"]), CLOCK_OUTSTANDING as u64);
+    assert_eq!(uint(&vectors["reply_timeout_ns"]), CLOCK_REPLY_TIMEOUT_NS);
+    assert_eq!(uint(&vectors["window"]), CLOCK_WINDOW as u64);
+    let int = |v: &Value| i128::from(v.as_i64().unwrap());
+    let mut clock = ClockEstimator::default();
+    let mut replies = 0;
+    for (i, e) in vectors["events"].as_array().unwrap().iter().enumerate() {
+        let t1 = uint(&e["t1"]);
+        if e["op"] == "request" {
+            clock.request(t1);
+            continue;
+        }
+        replies += 1;
+        let got = clock.reply(t1, uint(&e["t2"]), uint(&e["t3"]), uint(&e["t4"]));
+        let want = match e["result"].as_str().unwrap() {
+            "accepted" => None,
+            "unmatched" => Some(ClockReject::Unmatched),
+            "expired" => Some(ClockReject::Expired),
+            "invalid" => Some(ClockReject::Invalid),
+            other => panic!("unknown result {other}"),
+        };
+        assert_eq!(got.err(), want, "event {i}: {}", e["note"]);
+        let est = clock.estimate();
+        let w = &e["estimate"];
+        if w.is_null() {
+            assert_eq!(est, None, "event {i}");
+            continue;
+        }
+        let est = est.unwrap();
+        assert_eq!(
+            (
+                est.offset_ns,
+                est.delay_ns,
+                est.jitter_ns,
+                est.samples as u64
+            ),
+            (
+                int(&w["offset_ns"]),
+                int(&w["delay_ns"]),
+                uint(&w["jitter_ns"]),
+                uint(&w["samples"])
+            ),
+            "event {i}: {}",
+            e["note"]
+        );
+    }
+    assert!(replies >= 20, "{replies}");
 }
 
 #[test]

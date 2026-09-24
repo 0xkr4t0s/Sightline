@@ -242,6 +242,12 @@ impl ControlServer {
         self.shared.udp().stats()
     }
 
+    /// Host clock (ns) that `stats().clock` maps device capture times onto (NET-003).
+    #[must_use]
+    pub fn host_clock_ns(&self) -> u64 {
+        self.shared.udp().host_clock_ns()
+    }
+
     /// Publish state applied by Blender for the current session (not just received samples).
     pub fn update_status(&self, session_id: u32, status: HostStatus) -> io::Result<()> {
         self.shared.udp().update_status(session_id, status)

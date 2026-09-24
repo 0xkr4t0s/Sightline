@@ -14,7 +14,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use vcam_protocol::{
-    Clock, ControlState, DropReason, Endpoint, MAX_DATAGRAM, Message, Pose, SeqFilter, Status,
+    Clock, ClockEstimate, ClockEstimator, ControlState, DropReason, Endpoint, MAX_DATAGRAM,
+    Message, Pose, SeqFilter, Status,
 };
 
 /// How often the thread checks for `stop` while idle (NFR-REL-002: stop within 1 s).
@@ -138,6 +139,12 @@ pub struct ReceiverStats {
     pub last_pose_age: Option<Duration>,
     /// Source of the most recent authenticated datagram: where the host sends replies (vcp.md §3).
     pub source: Option<SocketAddr>,
+    /// Clock offset/jitter from this session's `CLOCK` exchanges (NET-003); None before the
+    /// first accepted reply. Map `Pose::capture_time_ns` with `ClockEstimate::host_time_ns`
+    /// onto the host clock read by `UdpReceiver::host_clock_ns`.
+    pub clock: Option<ClockEstimate>,
+    /// Authenticated `CLOCK` replies not used: unmatched, expired or impossible (vcp.md §6.3).
+    pub clock_rejected: u64,
 }
 
 struct ActiveSession {
@@ -148,6 +155,7 @@ struct ActiveSession {
     status_dirty: bool,
     last_status: Option<Instant>,
     last_clock: Option<Instant>,
+    clock: ClockEstimator,
 }
 
 #[derive(Default)]
@@ -171,7 +179,7 @@ impl State {
         }
     }
 
-    fn handle(&mut self, bytes: &[u8], from: SocketAddr, now: Instant) {
+    fn handle(&mut self, bytes: &[u8], from: SocketAddr, now: Instant, host_ns: u64) {
         self.expire(now);
         let Some(active) = self.active.as_mut() else {
             self.stats.dropped.session += 1;
@@ -209,8 +217,13 @@ impl State {
                     });
                 }
             }
-            // CLOCK replies are handled by the clock task (1.2.4); a host never receives STATUS.
-            Message::Clock(_) | Message::Status(_) => {}
+            Message::Clock(Clock::Reply { t1, t2, t3 }) => {
+                if active.clock.reply(t1, t2, t3, host_ns).is_err() {
+                    self.stats.clock_rejected += 1;
+                }
+            }
+            // The endpoint drops device requests (§4.3.7); a host never receives STATUS.
+            Message::Clock(Clock::Request { .. }) | Message::Status(_) => {}
         }
     }
 
@@ -246,14 +259,17 @@ impl State {
             .last_clock
             .is_none_or(|t| now.duration_since(t) >= CLOCK_INTERVAL)
         {
-            let t1 = u64::try_from(epoch.elapsed().as_nanos()).unwrap_or(u64::MAX);
-            send(
+            let t1 = host_clock(epoch);
+            // Only a request that actually left the socket may be answered.
+            if send(
                 socket,
                 &active.endpoint,
                 &Message::Clock(Clock::Request { t1 }),
                 source,
                 out,
-            );
+            ) {
+                active.clock.request(t1);
+            }
             active.last_clock = Some(now);
         }
     }
@@ -284,6 +300,7 @@ impl State {
         s.last_pose_age = self
             .pose
             .map(|p| now.saturating_duration_since(p.received_at));
+        s.clock = self.active.as_ref().and_then(|s| s.clock.estimate());
         s
     }
 }
@@ -300,6 +317,7 @@ pub struct UdpReceiver {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     local_addr: SocketAddr,
+    epoch: Instant,
 }
 
 impl UdpReceiver {
@@ -310,18 +328,20 @@ impl UdpReceiver {
         socket.set_write_timeout(Some(POLL))?;
         let local_addr = socket.local_addr()?;
         let state = Arc::new(Mutex::new(State::default()));
+        let epoch = Instant::now();
         let stop = Arc::new(AtomicBool::new(false));
         let thread = std::thread::Builder::new()
             .name("vcam-udp-rx".into())
             .spawn({
                 let (state, stop) = (Arc::clone(&state), Arc::clone(&stop));
-                move || receive_loop(&socket, &state, &stop)
+                move || receive_loop(&socket, &state, &stop, epoch)
             })?;
         Ok(Self {
             state,
             stop,
             thread: Some(thread),
             local_addr,
+            epoch,
         })
     }
 
@@ -344,6 +364,7 @@ impl UdpReceiver {
                 status_dirty: true,
                 last_status: None,
                 last_clock: None,
+                clock: ClockEstimator::default(),
             }),
             ..State::default()
         };
@@ -408,6 +429,13 @@ impl UdpReceiver {
         self.local_addr
     }
 
+    /// The host clock of vcp.md §2 (monotonic ns since this receiver started): the clock of
+    /// `CLOCK` `t1`/`t4`, onto which `ClockEstimate::host_time_ns` maps device times.
+    #[must_use]
+    pub fn host_clock_ns(&self) -> u64 {
+        host_clock(self.epoch)
+    }
+
     /// The newest pose (highest `seq`) accepted so far (NET-002).
     #[must_use]
     pub fn latest_pose(&self) -> Option<PoseSample> {
@@ -443,16 +471,25 @@ impl Drop for UdpReceiver {
     }
 }
 
-fn receive_loop(socket: &UdpSocket, state: &Mutex<State>, stop: &AtomicBool) {
+fn host_clock(epoch: Instant) -> u64 {
+    u64::try_from(epoch.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
+fn receive_loop(socket: &UdpSocket, state: &Mutex<State>, stop: &AtomicBool, epoch: Instant) {
     // One byte more than the largest valid datagram, so oversize datagrams are seen as oversize
     // instead of being silently truncated to a valid length.
     let mut buf = [0u8; MAX_DATAGRAM + 1];
     let mut out = Vec::with_capacity(MAX_DATAGRAM);
-    let epoch = Instant::now();
     while !stop.load(Ordering::Acquire) {
         match socket.recv_from(&mut buf) {
             Ok((n, from)) => {
-                lock(state).handle(buf.get(..n).unwrap_or_default(), from, Instant::now());
+                let host_ns = host_clock(epoch);
+                lock(state).handle(
+                    buf.get(..n).unwrap_or_default(),
+                    from,
+                    Instant::now(),
+                    host_ns,
+                );
             }
             Err(e)
                 if matches!(

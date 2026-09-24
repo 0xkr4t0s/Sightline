@@ -24,6 +24,8 @@ testdata/vcp/receive.json    UDP receive-rule cases (vcp.md §4.3, §6). Each ca
                              accepted cases also carry fields.
 testdata/vcp/freshness.json  stateful sequences: the seq/state_seq values fed in, in order, and
                              which ones the receiver applies.
+testdata/vcp/clock_sync.json  host CLOCK estimation (vcp.md §6.3): requests and replies (with t4)
+                             in order; each reply's verdict and the estimate after it.
 testdata/vcp/pairing.json    one full SRP-6a pairing (vcp.md §9) with fixed secrets: every
                              intermediate value and every TCP message.
 testdata/vcp/session.json    one session setup (vcp.md §10) from the pairing key above.
@@ -359,6 +361,109 @@ def build_freshness() -> dict:
     }
 
 
+def build_clock_sync() -> dict:
+    """Reference for vcp.md §6.3 host estimation; the Rust ClockEstimator must match it."""
+    outstanding_max, timeout, window_max = 4, 2_000_000_000, 8
+    outstanding, window, events = [], [], []
+
+    def tdiv2(x):  # Rust i128 division truncates toward zero
+        return -((-x) // 2) if x < 0 else x // 2
+
+    def estimate():
+        if not window:
+            return None
+        best = min(reversed(window), key=lambda s: s[1])  # first minimum = newest
+        sq = sum(min(abs(o - best[0]), 2**64 - 1) ** 2 for o, _ in window)
+        return {"offset_ns": best[0], "delay_ns": best[1], "jitter_ns": math.isqrt(sq // len(window)),
+                "samples": len(window)}
+
+    def request(t1):
+        if len(outstanding) == outstanding_max:
+            outstanding.pop(0)
+        outstanding.append(t1)
+        events.append({"op": "request", "t1": t1})
+
+    def reply(t1, t2, t3, t4, expect, note=""):
+        offset, delay = tdiv2((t2 - t1) + (t3 - t4)), (t4 - t1) - (t3 - t2)
+        if t1 not in outstanding:
+            result = "unmatched"
+        else:
+            outstanding.remove(t1)
+            if t4 < t1:
+                result = "invalid"
+            elif t4 - t1 >= timeout:
+                result = "expired"
+            elif t3 < t2 or delay < 0:
+                result = "invalid"
+            else:
+                result = "accepted"
+                if len(window) == window_max:
+                    window.pop(0)
+                window.append((offset, delay))
+        assert result == expect, (note, result)
+        e = {"op": "reply", "t1": t1, "t2": t2, "t3": t3, "t4": t4, "result": result,
+             "estimate": estimate()}
+        if note:
+            e["note"] = note
+        events.append(e)
+
+    theta = -1_234_567_891  # device − host; odd, so some θ sums truncate toward zero
+
+    def exchange(t1, up, proc, down, expect="accepted", note=""):
+        t2 = t1 + up + theta
+        request(t1)
+        reply(t1, t2, t2 + proc, t1 + up + proc + down, expect, note)
+
+    # (uplink, device processing, downlink) in ns: asymmetric paths shift θ by (up−down)/2.
+    paths = [(3_000_001, 40_000, 2_000_000), (900_000, 50_000, 800_001), (7_000_000, 30_000, 1_000_000),
+             (1_200_000, 60_000, 1_500_000), (2_500_000, 45_000, 2_600_003)]
+    t = 10_000_000_000
+    for up, proc, down in paths:
+        exchange(t, up, proc, down)
+        t += 1_000_000_000
+    # Replay of the newest answered reply, still well inside 2 s: only consumption rejects it.
+    dup = events[-1]
+    reply(dup["t1"], dup["t2"], dup["t3"], dup["t4"] + 1_000_000, "unmatched",
+          "duplicate reply to an answered request")
+    reply(t + 123, 1, 2, t + 500, "unmatched", "t1 never requested")
+    for i in range(5):  # five unanswered requests evict the first one
+        request(t + i * 1_000_000_000)
+    reply(t, t + theta, t + theta + 1, t + 4_500_000_000, "unmatched", "request evicted by four newer ones")
+    last = t + 4_000_000_000
+    reply(last, last + 1_000_000 + theta, last + 1_050_000 + theta, last + timeout, "expired",
+          "arrived exactly 2 s after the request")
+    t += 5_000_000_000
+    request(t)
+    reply(t, t + 5_000 + theta, t + 4_000 + theta, t + 20_000, "invalid", "t3 before t2")
+    t += 1_000_000_000
+    request(t)
+    reply(t, t + 100 + theta, t + 2_000_100 + theta, t + 1_000_000, "invalid",
+          "negative round trip (device processing longer than the round trip)")
+    t += 1_000_000_000
+    exchange(t, 1_999_000_000, 10_000, 900_000, "accepted", "just inside the 2 s limit")
+    t += 1_000_000_000
+    # Enough further samples to slide the lowest-delay sample (paths[1]) and the 2 s sample out of
+    # the window. The last two tie on δ (2.1 ms) with different θ: the newer one must win.
+    for up, proc, down in paths[2:] + paths[2:] + [(1_000_000, 20_000, 1_100_000), (1_100_000, 20_000, 1_000_000)]:
+        exchange(t, up, proc, down)
+        t += 1_000_000_000
+    assert estimate()["samples"] == window_max
+    before_tie, after_tie = events[-3]["estimate"], events[-1]["estimate"]
+    assert before_tie["delay_ns"] == after_tie["delay_ns"] == 2_100_000
+    assert before_tie["offset_ns"] != after_tie["offset_ns"], "tie must change the chosen θ"
+    assert max(abs(o - theta) for o, _ in window) < 10_000_000, "2 s sample must have left the window"
+    return {
+        "note": "vcp.md §6.3 host side. Feed events in order into one estimator; 'request' records t1 "
+                "as sent; for 'reply', t4 is the host clock on receipt. 'estimate' is the state after "
+                "the reply (null before the first accepted sample).",
+        "outstanding": outstanding_max,
+        "reply_timeout_ns": timeout,
+        "window": window_max,
+        "events": events,
+    }
+
+
+
 def build_pairing() -> tuple[dict, dict]:
     code = "042917"
     I = b"vcam"
@@ -584,6 +689,7 @@ def build_all() -> dict[str, bytes]:
         "vcp/messages.json": dumps(messages).encode(),
         "vcp/receive.json": dumps(build_receive()).encode(),
         "vcp/freshness.json": dumps(build_freshness()).encode(),
+        "vcp/clock_sync.json": dumps(build_clock_sync()).encode(),
         "vcp/pairing.json": dumps(pairing).encode(),
         "vcp/session.json": dumps(build_session(ctx)).encode(),
         "vcp/srp-rfc5054-appendix-b.json": dumps(rfc).encode(),

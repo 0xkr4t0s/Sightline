@@ -4,6 +4,7 @@
 //! returns an error instead of panicking on malformed input (PR-005).
 #![forbid(unsafe_code)]
 
+mod clock;
 mod control;
 mod endpoint;
 mod fresh;
@@ -11,6 +12,10 @@ mod message;
 mod pairing;
 mod wire;
 
+pub use clock::{
+    CLOCK_OUTSTANDING, CLOCK_REPLY_TIMEOUT_NS, CLOCK_WINDOW, ClockEstimate, ClockEstimator,
+    ClockReject,
+};
 pub use control::{
     ControlError, ControlErrorMsg, ControlMessage, Hello, MAX_CONTROL_PAYLOAD, PairChallenge,
     PairProof, SRP_PUBLIC_LEN, SessionChallenge, control_type,

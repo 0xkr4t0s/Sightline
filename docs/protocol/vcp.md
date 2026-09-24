@@ -188,8 +188,8 @@ delay  δ = (t4 − t1) − (t3 − t2)            round trip
 host_time(capture_time_ns) = capture_time_ns − θ
 ```
 
-- The host accepts a reply only if its `t1` matches one of its last 4 outstanding requests, sent less than 2 s ago. This blocks replayed or forged-timing replies within the session.
-- The host SHOULD estimate θ from the samples with the lowest δ in a sliding window, and report offset and jitter (the spread of θ across that window) in its stats.
+- The host accepts a reply only if its `t1` matches one of its last 4 outstanding requests, sent less than 2 s ago. This blocks replayed or forged-timing replies within the session. A matched request is consumed, so a repeated reply is rejected; a reply with `t4 < t1`, `t3 < t2` or δ < 0 is rejected as impossible. The host records a request only once it has been sent.
+- The host SHOULD estimate θ from the samples with the lowest δ in a sliding window, and report offset and jitter (the spread of θ across that window) in its stats. Reference estimator (Rust `ClockEstimator`, vectors `testdata/vcp/clock_sync.json`): the window is the last 8 accepted samples (8 s at 1 Hz); offset and δ come from the lowest-δ sample (the newest on ties); jitter is the integer RMS of every windowed θ around that offset, in ns. Division in θ truncates toward zero. The estimate resets with each session.
 - Worked example: `t1=5.000000000 s`, `t2=1.000400000 s`, `t3=1.000450000 s`, `t4=5.001000000 s` gives θ = −4.000075 s and δ = 0.95 ms.
 
 Request example (host → device, `t1=5000000000`):

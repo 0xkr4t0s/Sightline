@@ -243,6 +243,66 @@ fn outbound_heartbeat_rates_continue_without_device_traffic() {
 }
 
 #[test]
+fn clock_replies_estimate_offset_and_reject_replays() {
+    let rx = start();
+    let tx = sender();
+    tx.send_to(&datagram(&pose(1)), rx.local_addr()).unwrap();
+    // The device clock has its own epoch, 3.5 s ahead: the host never sees it directly.
+    let device_epoch = Instant::now();
+    let device_clock = || u64::try_from(device_epoch.elapsed().as_nanos()).unwrap() + 3_500_000_000;
+    let mut replies = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while replies.len() < 2 {
+        assert!(Instant::now() < deadline, "CLOCK deadline expired");
+        if let Message::Clock(Clock::Request { t1 }) = receive(&tx, &device()) {
+            let t2 = device_clock();
+            let reply = datagram(&Message::Clock(Clock::Reply {
+                t1,
+                t2,
+                t3: device_clock(),
+            }));
+            tx.send_to(&reply, rx.local_addr()).unwrap();
+            replies.push(reply);
+        }
+    }
+    wait_until("two clock samples", || {
+        rx.stats().clock.is_some_and(|c| c.samples == 2)
+    });
+    let est = rx.stats().clock.unwrap();
+    let (before, device_now, after) = (rx.host_clock_ns(), device_clock(), rx.host_clock_ns());
+    let truth = i128::from(device_now) - (i128::from(before) + i128::from(after)) / 2;
+    assert!(
+        (est.offset_ns - truth).abs() < 5_000_000,
+        "{est:?} vs {truth}"
+    );
+    assert!((0..50_000_000).contains(&est.delay_ns), "{est:?}");
+    assert!(est.jitter_ns < 5_000_000, "{est:?}");
+    // A capture stamped now on the device maps to (about) now on the host clock.
+    let mapped = est.host_time_ns(device_clock());
+    assert!((mapped - i128::from(rx.host_clock_ns())).abs() < 5_000_000);
+    assert_eq!(rx.stats().clock_rejected, 0);
+
+    // Authenticated but already answered, and never requested: counted, not sampled.
+    tx.send_to(&replies[0], rx.local_addr()).unwrap();
+    wait_until("replayed reply rejected", || rx.stats().clock_rejected == 1);
+    let forged = Clock::Reply {
+        t1: 7,
+        t2: 1,
+        t3: 2,
+    };
+    tx.send_to(&datagram(&Message::Clock(forged)), rx.local_addr())
+        .unwrap();
+    wait_until("unrequested reply rejected", || {
+        rx.stats().clock_rejected == 2
+    });
+    assert_eq!(rx.stats().clock.unwrap().samples, 2);
+
+    // A new session starts a new estimate (the device may have rebooted its clock).
+    rx.set_session(host()).unwrap();
+    assert_eq!(rx.stats().clock, None);
+}
+
+#[test]
 fn applied_status_changes_are_prompt_validated_and_session_scoped() {
     let rx = start();
     let tx = sender();
