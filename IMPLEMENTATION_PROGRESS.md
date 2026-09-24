@@ -31,7 +31,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | `BlenderAddOn/tests` (pytest, `.venv.nosync`) | 12/12 pass | Tests the non-standard FreeD layout; the code will be replaced. |
 | `native/` cargo fmt/clippy/test | Pass, 5/5 crates | Includes `vcam-py` with pyo3 0.29.2. |
 | Headless Blender `tests/blender/smoke_native.py` (macOS arm64) | Pass | Built extension zip, installed into a temporary user dir, enabled; printed `VCAM_NATIVE_OK 0.1.0`. |
-| S-1 `tests/bench_render.py` (headless, macOS arm64) | Pass, 9/9 cells | All cells drew non-blank images. Numbers in SRS §13.1 and `reports/s1-render-2026-09-24-macos-arm64.json`. |
+| S-1 `tests/bench_render.py` (macOS arm64) | Pass, 9/9 cells in each of 3 runs | Runs: headless as fast as possible (S-1a); headless at 30 fps and in the GUI with timers (S-1b). Numbers in SRS §13.1, JSON in `reports/s1-render-2026-09-24-macos-arm64*.json`. |
 | VCamIOS `FreeDPacketEncoderTests` (iPhone 17 Pro sim, iOS 27.0) | 5/5 pass | After the checksum overflow fix (root commit `5ba2672`, was `ed349be` in the old `VCamIOS` repo). Will be replaced with VCP tests. |
 
 ---

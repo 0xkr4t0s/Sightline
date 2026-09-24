@@ -403,7 +403,7 @@ The results set the default stream resolution and fps, and are recorded in §13.
 | S-4 | Wi-Fi jitter for 60 Hz pose up + 30 fps video down on typical home and studio routers | NFR-LAT-001/003 |
 | S-5 | Licence choice: GPL-3.0-or-later for the whole extension, vs. MIT/Apache for `vcam-protocol` (which enables ARC-007 sharing with iOS) | ARC-007, C-1 |
 
-### 13.1 S-1 results — 2026-09-24 (macOS headless; partial)
+### 13.1 S-1 results — 2026-09-24 (macOS headless and UI; Windows/Linux pending)
 
 Setup: Blender 5.2.2 LTS, `--background` with `gpu.init()` (Metal), Apple M4 Pro. Default scene plus 25 subdivided Suzannes (393,612 evaluated triangles). Overlays off, `do_color_management=True`. The camera pans 0.2° per frame so EEVEE can't reuse accumulated samples. 60 timed frames after 5 warm-up frames. Script: `tests/bench_render.py`. Raw data: `reports/s1-render-2026-09-24-macos-arm64.json`.
 
@@ -434,7 +434,34 @@ Proposed defaults (to confirm after the UI run and the other OSes): 960×540, So
 
 **Conflict flagged (not resolved here):** FR-REN-002 makes EEVEE a selectable stream mode, but on this machine a single EEVEE `draw_view3d` blocks the main thread for 76 ms median at 540p. That breaks FR-REN-004's 12 ms default budget and NFR-PERF-002's 50 ms limit, and frame skipping can't help because one frame already exceeds both. Material 720p/1080p also breaks the 12 ms budget. The owner must decide: exempt EEVEE (and heavy Material) from these limits with a UI warning, require lighter EEVEE settings (untested), or drop EEVEE streaming from T2.
 
-Still open for S-1: the same benchmark inside the Blender UI with a timer (a visible viewport also competes for the GPU), and Windows and Linux on mid-range GPUs.
+#### S-1b — Blender UI with timers, macOS (2026-09-24)
+
+Same scene and script, run in a GUI Blender (`--factory-startup`, one window showing the Layout screen with its Solid viewport) and driven by `bpy.app.timers` every 1/30 s. The camera **object** moves every frame, as it will with live tracking, so the visible viewport redraws too. The offscreen draw takes its settings from the `VIEW_3D` space of the *hidden* Animation screen, so the user's viewport is never changed. Pipelined = the Phase 2 design: each tick reads the frame drawn on the previous tick, then draws the next frame into a second offscreen. Raw data: `reports/s1-render-2026-09-24-macos-arm64-ui.json` (run 2) and `…-headless-30fps.json` (headless run of the same script at the same interval).
+
+Main-thread cost in ms, median/p95, UI run 2:
+
+| Shading | Res | draw + read (sync) | pipelined total | pipelined read | pipelined draw |
+|---|---|---|---|---|---|
+| Solid | 960×540 | 8.8/10.6 | 1.8/2.2 | 0.4/0.8 | 1.4/1.5 |
+| Solid | 1280×720 | 11.3/14.5 | 7.1/24.7 | 3.8/23.3 | 1.5/2.4 |
+| Solid | 1920×1080 | 26.2/31.7 | 29.6/33.5 | 28.2/31.9 | 1.5/1.7 |
+| Material | 960×540 | 30.9/34.8 | 29.4/35.8 | 22.7/28.8 | 6.3/7.9 |
+| Material | 1280×720 | 34.5/44.3 | 29.6/38.2 | 18.4/24.0 | 12.3/14.7 |
+| Material | 1920×1080 | 52.3/56.9 | 52.5/60.2 | 39.2/45.9 | 13.3/16.2 |
+| EEVEE | 960×540 | 49.9/89.4 | 55.8/94.0 | 1.4/13.1 | 50.0/83.3 |
+| EEVEE | 1280×720 | 51.3/93.5 | 74.7/95.0 | 4.0/8.5 | 69.2/86.6 |
+| EEVEE | 1920×1080 | 85.5/114.5 | 83.4/109.9 | 2.9/7.5 | 79.2/102.5 |
+
+Findings from the UI run:
+
+- **No visible 3D view needed in the UI either.** Rendering with a hidden screen's `SpaceView3D`/region works, and the user's visible viewport keeps its own shading.
+- **Pipelining only helps when the GPU has headroom.** Solid 540p drops to 1.8 ms on the main thread. When the stream plus the visible viewport's redraws exceed the tick interval, `read()` blocks even for a frame drawn a full tick earlier: Solid 1080p waits 28 ms, Material 540p 23 ms. On a Retina display the visible viewport (about 3.1K × 1.9K pixels here) costs more GPU than the stream. Without a fence API (see above), the renderer can't tell whether a frame is ready. FR-REN-004 frame skipping therefore has to be adaptive: time each `read()` and lower the stream fps when it exceeds the budget.
+- **The UI run is much noisier than headless.** An earlier UI run of the same script measured Solid 540p pipelined at 20.9/31.5 ms, against 1.8/2.2 ms in run 2. Phase 2 needs a longer soak to settle the p95.
+- **EEVEE in the UI costs about 50 ms of draw at 540p** (p95 83 ms), against about 84 ms headless. The headless figure is probably pessimistic because of GPU power state (inference, not measured). The EEVEE conflict above still stands: p95 exceeds NFR-PERF-002's 50 ms at every resolution.
+
+Updated proposal: default 960×540, Solid, 30 fps, pipelined, with adaptive fps driven by measured `read()` time (main thread about 2 ms when there's headroom). Material Preview at 540p costs about 30 ms per tick in the UI, so it's opt-in and above the 12 ms budget. The EEVEE decision is still open.
+
+Still open for S-1: Windows and Linux on mid-range GPUs.
 
 ---
 

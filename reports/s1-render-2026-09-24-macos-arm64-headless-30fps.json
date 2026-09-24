@@ -1,0 +1,378 @@
+{
+  "info": {
+    "blender": "5.2.2 LTS",
+    "gpu_backend": "METAL",
+    "gpu_renderer": "Metal API",
+    "background": true,
+    "offscreen_settings_from_screen": "Animation",
+    "shown_screens": [
+      "Layout"
+    ],
+    "vcam_native": "/var/folders/lb/98xd6rg12f16th_l_gsv4bzh0000gn/T/tmp.9ADjqk4BKo/extensions/.local/lib/python3.13/site-packages/vcam_native/__init__.py",
+    "frames": 60,
+    "interval_s": 0.0333333,
+    "triangles": 393612
+  },
+  "results": [
+    {
+      "mode": "SOLID",
+      "width": 960,
+      "height": 540,
+      "first_frame_ms": 724.29,
+      "sampled_colours": 1581,
+      "zero_copy_checksum": 265051338,
+      "draw": {
+        "median_ms": 2.904,
+        "p95_ms": 4.24
+      },
+      "read": {
+        "median_ms": 7.765,
+        "p95_ms": 14.986
+      },
+      "draw_read": {
+        "median_ms": 10.728,
+        "p95_ms": 18.406
+      },
+      "probe": {
+        "median_ms": 0.069,
+        "p95_ms": 0.102
+      },
+      "copy": {
+        "median_ms": 0.066,
+        "p95_ms": 0.17
+      },
+      "read_deferred": {
+        "median_ms": 1.43,
+        "p95_ms": 1.857
+      },
+      "pipelined": {
+        "median_ms": 3.534,
+        "p95_ms": 5.947
+      },
+      "tick_gap": {
+        "median_ms": 48.938,
+        "p95_ms": 55.251
+      }
+    },
+    {
+      "mode": "SOLID",
+      "width": 1280,
+      "height": 720,
+      "first_frame_ms": 12.07,
+      "sampled_colours": 2032,
+      "zero_copy_checksum": 471474349,
+      "draw": {
+        "median_ms": 2.288,
+        "p95_ms": 3.555
+      },
+      "read": {
+        "median_ms": 12.467,
+        "p95_ms": 18.952
+      },
+      "draw_read": {
+        "median_ms": 14.528,
+        "p95_ms": 21.903
+      },
+      "probe": {
+        "median_ms": 0.108,
+        "p95_ms": 0.156
+      },
+      "copy": {
+        "median_ms": 0.097,
+        "p95_ms": 0.296
+      },
+      "read_deferred": {
+        "median_ms": 1.941,
+        "p95_ms": 2.228
+      },
+      "pipelined": {
+        "median_ms": 3.23,
+        "p95_ms": 5.961
+      },
+      "tick_gap": {
+        "median_ms": 51.41,
+        "p95_ms": 60.197
+      }
+    },
+    {
+      "mode": "SOLID",
+      "width": 1920,
+      "height": 1080,
+      "first_frame_ms": 31.71,
+      "sampled_colours": 2755,
+      "zero_copy_checksum": 1061416842,
+      "draw": {
+        "median_ms": 2.466,
+        "p95_ms": 4.755
+      },
+      "read": {
+        "median_ms": 15.363,
+        "p95_ms": 27.915
+      },
+      "draw_read": {
+        "median_ms": 17.474,
+        "p95_ms": 30.234
+      },
+      "probe": {
+        "median_ms": 0.232,
+        "p95_ms": 0.457
+      },
+      "copy": {
+        "median_ms": 0.194,
+        "p95_ms": 0.725
+      },
+      "read_deferred": {
+        "median_ms": 2.171,
+        "p95_ms": 3.128
+      },
+      "pipelined": {
+        "median_ms": 4.155,
+        "p95_ms": 7.504
+      },
+      "tick_gap": {
+        "median_ms": 55.837,
+        "p95_ms": 69.023
+      }
+    },
+    {
+      "mode": "MATERIAL",
+      "width": 960,
+      "height": 540,
+      "first_frame_ms": 167.02,
+      "sampled_colours": 899,
+      "zero_copy_checksum": 345370351,
+      "draw": {
+        "median_ms": 8.105,
+        "p95_ms": 13.169
+      },
+      "read": {
+        "median_ms": 22.159,
+        "p95_ms": 24.711
+      },
+      "draw_read": {
+        "median_ms": 30.523,
+        "p95_ms": 33.853
+      },
+      "probe": {
+        "median_ms": 0.063,
+        "p95_ms": 0.085
+      },
+      "copy": {
+        "median_ms": 0.063,
+        "p95_ms": 0.085
+      },
+      "read_deferred": {
+        "median_ms": 2.524,
+        "p95_ms": 2.975
+      },
+      "pipelined": {
+        "median_ms": 12.91,
+        "p95_ms": 22.109
+      },
+      "tick_gap": {
+        "median_ms": 67.454,
+        "p95_ms": 72.343
+      }
+    },
+    {
+      "mode": "MATERIAL",
+      "width": 1280,
+      "height": 720,
+      "first_frame_ms": 129.22,
+      "sampled_colours": 1112,
+      "zero_copy_checksum": 613668894,
+      "draw": {
+        "median_ms": 11.261,
+        "p95_ms": 15.632
+      },
+      "read": {
+        "median_ms": 36.2,
+        "p95_ms": 39.191
+      },
+      "draw_read": {
+        "median_ms": 47.723,
+        "p95_ms": 51.589
+      },
+      "probe": {
+        "median_ms": 0.105,
+        "p95_ms": 0.134
+      },
+      "copy": {
+        "median_ms": 0.096,
+        "p95_ms": 0.13
+      },
+      "read_deferred": {
+        "median_ms": 19.512,
+        "p95_ms": 38.308
+      },
+      "pipelined": {
+        "median_ms": 35.059,
+        "p95_ms": 46.375
+      },
+      "tick_gap": {
+        "median_ms": 85.481,
+        "p95_ms": 88.71
+      }
+    },
+    {
+      "mode": "MATERIAL",
+      "width": 1920,
+      "height": 1080,
+      "first_frame_ms": 198.45,
+      "sampled_colours": 1431,
+      "zero_copy_checksum": 1380055843,
+      "draw": {
+        "median_ms": 14.913,
+        "p95_ms": 19.136
+      },
+      "read": {
+        "median_ms": 91.134,
+        "p95_ms": 102.759
+      },
+      "draw_read": {
+        "median_ms": 106.082,
+        "p95_ms": 116.984
+      },
+      "probe": {
+        "median_ms": 0.266,
+        "p95_ms": 0.417
+      },
+      "copy": {
+        "median_ms": 0.246,
+        "p95_ms": 0.474
+      },
+      "read_deferred": {
+        "median_ms": 74.542,
+        "p95_ms": 90.58
+      },
+      "pipelined": {
+        "median_ms": 98.913,
+        "p95_ms": 129.391
+      },
+      "tick_gap": {
+        "median_ms": 143.138,
+        "p95_ms": 155.4
+      }
+    },
+    {
+      "mode": "RENDERED",
+      "width": 960,
+      "height": 540,
+      "first_frame_ms": 214.69,
+      "sampled_colours": 240,
+      "zero_copy_checksum": 257245556,
+      "draw": {
+        "median_ms": 84.311,
+        "p95_ms": 119.652
+      },
+      "read": {
+        "median_ms": 3.02,
+        "p95_ms": 5.686
+      },
+      "draw_read": {
+        "median_ms": 87.218,
+        "p95_ms": 122.108
+      },
+      "probe": {
+        "median_ms": 0.061,
+        "p95_ms": 0.074
+      },
+      "copy": {
+        "median_ms": 0.061,
+        "p95_ms": 0.104
+      },
+      "read_deferred": {
+        "median_ms": 3.915,
+        "p95_ms": 7.947
+      },
+      "pipelined": {
+        "median_ms": 92.605,
+        "p95_ms": 120.643
+      },
+      "tick_gap": {
+        "median_ms": 123.833,
+        "p95_ms": 160.601
+      }
+    },
+    {
+      "mode": "RENDERED",
+      "width": 1280,
+      "height": 720,
+      "first_frame_ms": 191.27,
+      "sampled_colours": 291,
+      "zero_copy_checksum": 457047031,
+      "draw": {
+        "median_ms": 105.557,
+        "p95_ms": 147.443
+      },
+      "read": {
+        "median_ms": 4.66,
+        "p95_ms": 9.089
+      },
+      "draw_read": {
+        "median_ms": 109.809,
+        "p95_ms": 153.488
+      },
+      "probe": {
+        "median_ms": 0.104,
+        "p95_ms": 0.154
+      },
+      "copy": {
+        "median_ms": 0.097,
+        "p95_ms": 0.272
+      },
+      "read_deferred": {
+        "median_ms": 5.979,
+        "p95_ms": 9.133
+      },
+      "pipelined": {
+        "median_ms": 115.111,
+        "p95_ms": 156.331
+      },
+      "tick_gap": {
+        "median_ms": 147.333,
+        "p95_ms": 189.59
+      }
+    },
+    {
+      "mode": "RENDERED",
+      "width": 1920,
+      "height": 1080,
+      "first_frame_ms": 327.24,
+      "sampled_colours": 385,
+      "zero_copy_checksum": 1027759912,
+      "draw": {
+        "median_ms": 191.351,
+        "p95_ms": 241.768
+      },
+      "read": {
+        "median_ms": 9.937,
+        "p95_ms": 14.263
+      },
+      "draw_read": {
+        "median_ms": 200.625,
+        "p95_ms": 252.73
+      },
+      "probe": {
+        "median_ms": 0.264,
+        "p95_ms": 0.366
+      },
+      "copy": {
+        "median_ms": 0.218,
+        "p95_ms": 0.629
+      },
+      "read_deferred": {
+        "median_ms": 10.298,
+        "p95_ms": 14.038
+      },
+      "pipelined": {
+        "median_ms": 197.896,
+        "p95_ms": 261.748
+      },
+      "tick_gap": {
+        "median_ms": 239.1,
+        "p95_ms": 290.063
+      }
+    }
+  ]
+}

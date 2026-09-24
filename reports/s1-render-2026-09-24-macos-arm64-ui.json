@@ -1,0 +1,450 @@
+{
+  "info": {
+    "blender": "5.2.2 LTS",
+    "gpu_backend": "METAL",
+    "gpu_renderer": "Metal API",
+    "background": false,
+    "offscreen_settings_from_screen": "Animation",
+    "shown_screens": [
+      "Layout"
+    ],
+    "vcam_native": "/var/folders/lb/98xd6rg12f16th_l_gsv4bzh0000gn/T/tmp.MQWBhZAtS2/extensions/.local/lib/python3.13/site-packages/vcam_native/__init__.py",
+    "frames": 60,
+    "interval_s": 0.03333333333333333,
+    "triangles": 393612
+  },
+  "results": [
+    {
+      "mode": "SOLID",
+      "width": 960,
+      "height": 540,
+      "first_frame_ms": 11.97,
+      "sampled_colours": 1581,
+      "zero_copy_checksum": 265051338,
+      "draw": {
+        "median_ms": 1.411,
+        "p95_ms": 1.534
+      },
+      "read": {
+        "median_ms": 7.365,
+        "p95_ms": 9.271
+      },
+      "draw_read": {
+        "median_ms": 8.756,
+        "p95_ms": 10.647
+      },
+      "probe": {
+        "median_ms": 0.06,
+        "p95_ms": 0.064
+      },
+      "copy": {
+        "median_ms": 0.06,
+        "p95_ms": 0.067
+      },
+      "read_deferred": {
+        "median_ms": 0.395,
+        "p95_ms": 0.702
+      },
+      "pipelined": {
+        "median_ms": 1.791,
+        "p95_ms": 2.183
+      },
+      "pipelined_read": {
+        "median_ms": 0.376,
+        "p95_ms": 0.77
+      },
+      "pipelined_draw": {
+        "median_ms": 1.368,
+        "p95_ms": 1.532
+      },
+      "tick_gap": {
+        "median_ms": 49.251,
+        "p95_ms": 50.68
+      }
+    },
+    {
+      "mode": "SOLID",
+      "width": 1280,
+      "height": 720,
+      "first_frame_ms": 15.15,
+      "sampled_colours": 2032,
+      "zero_copy_checksum": 471474349,
+      "draw": {
+        "median_ms": 1.408,
+        "p95_ms": 1.479
+      },
+      "read": {
+        "median_ms": 9.907,
+        "p95_ms": 13.361
+      },
+      "draw_read": {
+        "median_ms": 11.295,
+        "p95_ms": 14.541
+      },
+      "probe": {
+        "median_ms": 0.101,
+        "p95_ms": 0.106
+      },
+      "copy": {
+        "median_ms": 0.093,
+        "p95_ms": 0.099
+      },
+      "read_deferred": {
+        "median_ms": 0.383,
+        "p95_ms": 1.004
+      },
+      "pipelined": {
+        "median_ms": 7.143,
+        "p95_ms": 24.724
+      },
+      "pipelined_read": {
+        "median_ms": 3.806,
+        "p95_ms": 23.286
+      },
+      "pipelined_draw": {
+        "median_ms": 1.458,
+        "p95_ms": 2.435
+      },
+      "tick_gap": {
+        "median_ms": 49.367,
+        "p95_ms": 50.606
+      }
+    },
+    {
+      "mode": "SOLID",
+      "width": 1920,
+      "height": 1080,
+      "first_frame_ms": 29.26,
+      "sampled_colours": 2755,
+      "zero_copy_checksum": 1061416842,
+      "draw": {
+        "median_ms": 1.431,
+        "p95_ms": 1.587
+      },
+      "read": {
+        "median_ms": 24.79,
+        "p95_ms": 30.306
+      },
+      "draw_read": {
+        "median_ms": 26.239,
+        "p95_ms": 31.733
+      },
+      "probe": {
+        "median_ms": 0.216,
+        "p95_ms": 0.255
+      },
+      "copy": {
+        "median_ms": 0.183,
+        "p95_ms": 0.198
+      },
+      "read_deferred": {
+        "median_ms": 8.077,
+        "p95_ms": 17.642
+      },
+      "pipelined": {
+        "median_ms": 29.552,
+        "p95_ms": 33.478
+      },
+      "pipelined_read": {
+        "median_ms": 28.199,
+        "p95_ms": 31.941
+      },
+      "pipelined_draw": {
+        "median_ms": 1.508,
+        "p95_ms": 1.729
+      },
+      "tick_gap": {
+        "median_ms": 36.688,
+        "p95_ms": 40.205
+      }
+    },
+    {
+      "mode": "MATERIAL",
+      "width": 960,
+      "height": 540,
+      "first_frame_ms": 153.56,
+      "sampled_colours": 891,
+      "zero_copy_checksum": 345396716,
+      "draw": {
+        "median_ms": 4.477,
+        "p95_ms": 4.741
+      },
+      "read": {
+        "median_ms": 26.357,
+        "p95_ms": 30.211
+      },
+      "draw_read": {
+        "median_ms": 30.85,
+        "p95_ms": 34.797
+      },
+      "probe": {
+        "median_ms": 0.06,
+        "p95_ms": 0.066
+      },
+      "copy": {
+        "median_ms": 0.061,
+        "p95_ms": 0.065
+      },
+      "read_deferred": {
+        "median_ms": 2.34,
+        "p95_ms": 9.833
+      },
+      "pipelined": {
+        "median_ms": 29.355,
+        "p95_ms": 35.817
+      },
+      "pipelined_read": {
+        "median_ms": 22.723,
+        "p95_ms": 28.83
+      },
+      "pipelined_draw": {
+        "median_ms": 6.303,
+        "p95_ms": 7.941
+      },
+      "tick_gap": {
+        "median_ms": 39.201,
+        "p95_ms": 43.509
+      }
+    },
+    {
+      "mode": "MATERIAL",
+      "width": 1280,
+      "height": 720,
+      "first_frame_ms": 106.63,
+      "sampled_colours": 1100,
+      "zero_copy_checksum": 613701175,
+      "draw": {
+        "median_ms": 6.308,
+        "p95_ms": 7.167
+      },
+      "read": {
+        "median_ms": 28.041,
+        "p95_ms": 38.03
+      },
+      "draw_read": {
+        "median_ms": 34.506,
+        "p95_ms": 44.274
+      },
+      "probe": {
+        "median_ms": 0.144,
+        "p95_ms": 0.164
+      },
+      "copy": {
+        "median_ms": 0.129,
+        "p95_ms": 0.166
+      },
+      "read_deferred": {
+        "median_ms": 0.862,
+        "p95_ms": 8.27
+      },
+      "pipelined": {
+        "median_ms": 29.594,
+        "p95_ms": 38.181
+      },
+      "pipelined_read": {
+        "median_ms": 18.406,
+        "p95_ms": 24.004
+      },
+      "pipelined_draw": {
+        "median_ms": 12.348,
+        "p95_ms": 14.665
+      },
+      "tick_gap": {
+        "median_ms": 44.389,
+        "p95_ms": 54.859
+      }
+    },
+    {
+      "mode": "MATERIAL",
+      "width": 1920,
+      "height": 1080,
+      "first_frame_ms": 140.99,
+      "sampled_colours": 1426,
+      "zero_copy_checksum": 1380100914,
+      "draw": {
+        "median_ms": 13.06,
+        "p95_ms": 14.673
+      },
+      "read": {
+        "median_ms": 39.252,
+        "p95_ms": 43.916
+      },
+      "draw_read": {
+        "median_ms": 52.325,
+        "p95_ms": 56.884
+      },
+      "probe": {
+        "median_ms": 0.349,
+        "p95_ms": 0.561
+      },
+      "copy": {
+        "median_ms": 0.538,
+        "p95_ms": 0.952
+      },
+      "read_deferred": {
+        "median_ms": 37.551,
+        "p95_ms": 45.133
+      },
+      "pipelined": {
+        "median_ms": 52.478,
+        "p95_ms": 60.194
+      },
+      "pipelined_read": {
+        "median_ms": 39.231,
+        "p95_ms": 45.924
+      },
+      "pipelined_draw": {
+        "median_ms": 13.293,
+        "p95_ms": 16.232
+      },
+      "tick_gap": {
+        "median_ms": 66.564,
+        "p95_ms": 72.916
+      }
+    },
+    {
+      "mode": "RENDERED",
+      "width": 960,
+      "height": 540,
+      "first_frame_ms": 157.94,
+      "sampled_colours": 240,
+      "zero_copy_checksum": 257435627,
+      "draw": {
+        "median_ms": 48.012,
+        "p95_ms": 85.74
+      },
+      "read": {
+        "median_ms": 1.969,
+        "p95_ms": 4.349
+      },
+      "draw_read": {
+        "median_ms": 49.93,
+        "p95_ms": 89.413
+      },
+      "probe": {
+        "median_ms": 0.06,
+        "p95_ms": 0.087
+      },
+      "copy": {
+        "median_ms": 0.061,
+        "p95_ms": 0.084
+      },
+      "read_deferred": {
+        "median_ms": 3.443,
+        "p95_ms": 11.082
+      },
+      "pipelined": {
+        "median_ms": 55.764,
+        "p95_ms": 94.037
+      },
+      "pipelined_read": {
+        "median_ms": 1.432,
+        "p95_ms": 13.076
+      },
+      "pipelined_draw": {
+        "median_ms": 50.036,
+        "p95_ms": 83.277
+      },
+      "tick_gap": {
+        "median_ms": 58.675,
+        "p95_ms": 97.946
+      }
+    },
+    {
+      "mode": "RENDERED",
+      "width": 1280,
+      "height": 720,
+      "first_frame_ms": 151.0,
+      "sampled_colours": 300,
+      "zero_copy_checksum": 457333272,
+      "draw": {
+        "median_ms": 48.857,
+        "p95_ms": 90.96
+      },
+      "read": {
+        "median_ms": 2.432,
+        "p95_ms": 3.943
+      },
+      "draw_read": {
+        "median_ms": 51.305,
+        "p95_ms": 93.455
+      },
+      "probe": {
+        "median_ms": 0.1,
+        "p95_ms": 0.108
+      },
+      "copy": {
+        "median_ms": 0.092,
+        "p95_ms": 0.105
+      },
+      "read_deferred": {
+        "median_ms": 0.307,
+        "p95_ms": 6.245
+      },
+      "pipelined": {
+        "median_ms": 74.679,
+        "p95_ms": 95.019
+      },
+      "pipelined_read": {
+        "median_ms": 3.99,
+        "p95_ms": 8.457
+      },
+      "pipelined_draw": {
+        "median_ms": 69.235,
+        "p95_ms": 86.645
+      },
+      "tick_gap": {
+        "median_ms": 59.601,
+        "p95_ms": 103.163
+      }
+    },
+    {
+      "mode": "RENDERED",
+      "width": 1920,
+      "height": 1080,
+      "first_frame_ms": 179.4,
+      "sampled_colours": 381,
+      "zero_copy_checksum": 1028187284,
+      "draw": {
+        "median_ms": 81.074,
+        "p95_ms": 107.351
+      },
+      "read": {
+        "median_ms": 4.611,
+        "p95_ms": 7.909
+      },
+      "draw_read": {
+        "median_ms": 85.515,
+        "p95_ms": 114.459
+      },
+      "probe": {
+        "median_ms": 0.222,
+        "p95_ms": 0.261
+      },
+      "copy": {
+        "median_ms": 0.188,
+        "p95_ms": 0.229
+      },
+      "read_deferred": {
+        "median_ms": 3.755,
+        "p95_ms": 5.66
+      },
+      "pipelined": {
+        "median_ms": 83.425,
+        "p95_ms": 109.857
+      },
+      "pipelined_read": {
+        "median_ms": 2.902,
+        "p95_ms": 7.483
+      },
+      "pipelined_draw": {
+        "median_ms": 79.231,
+        "p95_ms": 102.502
+      },
+      "tick_gap": {
+        "median_ms": 93.742,
+        "p95_ms": 123.237
+      }
+    }
+  ]
+}
