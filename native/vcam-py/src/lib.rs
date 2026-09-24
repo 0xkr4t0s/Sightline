@@ -273,6 +273,22 @@ mod vcam_native {
             Ok(Some(d))
         }
 
+        /// The newest `CONTROL_STATE` (highest `state_seq`) as a dict, or None (vcp.md §6.2).
+        /// `motion_scale`, `lock_flags` and `origin_epoch` are None when absent from that
+        /// message: the host keeps their previous values.
+        fn latest_control<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+            let Some(sample) = self.with(|s| Ok(s.latest_control()))? else {
+                return Ok(None);
+            };
+            let c = sample.state;
+            let d = PyDict::new(py);
+            d.set_item("state_seq", c.state_seq)?;
+            d.set_item("motion_scale", c.motion_scale)?;
+            d.set_item("lock_flags", c.lock_flags)?;
+            d.set_item("origin_epoch", c.origin_epoch)?;
+            Ok(Some(d))
+        }
+
         /// Receiver statistics for the N-panel (FR-BL-004) as a dict. `clock` is None until
         /// the first accepted `CLOCK` reply (NET-003).
         fn stats<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {

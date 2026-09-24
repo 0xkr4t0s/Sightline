@@ -899,3 +899,32 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none.
 - **Next task:** 1.3.2 — rig: create or find `VCam_Origin` + the camera; apply the canonical pose as the camera's local transform; motion scale and axis locks from CONTROL_STATE (FR-BL-003, FR-CTL-004). No second task started.
 - **Owner actions:** push (this commit makes 19 ahead). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.
+
+## 2026-09-25 — Iteration 33 — 1.3.2a (FR-BL-003, FR-CTL-004, FR-TRK-003) — done
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 19 ahead of `origin`; no new CI run. Existing Phase 1 owner waiver applies.
+- **Split of 1.3.2** (too big for one iteration):
+  - **1.3.2a (this):** rig math + golden vectors, the `VCam_Origin` rig in Blender, and CONTROL_STATE (scale, locks, Set origin, `control_ack`).
+  - **1.3.2b (next):** `vcam-fake-iphone` control scripting (`--scale`, `--locks`, `--set-origin-at FRAME`) and the end-to-end check in Blender.
+- **Semantics** (the plan puts scale and locks "on the origin/apply step"; now spelled out in `BlenderAddOn/core/rig.py`'s docstring):
+  - **Relative pose:** p_rel = Rz(−ψ₀)(p − p₀), q_rel = Rz(−ψ₀)q. ψ is the heading (0 along +Y, counter-clockwise; taken from the up vector when looking straight up or down).
+  - **Locks:** pan only sets p = 0, lock height sets local z = 0, and lock roll keeps the forward direction with up in the forward/world-Z plane. Lock roll does nothing when looking straight up or down.
+  - **Scale:** position × motion_scale.
+  - **User rig:** the user's `VCam_Origin` transform, including its own scale, composes on top. Motion scale is not written into the origin's scale, so the device never overwrites the user's placement.
+  - **Set origin:** any `origin_epoch` change after the first one seen in a session, the same rule as `freshness.json`.
+- **Code:**
+  - `BlenderAddOn/core/rig.py` (new, pure Python): `local_pose`, `heading`, `zero_from_pose`, `remove_roll`, `Controls` (merges absent fields, ignores stale `state_seq`).
+  - `core/apply.py`: `ensure_rig` (reuses the user's `VCam_Origin` or creates one at the camera's position; parents the camera with an identity inverse), the zero stored as custom properties on the origin, the camera's `matrix_basis` set to the local pose, and `control_ack` in STATUS.
+  - `native/vcam-py`: `Session.latest_control()` (absent fields as None).
+- **Golden vectors:** `testdata/rig/rig_cases.json` (new; 8 cases: identity, scale 10, lock roll/height/pan-only on a yaw 30/pitch −20/roll 15 pose, Set origin then walk, combined, straight-down lock roll). Built by `tools/gen_testdata.py` `build_rig` with 3×3 matrices, independent of the quaternion code. It self-checks the walk result against a hand derivation and lock roll against the analytic no-roll camera. Inputs are rounded before the expected values are computed.
+- **Files changed:** `BlenderAddOn/core/{rig.py (new),apply.py}`, `BlenderAddOn/tests/test_rig.py` (new), `native/vcam-py/src/lib.rs`, `tools/gen_testdata.py`, `testdata/rig/rig_cases.json` (new), `tests/blender/addon_apply.py`, `IMPLEMENTATION_PROGRESS.md` (FR-CTL-004 split, FR-TRK-003, FR-BL-003, pytest row, NFR-QA-003, anchors), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - Generator: its first run failed my own hand-derived check (I'd written local x = +0.5; left of a camera facing −X is local −X, so −0.5). I fixed the check and note, not the math. The first pytest run failed one case by about 1e-9 because the expected values were computed from unrounded inputs; I fixed the generator to round inputs first.
+  - `pytest BlenderAddOn/tests`: 12 passed (8 rig vectors, the origin_epoch vector, control merging, 2 host ID).
+  - `addon_apply.py` (fake iPhone, headless Blender 5.2.2, user rig at (1, 2, 0.5), yaw 90°, scale 2): `VCAM_ADDON_APPLY_OK keyposes=5 max_err=1.79e-07 rig_err=1.12e-07 applied_pose_seq=390 camera=Camera`, with control_ack=1 on the device. The first run failed on world matrices: the local transforms were exact, but a child's `matrix_world` is only re-evaluated by the depsgraph, so the test now calls `view_layer.update()` before reading it (the GUI evaluates on every redraw). Also covered: the stub-driven "combined" vector (Set origin via an epoch change, then scale 2 + locks 3) and the no-camera STATUS.
+  - **Mutation check** (restored and `cmp`-verified): heading sign, lock height ignored, scale ignored, lock roll ignored, and the first epoch counted as a reset all failed pytest; the zero not read back, control_ack always 0, and the user rig ignored all failed `addon_apply.py`. 8/8 caught.
+  - Blender `smoke_native`/`session_native`/`addon_session` pass. `cargo fmt --check`/clippy clean; `cargo test` 59 passed. `gen_testdata.py --check`: up to date (21 files). `xcodebuild test`: 11 tests, 0 failures, `** TEST SUCCEEDED **`.
+- **Not verified:** CONTROL_STATE changes over the real wire into Blender (1.3.2b); the rig in the GUI.
+- **Blocked:** none.
+- **Next task:** 1.3.2b — fake-iPhone control scripting and the Blender end-to-end check of scale, locks and Set origin. No second task started.
+- **Owner actions:** push (this commit makes 20 ahead). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.

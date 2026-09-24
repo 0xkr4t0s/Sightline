@@ -31,6 +31,8 @@ testdata/vcp/pairing.json    one full SRP-6a pairing (vcp.md §9) with fixed sec
 testdata/vcp/session.json    one session setup (vcp.md §10) from the pairing key above.
 testdata/vcp/srp-rfc5054-appendix-b.json   the RFC 5054 vectors (SHA-1, 1024-bit).
 testdata/coords/arkit_to_canonical.json    DM-004 cases (vcp.md §7).
+testdata/rig/rig_cases.json   rig math (task 1.3.2a): device pose + Set-origin zero + motion scale + lock
+                             flags -> the camera's local pose under VCam_Origin.
 testdata/motion/scripted.json   fake-iPhone motion (task 1.2.7): canonical frames at rate_hz and the
                              named keyposes (frame index, position, orientation, matrix_world).
 testdata/motion/scripted.bin    the same frames for vcam-fake-iphone: "VCMO", u16 version 1,
@@ -667,6 +669,123 @@ def build_motion() -> tuple[dict, bytes]:
     return doc, blob
 
 
+def build_rig() -> dict:
+    """Reference for BlenderAddOn/core/rig.py, written with 3x3 matrices (not quaternions)."""
+
+    def mat(q):
+        x, y, z, w = q
+        return [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+
+    def mmul(a, b):
+        return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+
+    def mvec(m, v):
+        return [sum(m[i][k] * v[k] for k in range(3)) for i in range(3)]
+
+    def rz(a):
+        c, s = math.cos(a), math.sin(a)
+        return [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]
+
+    def col(m, j):
+        return [m[0][j], m[1][j], m[2][j]]
+
+    def heading(m):
+        f = [-c for c in col(m, 2)]
+        if math.hypot(f[0], f[1]) < 1e-6:
+            f = col(m, 1)
+        return math.atan2(-f[0], f[1])
+
+    def quat(m):
+        # Largest-component extraction, then w >= 0.
+        t = m[0][0] + m[1][1] + m[2][2]
+        cands = [(1 + t, 3), (1 + m[0][0] - m[1][1] - m[2][2], 0), (1 - m[0][0] + m[1][1] - m[2][2], 1),
+                 (1 - m[0][0] - m[1][1] + m[2][2], 2)]
+        v, k = max(cands)
+        r = math.sqrt(v) * 2
+        if k == 3:
+            q = ((m[2][1] - m[1][2]) / r, (m[0][2] - m[2][0]) / r, (m[1][0] - m[0][1]) / r, r / 4)
+        elif k == 0:
+            q = (r / 4, (m[0][1] + m[1][0]) / r, (m[0][2] + m[2][0]) / r, (m[2][1] - m[1][2]) / r)
+        elif k == 1:
+            q = ((m[0][1] + m[1][0]) / r, r / 4, (m[1][2] + m[2][1]) / r, (m[0][2] - m[2][0]) / r)
+        else:
+            q = ((m[0][2] + m[2][0]) / r, (m[1][2] + m[2][1]) / r, r / 4, (m[1][0] - m[0][1]) / r)
+        return qcanon(q)
+
+    def cross(a, b):
+        return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+
+    def expected(p, q, zero_pose, scale, locks):
+        p0, yaw0 = ([0.0, 0.0, 0.0], 0.0) if zero_pose is None else (list(zero_pose[0]), heading(mat(zero_pose[1])))
+        un = rz(-yaw0)
+        r = mmul(un, mat(q))
+        prel = mvec(un, [a - b for a, b in zip(p, p0)])
+        if locks & 4:
+            prel = [0.0, 0.0, 0.0]
+        if locks & 1:
+            prel[2] = 0.0
+        if locks & 2:
+            f = [-c for c in col(r, 2)]
+            up = [-f[0] * f[2], -f[1] * f[2], 1 - f[2] * f[2]]
+            n = math.sqrt(sum(c * c for c in up))
+            if n >= 1e-6:
+                up = [c / n for c in up]
+                back = [-c for c in f]
+                x = cross(up, back)
+                r = [[x[i], up[i], back[i]] for i in range(3)]
+        return [scale * c for c in prel], quat(r), yaw0
+
+    level = qaxis((1, 0, 0), 90)  # looks along +Y, up +Z
+
+    def cam(yaw, pitch=0.0, roll=0.0):
+        # World yaw about Z, then camera-local pitch about X and roll about the view axis (local Z).
+        return qcanon(qmul(qmul(qaxis((0, 0, 1), yaw), level), qmul(qaxis((1, 0, 0), pitch), qaxis((0, 0, 1), roll))))
+
+    tilted = cam(30, -20, 15)
+    cases = []
+
+    def case(name, p, q, zero_pose=None, scale=1.0, locks=0, note=""):
+        # Compute from the rounded values actually written, so consumers start from the same inputs.
+        p, q = rnd(p), rnd(q)
+        if zero_pose is not None:
+            zero_pose = (rnd(zero_pose[0]), rnd(zero_pose[1]))
+        pos, rot, yaw0 = expected(p, q, zero_pose, scale, locks)
+        cases.append({
+            "name": name, "note": note, "position": rnd(p), "orientation": rnd(q),
+            "zero_pose": None if zero_pose is None else {"position": rnd(zero_pose[0]), "orientation": rnd(zero_pose[1])},
+            "zero_yaw": round(yaw0, 12), "motion_scale": scale, "lock_flags": locks,
+            "expected_position": rnd(pos), "expected_orientation": rnd(rot),
+        })
+
+    case("identity", (0, 0, 0), (0, 0, 0, 1), note="no zero, no locks: local = device pose")
+    case("scale_10", (0.5, -1.25, 1.6), level, scale=10.0, note="1:10 motion scale; rotation unscaled")
+    case("lock_roll", (1, 2, 1.7), tilted, locks=2, note="yaw 30, pitch -20, roll 15 -> roll removed, heading and pitch kept")
+    case("lock_height", (1, 2, 1.7), tilted, locks=1, note="local z = 0")
+    case("pan_only", (1, 2, 1.7), tilted, locks=4, note="position locked at the origin")
+    case("set_origin_then_walk", (-1, 0.5, 1.2), cam(100, -5), zero_pose=((1, 1, 1.6), cam(90)),
+         note="zero at a camera facing -X; 2 m along -X and 0.5 m to its left -> local (-0.5, 2, -0.4) (forward +Y, right +X), yaw +10")
+    case("combined", (-1, 0.5, 1.2), cam(100, -5, 8), zero_pose=((1, 1, 1.6), cam(90)), scale=2.0, locks=3,
+         note="zero + scale 2 + lock height + lock roll")
+    case("straight_down_lock_roll", (0, 0, 2), (0, 0, 0, 1), zero_pose=((0, 0, 2), qaxis((0, 0, 1), 45)), locks=2,
+         note="looking straight down: heading from the up vector; roll undefined, so the rotation is kept")
+
+    walk = next(c for c in cases if c["name"] == "set_origin_then_walk")
+    assert all(abs(a - b) < 1e-9 for a, b in zip(walk["expected_position"], (-0.5, 2.0, -0.4))), walk
+    assert abs(walk["zero_yaw"] - math.pi / 2) < 1e-12, walk
+    # Lock roll on a rolled camera equals the same camera without roll (independent of the matrix path).
+    no_roll = next(c for c in cases if c["name"] == "lock_roll")["expected_orientation"]
+    assert all(abs(a - b) < 1e-9 for a, b in zip(no_roll, rnd(cam(30, -20)))), no_roll
+    return {
+        "note": "Camera local pose under VCam_Origin (BlenderAddOn/core/rig.py). Quaternions are "
+                "x, y, z, w with w >= 0; compare positions and orientations to 1e-9 (q and -q are "
+                "equal). zero_pose null means no Set origin yet (identity zero).",
+        "lock_flags": {"lock_height": 1, "lock_roll": 2, "pan_only": 4},
+        "cases": cases,
+    }
+
+
 def build_coords() -> dict:
     q_c = qaxis((1, 0, 0), 90)
 
@@ -767,6 +886,7 @@ def build_all() -> dict[str, bytes]:
         "vcp/srp-rfc5054-appendix-b.json": dumps(rfc).encode(),
         "coords/arkit_to_canonical.json": dumps(build_coords()).encode(),
         "motion/scripted.json": dumps(motion).encode(),
+        "rig/rig_cases.json": dumps(build_rig()).encode(),
         "motion/scripted.bin": motion_bin,
     }
     files.update({f"vcp/{name}": data for name, data in bins.items()})
@@ -780,7 +900,7 @@ def main():
     files = build_all()
     if args.check:
         stale = [p for p, data in files.items() if not (OUT / p).exists() or (OUT / p).read_bytes() != data]
-        extra = [str(p.relative_to(OUT)) for d in ("vcp", "coords", "motion") for p in (OUT / d).glob("*")
+        extra = [str(p.relative_to(OUT)) for d in ("vcp", "coords", "motion", "rig") for p in (OUT / d).glob("*")
                  if str(p.relative_to(OUT)) not in files]
         if stale or extra:
             print(f"testdata/ is out of date. stale={stale} extra={extra}. Run tools/gen_testdata.py")
