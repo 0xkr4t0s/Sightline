@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = [
+    "vcam-protocol",
+    "vcam-net",
+    "vcam-video",
+    "vcam-py",
+    "vcam-fake-iphone",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+
+[workspace.dependencies]
+vcam-protocol = { path = "vcam-protocol" }
+vcam-net = { path = "vcam-net" }
+vcam-video = { path = "vcam-video" }
+
+# NFR-QA-004: unsafe only in FFI/encoder-backend modules (opt in there with
+# `#[allow(unsafe_code)]`), and every unsafe block needs a `// SAFETY:` comment.
+# AGENTS/loop rules: no unwrap/expect outside tests (see clippy.toml).
+[workspace.lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
+expect_used = "deny"

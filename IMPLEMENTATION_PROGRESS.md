@@ -14,7 +14,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 |---|---|---|
 | iOS tracking (`VCamIOS/`) | Partial | Headless ARKit session sending FreeD over UDP. Good base for FR-TRK-001/005. The packet format and Euler conversion must be replaced with VCP + quaternions. |
 | Blender extension (`BlenderAddOn/`) | Partial | Background UDP thread + main-thread apply works. FreeD/JSON parsing in Python must be replaced by the Rust module. Manifest pins 5.1. |
-| Rust native module | Not started | No `native/` workspace yet. Rust 1.97.1 is installed; maturin 1.15.0 is in `.venv.nosync/`. |
+| Rust native module | Partial | `native/` workspace skeleton with 5 crates (task 0.1.3); fmt/clippy/test pass. No PyO3 module yet (0.1.4). maturin 1.15.0 is in `.venv.nosync/`. |
 | Viewfinder stream (Blender → iPhone) | Not started | — |
 | C++ `legacy/DesktopReceiver/` (incl. CMIO extension) | Retire | Moved to `legacy/` in task 0.1.2 (ARC-006). Port the parsers, their tests, and the test-pattern generator to Rust, then delete the directory. |
 | Repo / CI | Partial | One git repo at the root (task 0.1.1). `VCamIOS` history imported under `VCamIOS/` (commits `ae4d81c`, `984145a`, `5ba2672`). No CI. |
@@ -40,7 +40,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | ID | Status | Evidence / gap |
 |---|---|---|
 | ARC-001 | Partial | `BlenderAddOn/blender_manifest.toml` exists (extension format); no wheels or native module. |
-| ARC-002 | Not started | |
+| ARC-002 | Partial | Crates split as required (`native/Cargo.toml:3-9`). `vcam-protocol` is `#![forbid(unsafe_code)]` (`native/vcam-protocol/src/lib.rs:4`). Skeleton only; no protocol, net, or encoder code yet. |
 | ARC-003 | Not started | No canonical pose; FreeD frame structs used throughout. |
 | ARC-004 | Not started | iOS doesn't send a capture time or sequence number; Blender stamps receive time. |
 | ARC-005 | Partial | Swift 5 mode with default `MainActor` isolation; every AR frame hops to the main actor to send (`VCamIOS/VCamIOS/TrackingSessionController.swift`). |
@@ -105,8 +105,9 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | LNS-* | Not started | |
 | NFR-LAT-*, NFR-PERF-* | Not started | No measurements. |
 | NFR-REL-*, NFR-SEC-* | Not started | Any host can send poses; no pairing. |
-| NFR-QA-001 | Partial | One git repo: root `.git` with `VCamIOS` history, `.gitignore` at `.gitignore:1-33`. `xcodebuild test` works. `cargo test` (0.1.3) and headless Blender tests (0.1.4) don't exist yet. |
-| NFR-QA-002..004 | Not started | |
+| NFR-QA-001 | Partial | One git repo: root `.git` with `VCamIOS` history. `xcodebuild test` and `cargo test` (in `native/`) work. Headless Blender tests (0.1.4) don't exist yet. |
+| NFR-QA-002/003 | Not started | |
+| NFR-QA-004 | Partial | Enforced by workspace lints: `unsafe_code` deny plus `clippy::undocumented_unsafe_blocks` deny (`native/Cargo.toml:22-32`). Checked with a throwaway probe: clippy rejected an uncommented `unsafe` block. |
 
 ---
 

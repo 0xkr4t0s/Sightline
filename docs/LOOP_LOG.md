@@ -77,3 +77,26 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Flag for owner:** `AGENTS.md:18` still says `` `DesktopReceiver/` ``, and `VCamIOS/VCamIOS/PLAN.md` refers to it too. The loop may not edit `AGENTS.md`. `PLAN.md` is a historical, superseded doc, so I left it as is.
 - **Blocked:** none.
 - **Next task:** 0.1.3. Create the Rust workspace skeleton (`native/`) with the crates, `rust-toolchain.toml`, clippy/rustfmt config, and one passing test per crate.
+
+## 2026-09-24 — Iteration 4 — 0.1.3 (ARC-002) — done (fuzz/ deferred)
+
+- **Work:** Rust workspace `native/` (resolver 3, edition 2024, `rust-version = "1.97"`, `publish = false`) with the members `vcam-protocol`, `vcam-net`, `vcam-video`, `vcam-py`, `vcam-fake-iphone` (binary). Dependency graph: `vcam-net` → `vcam-protocol`; `vcam-py` → protocol, net, video; `vcam-fake-iphone` → protocol, net; `vcam-video` uses protocol only as a dev-dependency. Each crate has one test that checks this wiring and the shared version (5 tests total).
+  - `rust-toolchain.toml`: stable, with rustfmt and clippy. `rustfmt.toml`: edition 2024, Unix newlines.
+  - Lints (`native/Cargo.toml:22-32`):
+    - `unsafe_code` deny, `unsafe_op_in_unsafe_fn` deny;
+    - clippy `undocumented_unsafe_blocks`, `unwrap_used`, `expect_used` deny;
+    - `clippy.toml` allows unwrap and expect in tests;
+    - `vcam-protocol` additionally has `#![forbid(unsafe_code)]` (ARC-002: no platform code).
+  - `Cargo.lock` committed, since the workspace contains a binary.
+- **No external dependencies added.** PyO3 arrives in 0.1.4.
+- **Deferred: `native/fuzz/`.** Moved to task 1.1.3, which adds the fuzz targets. A cargo-fuzz crate needs nightly plus `libfuzzer-sys` and something to fuzz, and `vcam-protocol` has no decoder yet. 1.1.3 must create `native/fuzz/` (excluded from the workspace).
+- **Files changed:** `native/{Cargo.toml,Cargo.lock,rust-toolchain.toml,rustfmt.toml,clippy.toml}`, `native/vcam-*/{Cargo.toml,src/*.rs}` (new), `IMPLEMENTATION_PROGRESS.md` (Rust summary; ARC-002 and NFR-QA-004 now Partial; NFR-QA-001 evidence), `docs/LOOP_LOG.md`.
+- **Commands run (in `native/`):**
+  - `cargo fmt --check`: pass after running `cargo fmt` (the first check found 2 formatting diffs).
+  - `cargo clippy --all-targets -- -D warnings`: `Finished`, 0 warnings.
+  - `cargo test`: 5 × `test result: ok. 1 passed; 0 failed`.
+  - Lint probe (temporary, reverted): adding `.unwrap()` and an uncommented `unsafe {}` to `vcam-net` made clippy fail with `error: used unwrap() on an Option value` and `error: unsafe block missing a safety comment`. After the revert, clippy finished clean.
+  - Build output went to `native/target.nosync/` (ignored).
+  - Python, iOS, and Blender suites not affected.
+- **Blocked:** none.
+- **Next task:** 0.1.4. Add a minimal PyO3 `vcam_native.version()` in `vcam-py`, build it with maturin for Blender's Python 3.13, update the manifest (5.2.0, wheels, platforms), and prove `import vcam_native` works in headless Blender 5.2.
