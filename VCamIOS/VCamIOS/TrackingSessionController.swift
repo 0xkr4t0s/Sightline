@@ -13,7 +13,11 @@ final class TrackingSessionController {
     var portText: String
     private(set) var isTracking = false
     private(set) var packetsSent = 0
-    private(set) var latestPose = TrackingPose.zero
+    /// The newest pose as sent (canonical axes, vcp.md §7), or nil before the first frame.
+    private(set) var latestPose: VCPPose?
+    /// The authenticated session poses are sealed with. It comes from pairing and session setup
+    /// over TCP (tasks 1.1.4b/1.4.3), which don't exist yet; until then poses are shown, not sent.
+    private(set) var sessionEndpoint: VCPEndpoint?
     private(set) var sessionStatus = "Idle"
     private(set) var lastError: String?
 
@@ -68,14 +72,14 @@ final class TrackingSessionController {
 
             TrackingSettings(host: destination.host, port: Int(destination.port)).save()
             host = destination.host
-            pipeline.start(host: destination.host, port: destination.port)
+            pipeline.start(TrackingDestination(host: destination.host, port: destination.port, endpoint: sessionEndpoint))
 
             let configuration = ARWorldTrackingConfiguration()
             configuration.worldAlignment = .gravity
 
             lastError = nil
             packetsSent = 0
-            latestPose = .zero
+            latestPose = nil
             isTracking = true
             sessionStatus = "Starting"
             session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
@@ -195,8 +199,11 @@ nonisolated final class ARFrameReceiver: NSObject, ARSessionDelegate, Sendable {
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        // Copy the values out: holding the ARFrame would stall ARKit's frame pool.
-        pipeline.receive(transform: frame.camera.transform, timestamp: frame.timestamp)
+        // Copy the values out: holding the ARFrame would stall ARKit's frame pool. The tracking
+        // state travels with every pose (FR-TRK-002).
+        let camera = frame.camera
+        pipeline.receive(transform: camera.transform, timestamp: frame.timestamp,
+                         trackingState: VCPTrackingState.code(for: camera.trackingState))
     }
 
     func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {

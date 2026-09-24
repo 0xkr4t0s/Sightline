@@ -36,15 +36,17 @@ struct ContentView: View {
 
                     LabeledContent("Packets Sent", value: "\(controller.packetsSent)")
                     LabeledContent("Session", value: controller.sessionStatus)
+                    if controller.sessionEndpoint == nil {
+                        Text("Not paired with Blender: poses are shown here but not sent.")
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
-                Section("Pose") {
-                    LabeledContent("X", value: formatted(controller.latestPose.x))
-                    LabeledContent("Y", value: formatted(controller.latestPose.y))
-                    LabeledContent("Z", value: formatted(controller.latestPose.z))
-                    LabeledContent("Pitch", value: formatted(controller.latestPose.pitch))
-                    LabeledContent("Yaw", value: formatted(controller.latestPose.yaw))
-                    LabeledContent("Roll", value: formatted(controller.latestPose.roll))
+                Section("Pose (Blender axes)") {
+                    let pose = controller.latestPose
+                    LabeledContent("Seq", value: pose.map { "\($0.seq)" } ?? "–")
+                    LabeledContent("Position (m)", value: pose.map { formatted($0.position) } ?? "–")
+                    LabeledContent("Orientation (x y z w)", value: pose.map { formatted($0.orientation) } ?? "–")
                 }
 
                 Section("Status") {
@@ -56,8 +58,8 @@ struct ContentView: View {
         }
     }
 
-    private func formatted(_ value: Double) -> String {
-        String(format: "%.3f", value)
+    private func formatted<V: SIMD>(_ v: V) -> String where V.Scalar == Float {
+        v.indices.map { String(format: "%.3f", v[$0]) }.joined(separator: " ")
     }
 }
 

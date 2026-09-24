@@ -1066,3 +1066,42 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Not verified (BLOCKED, needs owner/device):** ARKit frames on the delegate queue on a real iPhone (`assumeIsolated` would trap if ARKit ignored `delegateQueue`), and the UI refresh rate on the device.
 - **Next task:** 1.4.2 — replace FreeD/Euler with VCP `POSE` (seq, capture time, quaternion, state) (FR-TRK-001/002, PR-FD-001). No second task started.
 - **Owner actions:** push (this commit makes 26 ahead; includes the owner's `.omp/` ignore commit `468a4a3`). Run the app on an iPhone once to confirm tracking still streams (device test). Still pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.
+
+## 2026-09-25 — Iteration 39 — 1.4.2 (FR-TRK-001/002, PR-FD-001) — sub-step 1.4.2a done
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 26 ahead of `origin`. The existing Phase 1 owner waiver applies.
+- **Split:**
+  - **1.4.2a (this iteration):** the device builds VCP `POSE` (seq, capture time, canonical quaternion, tracking state), seals it with a session endpoint and sends it over UDP. The FreeD/Euler code is deleted.
+  - **1.4.2b:** give the pipeline a real `VCPEndpoint` from the TCP session. That needs the Swift pairing and session code (1.1.4b, **BLOCKED on the owner's `swift-srp` decision**), and it overlaps 1.4.3.
+  - Until then the app runs ARKit and shows poses, with the note "Not paired with Blender: poses are shown here but not sent". Blender dropped FreeD in 1.3.1, so nothing that worked before is lost.
+- **Change:**
+  - `TrackingPipeline`: `start(TrackingDestination)`, where the destination is host, port and an optional `VCPEndpoint`.
+    - Per frame: `seq &+= 1` (restarting at 1 each run), `capture_time_ns` = `ARFrame.timestamp`·1e9 rounded, then `VCPCoordinates.canonicalPose`, then `VCPPose`.
+    - `endpoint.seal(.pose)` goes to `UDPSender` when there is an endpoint.
+    - Snapshots carry the `VCPPose`.
+  - New `VCP/VCPTrackingState.swift`: the vcp.md §6.1 codes from `ARCamera.TrackingState`, taken from each frame's own camera.
+  - `ARFrameReceiver` passes the state with every frame.
+  - Controller: `latestPose: VCPPose?` and `sessionEndpoint` (nil until 1.4.2b).
+  - UI: seq, canonical position and quaternion, and the not-paired note.
+  - Deleted: `FreeDPacketEncoder.swift`, `TrackingPose.swift`, `FreeDPacketEncoderTests.swift`. The test target's membership was updated.
+- **Finding:** the device's ARKit → canonical quaternion for the §6.1 example is `0x3F3504F4` for w, while the golden vector (Python-rounded 0.7071068) has `…F3`: a 1-ulp difference. The host renormalises accepted quaternions, so it doesn't matter on the wire. The end-to-end test therefore checks that the datagram is authentic under the host key with the exact header, seq, time, position, state and flags, and a quaternion within 1.5e-7. No vector change is needed.
+- **O-1** (which clock `ARFrame.timestamp` uses): the iOS SDK header only says "A timestamp identifying the frame". It stays open and needs a device check before the device's `CLOCK` replies are written; that part is owner/device-blocked.
+- **Files changed:** `VCamIOS/VCamIOS/{TrackingPipeline.swift,TrackingSessionController.swift,ContentView.swift,VCP/VCPTrackingState.swift (new)}`, deleted `VCamIOS/VCamIOS/{FreeDPacketEncoder.swift,TrackingPose.swift}` and `VCamIOS/VCamIOSTests/FreeDPacketEncoderTests.swift`, `VCamIOS/VCamIOSTests/TrackingPipelineTests.swift`, `VCamIOS/VCamIOS.xcodeproj/project.pbxproj` (test membership), `IMPLEMENTATION_PROGRESS.md` (FR-TRK-001/002, PR-FD-001, iOS test row), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `xcodebuild test` (iPhone 17 Pro sim, Swift 6): `Executed 12 tests, with 0 failures`, `** TEST SUCCEEDED **`, no Swift warnings. New tests:
+    - the golden POSE over a real loopback UDP socket;
+    - an unpaired run sends nothing but still builds poses;
+    - seq, capture time and state are carried, seq restarts per run, and frames after stop are dropped;
+    - the tracking-state table.
+  - The first runs failed: a compile error (`self` captured before init in the test socket helper, now fixed) and the byte-exact golden comparison (the 1-ulp finding above).
+  - **Mutation check** (restored and `cmp`-verified):
+    - seq not reset: `9 != 1`;
+    - capture time in µs: `1000000 != 1000000000`, and jitter windows over the limit;
+    - wrong session and keys: host `open` failed with `VCPDropReason` 5 and a header mismatch;
+    - relocalizing → initializing: the table test failed.
+  - **Simulator smoke:** built, installed and launched; `launchctl` lists the app. No screenshot was captured this time (the `simctl io` call wrote no file).
+  - `pytest BlenderAddOn/tests`: 19 passed. `gen_testdata.py --check`: up to date (21 files). `cargo test`: 60 passed, 0 failed.
+- **Not verified:** a device run and a Swift ↔ Rust live session (both need 1.1.4b and a device).
+- **Blocked:** 1.4.2b (needs 1.1.4b / the `swift-srp` decision).
+- **Next task:** 1.4.3 — discovery (`NetworkBrowser`), pairing UI, Keychain, `NSLocalNetworkUsageDescription`, `NSBonjourServices` (FR-UX-001/002, C-4). Its pairing part is blocked like 1.4.2b, so start with 1.4.3a: Bonjour discovery plus the Info.plist keys. No second task started.
+- **Owner actions:** push (this commit makes 27 ahead). **Decide on `swift-srp`**: it now blocks the iPhone sending anything to Blender. Still pending: the `mdns-sd`/`getrandom` reviews, and a device run.

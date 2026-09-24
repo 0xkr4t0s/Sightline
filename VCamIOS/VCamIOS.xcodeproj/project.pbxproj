@@ -30,13 +30,12 @@
 		9E380C5A2F8567040073B53B /* Exceptions for "VCamIOS" folder in "VCamIOSTests" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				FreeDPacketEncoder.swift,
 				TrackingPipeline.swift,
-				TrackingPose.swift,
 				UDPSender.swift,
 				VCP/VCPCoordinates.swift,
 				VCP/VCPEndpoint.swift,
 				VCP/VCPMessages.swift,
+				VCP/VCPTrackingState.swift,
 			);
 			target = 9E74B7DA2F84AF9400B754DD /* VCamIOSTests */;
 		};
