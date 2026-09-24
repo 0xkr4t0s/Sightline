@@ -928,3 +928,24 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none.
 - **Next task:** 1.3.2b — fake-iPhone control scripting and the Blender end-to-end check of scale, locks and Set origin. No second task started.
 - **Owner actions:** push (this commit makes 20 ahead). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.
+
+## 2026-09-25 — Iteration 34 — 1.3.2b (FR-CTL-004, FR-TRK-003, FR-BL-003) — done
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 20 ahead of `origin`; no new CI run. Existing Phase 1 owner waiver applies.
+- **Scope:** fake-iPhone control scripting plus the end-to-end check in Blender of scale, locks and Set origin over the real wire. No new dependencies.
+- **`vcam-fake-iphone`:**
+  - New options: `--scale S` (validated to [0.001, 1000] as in vcp.md §6.2), `--locks FLAGS` (bits 0-2 only), and `--set-origin-at FRAME`.
+  - Behaviour: the first complete CONTROL_STATE carries the scale and locks with epoch 0. At the given frame the fake iPhone presses Set origin: `state_seq` + 1 and epoch + 1, sent at once before that frame and then every 500 ms.
+- **Vectors:** `tools/gen_testdata.py` `build_rig(motion)` adds `scripted_tilt`, `scripted_dolly` and `scripted_crane`: the keyposes after Set origin at frame 105, inside the pan hold where the pose equals the pan keypose, with scale 2 and lock height. It also adds a `scripted` block (set_origin_at, scale, locks, case names) and self-checks that the dolly comes out as local (0, 4, 0), i.e. 2 m along the zeroed heading × 2.
+- **Files changed:** `native/vcam-fake-iphone/{src/main.rs,tests/fake_iphone.rs}`, `tools/gen_testdata.py`, `testdata/rig/rig_cases.json`, `tests/blender/addon_apply.py` (the fake runs refactored into `run_fake()`; run 2 reconnects with the stored pairing and scripted controls), `IMPLEMENTATION_PROGRESS.md` (FR-CTL-004, FR-TRK-003, FR-BL-003, pytest row, NFR-QA-003), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `cargo test`: 60 passed, 0 failed, including the new `scripted_controls_reach_the_host_in_order`: the host saw exactly [(1, 2.0, 5, 0), (2, 2.0, 5, 1)], and `--scale 5000` was rejected. `cargo fmt --check` OK; clippy clean.
+  - `pytest BlenderAddOn/tests`: 15 passed (the 3 new scripted vectors through `rig.py`). `gen_testdata.py --check`: up to date (21 files).
+  - Headless Blender 5.2.2 `addon_apply.py`: `VCAM_ADDON_APPLY_OK keyposes=5 max_err=1.79e-07 scripted_err=5.96e-08 rig_err=1.12e-07 applied_pose_seq=390 camera=Camera`. Run 2's device-side `control_ack=2`.
+  - **Mutation check** (restored and `cmp`-verified): the fake iPhone sending Set origin without an epoch bump, and the add-on not resetting its controls/apply state per session. Both failed `addon_apply.py`.
+  - Other Blender scripts: `VCAM_NATIVE_OK 0.1.0`, `VCAM_SESSION_OK ... stop_ms=54`, `VCAM_ADDON_SESSION_OK ... disable_ms=67`. `xcodebuild test`: 11 tests, 0 failures, `** TEST SUCCEEDED **`.
+- **1.3.2 status:** 1.3.2a and 1.3.2b are both done, so task 1.3.2 is complete.
+- **Not verified:** the rig in the interactive GUI; iOS-side controls (1.4.4).
+- **Blocked:** none.
+- **Next task:** 1.3.3 — N-panel: session toggle, pairing code, device, stats, camera picker, origin reset, scale/locks (FR-BL-004). No second task started.
+- **Owner actions:** push (this commit makes 21 ahead). Pending: the `mdns-sd`/`getrandom` reviews and the `swift-srp` decision.

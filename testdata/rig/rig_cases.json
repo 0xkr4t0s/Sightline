@@ -275,6 +275,132 @@
         ]
       },
       "zero_yaw": 0.78539816279
+    },
+    {
+      "expected_orientation": [
+        0.499999992,
+        0.0,
+        2.7e-08,
+        0.866025408
+      ],
+      "expected_position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "lock_flags": 1,
+      "motion_scale": 2.0,
+      "name": "scripted_tilt",
+      "note": "fake iPhone --scale 2 --locks 1 --set-origin-at 105: tilt keypose",
+      "orientation": [
+        0.353553385,
+        0.353553385,
+        0.612372458,
+        0.612372458
+      ],
+      "position": [
+        0.0,
+        0.0,
+        1.600000024
+      ],
+      "zero_pose": {
+        "orientation": [
+          0.5,
+          0.5,
+          0.5,
+          0.5
+        ],
+        "position": [
+          0.0,
+          0.0,
+          1.600000024
+        ]
+      },
+      "zero_yaw": 1.570796326795
+    },
+    {
+      "expected_orientation": [
+        0.499999992,
+        0.0,
+        2.7e-08,
+        0.866025408
+      ],
+      "expected_position": [
+        0.0,
+        4.0,
+        0.0
+      ],
+      "lock_flags": 1,
+      "motion_scale": 2.0,
+      "name": "scripted_dolly",
+      "note": "fake iPhone --scale 2 --locks 1 --set-origin-at 105: dolly keypose",
+      "orientation": [
+        0.353553385,
+        0.353553385,
+        0.612372458,
+        0.612372458
+      ],
+      "position": [
+        -2.0,
+        0.0,
+        1.600000024
+      ],
+      "zero_pose": {
+        "orientation": [
+          0.5,
+          0.5,
+          0.5,
+          0.5
+        ],
+        "position": [
+          0.0,
+          0.0,
+          1.600000024
+        ]
+      },
+      "zero_yaw": 1.570796326795
+    },
+    {
+      "expected_orientation": [
+        0.499999992,
+        0.0,
+        2.7e-08,
+        0.866025408
+      ],
+      "expected_position": [
+        0.0,
+        4.0,
+        0.0
+      ],
+      "lock_flags": 1,
+      "motion_scale": 2.0,
+      "name": "scripted_crane",
+      "note": "fake iPhone --scale 2 --locks 1 --set-origin-at 105: crane keypose",
+      "orientation": [
+        0.353553385,
+        0.353553385,
+        0.612372458,
+        0.612372458
+      ],
+      "position": [
+        -2.0,
+        0.0,
+        3.099999905
+      ],
+      "zero_pose": {
+        "orientation": [
+          0.5,
+          0.5,
+          0.5,
+          0.5
+        ],
+        "position": [
+          0.0,
+          0.0,
+          1.600000024
+        ]
+      },
+      "zero_yaw": 1.570796326795
     }
   ],
   "lock_flags": {
@@ -282,5 +408,16 @@
     "lock_roll": 2,
     "pan_only": 4
   },
-  "note": "Camera local pose under VCam_Origin (BlenderAddOn/core/rig.py). Quaternions are x, y, z, w with w >= 0; compare positions and orientations to 1e-9 (q and -q are equal). zero_pose null means no Set origin yet (identity zero)."
+  "note": "Camera local pose under VCam_Origin (BlenderAddOn/core/rig.py). Quaternions are x, y, z, w with w >= 0; compare positions and orientations to 1e-9 (q and -q are equal). zero_pose null means no Set origin yet (identity zero).",
+  "scripted": {
+    "cases": [
+      "scripted_tilt",
+      "scripted_dolly",
+      "scripted_crane"
+    ],
+    "lock_flags": 1,
+    "motion": "motion/scripted.bin",
+    "motion_scale": 2.0,
+    "set_origin_at": 105
+  }
 }

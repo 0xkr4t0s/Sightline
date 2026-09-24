@@ -669,8 +669,12 @@ def build_motion() -> tuple[dict, bytes]:
     return doc, blob
 
 
-def build_rig() -> dict:
-    """Reference for BlenderAddOn/core/rig.py, written with 3x3 matrices (not quaternions)."""
+def build_rig(motion: dict) -> dict:
+    """Reference for BlenderAddOn/core/rig.py, written with 3x3 matrices (not quaternions).
+
+    Also the expected result of the scripted fake-iPhone run with controls (task 1.3.2b): Set
+    origin inside the pan hold, motion scale 2, lock height, then the later keyposes.
+    """
 
     def mat(q):
         x, y, z, w = q
@@ -771,6 +775,19 @@ def build_rig() -> dict:
     case("straight_down_lock_roll", (0, 0, 2), (0, 0, 0, 1), zero_pose=((0, 0, 2), qaxis((0, 0, 1), 45)), locks=2,
          note="looking straight down: heading from the up vector; roll undefined, so the rotation is kept")
 
+    keys = {k["name"]: k for k in motion["keyposes"]}
+    pan = keys["pan"]
+    set_origin_at = pan["frame"] - 14  # inside the 30-frame pan hold: the pose equals the keypose
+    assert motion["frames"][set_origin_at] == motion["frames"][pan["frame"]]
+    scripted = []
+    for name in ("tilt", "dolly", "crane"):
+        k = keys[name]
+        case(f"scripted_{name}", k["position"], k["orientation"], zero_pose=(pan["position"], pan["orientation"]),
+             scale=2.0, locks=1, note=f"fake iPhone --scale 2 --locks 1 --set-origin-at {set_origin_at}: {name} keypose")
+        scripted.append(f"scripted_{name}")
+    dolly = next(c for c in cases if c["name"] == "scripted_dolly")
+    assert all(abs(a - b) < 1e-6 for a, b in zip(dolly["expected_position"], (0.0, 4.0, 0.0))), dolly
+
     walk = next(c for c in cases if c["name"] == "set_origin_then_walk")
     assert all(abs(a - b) < 1e-9 for a, b in zip(walk["expected_position"], (-0.5, 2.0, -0.4))), walk
     assert abs(walk["zero_yaw"] - math.pi / 2) < 1e-12, walk
@@ -782,6 +799,8 @@ def build_rig() -> dict:
                 "x, y, z, w with w >= 0; compare positions and orientations to 1e-9 (q and -q are "
                 "equal). zero_pose null means no Set origin yet (identity zero).",
         "lock_flags": {"lock_height": 1, "lock_roll": 2, "pan_only": 4},
+        "scripted": {"motion": "motion/scripted.bin", "set_origin_at": set_origin_at, "motion_scale": 2.0,
+                     "lock_flags": 1, "cases": scripted},
         "cases": cases,
     }
 
@@ -886,7 +905,7 @@ def build_all() -> dict[str, bytes]:
         "vcp/srp-rfc5054-appendix-b.json": dumps(rfc).encode(),
         "coords/arkit_to_canonical.json": dumps(build_coords()).encode(),
         "motion/scripted.json": dumps(motion).encode(),
-        "rig/rig_cases.json": dumps(build_rig()).encode(),
+        "rig/rig_cases.json": dumps(build_rig(motion)).encode(),
         "motion/scripted.bin": motion_bin,
     }
     files.update({f"vcp/{name}": data for name, data in bins.items()})

@@ -216,3 +216,54 @@ fn wrong_code_fails_cleanly_and_stores_nothing() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("no stored pairing"));
 }
+
+#[test]
+fn scripted_controls_reach_the_host_in_order() {
+    let server = server();
+    let scratch = Scratch::new("controls");
+    let code = server.enable_pairing().unwrap();
+    let args = [
+        "--rate",
+        "2000",
+        "--linger",
+        "0.6",
+        "--scale",
+        "2",
+        "--locks",
+        "5",
+        "--set-origin-at",
+        "10",
+    ];
+    let child = spawn(&server, &scratch.state(), Some(&code), &args);
+    let mut states = Vec::new();
+    let out = drive(child, || {
+        if let Some(c) = server.latest_control() {
+            let c = c.state;
+            let seen = (c.state_seq, c.motion_scale, c.lock_flags, c.origin_epoch);
+            if states.last() != Some(&seen) {
+                states.push(seen);
+            }
+        }
+    });
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // The complete first state, then Set origin as a new state with the next epoch.
+    assert_eq!(
+        states,
+        [
+            (1, Some(2.0), Some(5), Some(0)),
+            (2, Some(2.0), Some(5), Some(1))
+        ],
+        "{states:?}"
+    );
+
+    let out = drive(
+        spawn(&server, &scratch.state(), None, &["--scale", "5000"]),
+        || {},
+    );
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--scale must be in [0.001, 1000]"));
+}

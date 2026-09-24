@@ -6,7 +6,7 @@
 //! ```text
 //! vcam-fake-iphone --host 127.0.0.1:47000 --state DIR/fake-iphone.key [--code 123456]
 //!                  --motion testdata/motion/scripted.bin [--rate HZ] [--linger SECONDS]
-//!                  [--name NAME]
+//!                  [--name NAME] [--scale S] [--locks FLAGS] [--set-origin-at FRAME]
 //! ```
 //! Prints `FAKE_IPHONE_PAIRED`, `FAKE_IPHONE_SESSION ...` and a final `FAKE_IPHONE_DONE ...`
 //! line on stdout. Any failure exits 1 with the reason on stderr.
@@ -54,6 +54,12 @@ struct Args {
     rate: Option<f64>,
     linger: Duration,
     name: String,
+    /// `CONTROL_STATE.motion_scale` (vcp.md §6.2).
+    scale: f32,
+    /// `CONTROL_STATE.lock_flags`: bit 0 lock height, bit 1 lock roll, bit 2 pan only.
+    locks: u8,
+    /// Press Set origin just before sending this frame index (bumps `origin_epoch`).
+    set_origin_at: Option<usize>,
 }
 
 fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
@@ -66,6 +72,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
         Duration::ZERO,
         "Fake iPhone".to_owned(),
     );
+    let (mut scale, mut locks, mut set_origin_at) = (1.0f32, 0u8, None);
     while let Some(flag) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("{flag} needs a value"));
         match flag.as_str() {
@@ -82,6 +89,21 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
             }
             "--linger" => linger = Duration::try_from_secs_f64(value()?.parse()?)?,
             "--name" => name = value()?,
+            "--scale" => {
+                let v: f32 = value()?.parse()?;
+                if !(v.is_finite() && (0.001..=1000.0).contains(&v)) {
+                    return Err("--scale must be in [0.001, 1000]".into());
+                }
+                scale = v;
+            }
+            "--locks" => {
+                let v: u8 = value()?.parse()?;
+                if v > 7 {
+                    return Err("--locks uses bits 0-2 only".into());
+                }
+                locks = v;
+            }
+            "--set-origin-at" => set_origin_at = Some(value()?.parse()?),
             other => return Err(format!("unknown argument {other}").into()),
         }
     }
@@ -93,6 +115,9 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
         rate,
         linger,
         name,
+        scale,
+        locks,
+        set_origin_at,
     })
 }
 
@@ -253,6 +278,7 @@ struct Stream {
     clock_replies: u64,
     status: Option<Status>,
     last_control: Option<Instant>,
+    control: ControlState,
 }
 
 impl Stream {
@@ -267,18 +293,13 @@ impl Stream {
         Ok(())
     }
 
-    /// Sends the complete v1 `CONTROL_STATE` when due (never changes, so `state_seq` stays 1).
+    /// Sends the complete v1 `CONTROL_STATE` at once after a change, then every 500 ms.
     fn control_due(&mut self) -> Result<()> {
         if self
             .last_control
             .is_none_or(|t| t.elapsed() >= CONTROL_INTERVAL)
         {
-            self.send(&Message::ControlState(ControlState {
-                state_seq: 1,
-                motion_scale: Some(1.0),
-                lock_flags: Some(0),
-                origin_epoch: Some(0),
-            }))?;
+            self.send(&Message::ControlState(self.control))?;
             self.last_control = Some(Instant::now());
         }
         Ok(())
@@ -375,11 +396,23 @@ fn run(args: &Args) -> Result<String> {
         clock_replies: 0,
         status: None,
         last_control: None,
+        control: ControlState {
+            state_seq: 1,
+            motion_scale: Some(args.scale),
+            lock_flags: Some(args.locks),
+            origin_epoch: Some(0),
+        },
     };
     let period = Duration::from_secs_f64(1.0 / rate);
     let mut next = Instant::now();
     for (i, (position_m, orientation)) in motion.frames.iter().enumerate() {
         s.service(next)?;
+        if args.set_origin_at == Some(i) {
+            // Set origin: a new complete state with the next epoch, sent before this frame.
+            s.control.state_seq += 1;
+            s.control.origin_epoch = s.control.origin_epoch.map(|e| e.wrapping_add(1));
+            s.last_control = None;
+        }
         s.control_due()?;
         let pose = Pose {
             seq: u32::try_from(i + 1)?,
