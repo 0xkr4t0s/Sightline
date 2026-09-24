@@ -12,3 +12,9 @@ workspace = true
 jpeg-encoder = "=0.7.1"
 turbojpeg = "=1.5.1"
 vcam-protocol.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-core-foundation = "=0.3.2"
+objc2-core-media = "=0.3.2"
+objc2-core-video = "=0.3.2"
+objc2-video-toolbox = "=0.3.2"

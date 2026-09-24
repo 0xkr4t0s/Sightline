@@ -1,0 +1,16 @@
+# S-2b VideoToolbox H.264, 2026-09-24, macOS arm64 (Apple M4 Pro), hardware encoder required, Main profile, no reordering, GOP 60, 30 fps real-time pacing, 150 timed frames after 10 warm-up
+# input: Blender Solid readbacks shifted 2 px/frame; cmd: cargo run --release -p vcam-video --example s2_videotoolbox -- <frames dir>
+S2B_HEADER config,res,target_mbit,latency_med_ms,latency_p95_ms,latency_max_ms,fill_med_ms,fill_p95_ms,encode_call_med_ms,encode_call_p95_ms,actual_mbit,frames_out,idr_frames,dropped
+S2B_ROW lowlatency-bgra,960x540,3.1104,2.54,3.35,3.84,0.28,0.41,0.017,0.026,0.45,160,3,0
+S2B_STREAM /tmp/s2/vt_lowlatency-bgra_960x540.h264
+S2B_UNSUPPORTED lowlatency-rgba,960x540,CVPixelBufferPoolCreatePixelBuffer: -6680
+S2B_ROW realtime-bgra,960x540,3.1104,2.86,4.32,5.44,0.31,0.40,0.018,0.038,1.02,160,3,0
+S2B_ROW lowlatency-bgra,1280x720,5.5296,3.64,5.55,6.55,0.54,1.60,0.019,0.048,0.65,160,3,0
+S2B_STREAM /tmp/s2/vt_lowlatency-bgra_1280x720.h264
+S2B_UNSUPPORTED lowlatency-rgba,1280x720,CVPixelBufferPoolCreatePixelBuffer: -6680
+S2B_ROW realtime-bgra,1280x720,5.5296,3.68,4.64,6.06,0.41,1.61,0.017,0.042,1.31,160,3,0
+S2B_ROW lowlatency-bgra,1920x1080,12.4416,5.61,6.37,7.24,0.90,2.87,0.019,0.039,1.10,160,3,0
+S2B_STREAM /tmp/s2/vt_lowlatency-bgra_1920x1080.h264
+S2B_UNSUPPORTED lowlatency-rgba,1920x1080,CVPixelBufferPoolCreatePixelBuffer: -6680
+S2B_ROW realtime-bgra,1920x1080,12.4416,7.10,13.48,18.51,1.07,2.86,0.019,0.039,2.28,160,3,0
+# ffprobe on the lowlatency-bgra streams: h264 Main, has_b_frames=0, nb_read_frames=160 (3 I, 157 P) at 540p/720p/1080p; ffmpeg -xerror decode OK

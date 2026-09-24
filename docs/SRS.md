@@ -463,7 +463,7 @@ Updated proposal: default 960×540, Solid, 30 fps, pipelined, with adaptive fps 
 
 Still open for S-1: Windows and Linux on mid-range GPUs.
 
-### 13.2 S-2 results — 2026-09-24 (S-2a: JPEG on macOS arm64; H.264 pending)
+### 13.2 S-2 results — 2026-09-24 (JPEG and VideoToolbox H.264 on macOS arm64; OpenH264 and Windows/Linux pending)
 
 Setup: Apple M4 Pro, one thread, 4:2:0, 100 timed encodes after 5 warm-up. Input: real Blender 5.2.2 readbacks from the S-1 scene (`tests/bench_render.py --dump-raw`). Encoders: `turbojpeg` 1.5.1 (vendored libjpeg-turbo 3.1.0, NEON, linked statically; `otool -L` shows no JPEG dylib) and `jpeg-encoder` 0.7.1 (pure Rust; its `simd` feature is x86-only, so scalar here). Every output was decoded with libjpeg-turbo, size-checked, and PSNR-scored. Script: `native/vcam-video/examples/s2_jpeg.rs`. Raw data: `reports/s2-jpeg-2026-09-24-macos-arm64.txt`.
 
@@ -489,7 +489,28 @@ Findings:
   - Licences: `turbojpeg`/`turbojpeg-sys` are Unlicense OR MIT; libjpeg-turbo is IJG + BSD-3-Clause + zlib. All are GPL-compatible, but the IJG/BSD notices must ship with the extension.
 - **Fallback:** `jpeg-encoder` ((MIT OR Apache-2.0) AND IJG) is 3 ms at 540p, which is still acceptable, if the C build proves painful on a platform.
 
-Still open for S-2: JPEG on Windows and Linux (x86-64, with `nasm`), and the H.264 prototypes (VideoToolbox, Media Foundation, OpenH264) with the licensing check.
+#### S-2b — H.264 with VideoToolbox, macOS (2026-09-24)
+
+Setup: Apple M4 Pro. `VTCompressionSession` with the hardware encoder required, `RealTime`, no frame reordering (no B-frames), H.264 Main AutoLevel (accepted even with low-latency rate control), GOP 60, target bitrate about 0.2 bits per pixel (3.1 / 5.5 / 12.4 Mbit/s). Frames are submitted in real time at 30 fps: 150 timed after 10 warm-up. Each input is the Blender Solid readback shifted 2 px per frame. Latency is measured from `VTCompressionSessionEncodeFrame` to the output callback. Fill = pool `CVPixelBuffer` lock + flip + RGBA→BGRA swizzle + unlock (the single copy out of Blender's buffer). Script: `native/vcam-video/examples/s2_videotoolbox.rs` (bindings: `objc2-video-toolbox`/`-core-media`/`-core-video`/`-core-foundation` 0.3.2). Raw data: `reports/s2-videotoolbox-2026-09-24-macos-arm64.txt`.
+
+| Config | Res | Latency med/p95/max (ms) | Fill med/p95 (ms) | Encode call med (ms) |
+|---|---|---|---|---|
+| Low-latency RC | 960×540 | 2.54/3.35/3.84 | 0.28/0.41 | 0.017 |
+| Real-time (default RC) | 960×540 | 2.86/4.32/5.44 | 0.31/0.40 | 0.018 |
+| Low-latency RC | 1280×720 | 3.64/5.55/6.55 | 0.54/1.60 | 0.019 |
+| Real-time (default RC) | 1280×720 | 3.68/4.64/6.06 | 0.41/1.61 | 0.017 |
+| Low-latency RC | 1920×1080 | 5.61/6.37/7.24 | 0.90/2.87 | 0.019 |
+| Real-time (default RC) | 1920×1080 | 7.10/13.48/18.51 | 1.07/2.86 | 0.019 |
+
+All runs: 160/160 frames out, 0 dropped, IDR at frames 0/60/120. The low-latency streams were decoded independently by ffmpeg: h264 Main, `has_b_frames=0`, 160 frames (3 I, 157 P), no decode errors, image upright with correct colours.
+
+Findings:
+
+- **Hardware H.264 on macOS comfortably meets Stage B latency needs:** 720p in 3.6 ms median / 5.6 ms p95 from submit to encoded frame, off the main thread. The encode call itself returns in about 0.02 ms, so the render thread never waits on it. **Recommendation:** enable `EnableLowLatencyRateControl`. At 1080p it halves the p95 (6.4 vs. 13.5 ms).
+- **RGBA input is not supported:** the session's pixel-buffer pool fails with `kCVReturnInvalidPixelFormat` (-6680) for `kCVPixelFormatType_32RGBA`, at every resolution. Blender's readback is RGBA (§13.1), so the one copy out of Blender must swizzle to BGRA. With the flip that costs 0.3 ms at 540p and 0.5 ms at 720p (scalar Rust). It runs on the encoder thread, not the main thread.
+- **Not measured:** bitrate accuracy on real content. The synthetic input (one image translating) is almost free to predict, so actual bitrates came out far below target (0.45–2.3 Mbit/s). Rate-control behaviour and the latency effect of large residuals need live Blender content; do that in task 3.4.
+
+Still open for S-2: OpenH264 fallback timing and the H.264 licensing write-up (S-2c); JPEG on Windows and Linux and Media Foundation on Windows (S-2d/e, owner machines).
 
 ---
 
