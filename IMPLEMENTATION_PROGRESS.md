@@ -31,6 +31,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | `BlenderAddOn/tests` (pytest, `.venv.nosync`) | 12/12 pass | Tests the non-standard FreeD layout; the code will be replaced. |
 | `native/` cargo fmt/clippy/test | Pass, 5/5 crates | Includes `vcam-py` with pyo3 0.29.2. |
 | Headless Blender `tests/blender/smoke_native.py` (macOS arm64) | Pass | Built extension zip, installed into a temporary user dir, enabled; printed `VCAM_NATIVE_OK 0.1.0`. |
+| S-1 `tests/bench_render.py` (headless, macOS arm64) | Pass, 9/9 cells | All cells drew non-blank images. Numbers in SRS §13.1 and `reports/s1-render-2026-09-24-macos-arm64.json`. |
 | VCamIOS `FreeDPacketEncoderTests` (iPhone 17 Pro sim, iOS 27.0) | 5/5 pass | After the checksum overflow fix (root commit `5ba2672`, was `ed349be` in the old `VCamIOS` repo). Will be replaced with VCP tests. |
 
 ---
@@ -77,7 +78,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | FR-BL-004 | Partial | N-panel with connection settings and status (`ui/panels.py`); no pairing or stats. |
 | FR-BL-005 | Partial | Lens/focus mapped from FreeD zoom/focus encoders; to be replaced by `CONTROL_STATE`. |
 | FR-BL-006/007 | Not started | |
-| FR-REN-* | Not started | |
+| FR-REN-* | Not started | S-1 (SRS §13.1) shows headless `GPUOffScreen` + `draw_view3d` + `read()` works, and zero-copy access through `vcam_native._frame_probe` works (`native/vcam-py/src/lib.rs:18-32`). Production code comes in Phase 2. **Flag:** EEVEE draw (76 ms at 540p) conflicts with FR-REN-004/NFR-PERF-002. |
 | FR-TAKE-* | Not started | |
 | UI text | Replace | `operators/tracking_receiver.py:23` mentions "Live Link". |
 
@@ -105,7 +106,7 @@ Status labels: **Done** · **Partial** (useful code exists but doesn't meet the 
 | NET-003/004 | Not started | |
 | NET-VID-* | Not started | |
 | LNS-* | Not started | |
-| NFR-LAT-*, NFR-PERF-* | Not started | No measurements. |
+| NFR-LAT-*, NFR-PERF-* | Not started | No latency measurements. Render/readback costs are measured by S-1 (SRS §13.1). |
 | NFR-REL-*, NFR-SEC-* | Not started | Any host can send poses; no pairing. |
 | NFR-QA-001 | Partial | One git repo. `xcodebuild test`, `cargo test` (in `native/`), and a headless Blender smoke test (`tests/blender/smoke_native.py`) all run. There's no single `blender --background … tests` runner for add-on logic yet. |
 | NFR-QA-002/003 | Not started | |

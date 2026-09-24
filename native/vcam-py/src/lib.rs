@@ -14,6 +14,22 @@ mod vcam_native {
     fn version() -> &'static str {
         super::VERSION
     }
+
+    /// Spike S-1 probe (private; replaced by the encoder hand-off in task 2.1).
+    ///
+    /// Reads every byte of a C-contiguous `uint8` frame (e.g. the `gpu.types.Buffer`
+    /// from `GPUOffScreen.texture_color.read()`) through the buffer protocol, without
+    /// copying it. Returns `(byte_count, byte_sum)`.
+    #[pyfunction]
+    fn _frame_probe(py: Python<'_>, frame: pyo3::buffer::PyBuffer<u8>) -> PyResult<(usize, u64)> {
+        let Some(bytes) = frame.as_slice(py) else {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "frame buffer must be C-contiguous",
+            ));
+        };
+        let sum = bytes.iter().map(|b| u64::from(b.get())).sum();
+        Ok((bytes.len(), sum))
+    }
 }
 
 #[cfg(test)]

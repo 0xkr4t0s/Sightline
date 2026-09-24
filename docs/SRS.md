@@ -403,6 +403,39 @@ The results set the default stream resolution and fps, and are recorded in §13.
 | S-4 | Wi-Fi jitter for 60 Hz pose up + 30 fps video down on typical home and studio routers | NFR-LAT-001/003 |
 | S-5 | Licence choice: GPL-3.0-or-later for the whole extension, vs. MIT/Apache for `vcam-protocol` (which enables ARC-007 sharing with iOS) | ARC-007, C-1 |
 
+### 13.1 S-1 results — 2026-09-24 (macOS headless; partial)
+
+Setup: Blender 5.2.2 LTS, `--background` with `gpu.init()` (Metal), Apple M4 Pro. Default scene plus 25 subdivided Suzannes (393,612 evaluated triangles). Overlays off, `do_color_management=True`. The camera pans 0.2° per frame so EEVEE can't reuse accumulated samples. 60 timed frames after 5 warm-up frames. Script: `tests/bench_render.py`. Raw data: `reports/s1-render-2026-09-24-macos-arm64.json`.
+
+Main-thread cost in ms, median/p95. `draw` = `draw_view3d`; `read` = `texture_color.read()`, which blocks until the GPU finishes. `deferred read` = `read()` called 40 ms after the draw (20 frames).
+
+| Shading | Res | draw | read | draw + read | deferred read |
+|---|---|---|---|---|---|
+| Solid | 960×540 | 1.3/3.5 | 4.0/6.6 | 5.5/9.9 | 1.3/1.7 |
+| Solid | 1280×720 | 1.8/4.5 | 10.6/41.6 | 13.3/44.3 | 1.4/2.0 |
+| Solid | 1920×1080 | 1.3/1.4 | 13.3/18.5 | 14.6/19.8 | 2.1/3.0 |
+| Material | 960×540 | 6.9/12.6 | 41.8/53.1 | 48.7/65.7 | 3.1/3.7 |
+| Material | 1280×720 | 9.6/14.1 | 62.9/74.6 | 72.8/83.5 | 18.6/38.7 |
+| Material | 1920×1080 | 12.3/17.0 | 119.2/129.3 | 131.4/142.1 | 55.2/58.3 |
+| EEVEE | 960×540 | 76.2/119.1 | 2.9/6.4 | 79.1/122.0 | 4.3/7.4 |
+| EEVEE | 1280×720 | 103.5/154.8 | 4.6/8.5 | 108.9/163.3 | 5.3/9.6 |
+| EEVEE | 1920×1080 | 181.2/234.7 | 9.7/14.3 | 192.4/248.4 | 10.9/16.3 |
+
+An earlier run of the same script gave Solid 540p draw + read 8.6/17.9 ms (p95 included a warm-up outlier) and otherwise the same picture. The first frame of each mode includes shader compilation: 722 ms Solid, 279 ms Material, 167 ms EEVEE.
+
+Findings:
+
+- **No visible 3D view needed.** `draw_view3d` works in `--background` after `gpu.init()`. It uses a `SpaceView3D` and its `WINDOW` region taken from the current screen's data; nothing is shown. Not yet tested: a screen with no `VIEW_3D` area at all.
+- **Zero-copy works; one copy is cheap.** `texture_color.read()` returns a `gpu.types.Buffer` that exposes the buffer protocol as C-contiguous `uint8` (H, W, 4), rows bottom-up. `vcam_native._frame_probe` (PyO3 `PyBuffer<u8>::as_slice`) reads all 2.07 MB at 540p in place in 0.06 ms. A full memcpy costs 0.06 ms at 540p and 0.24 ms at 1080p. Recommended hand-off for FR-REN-003: Rust copies once into its own buffer (`PyBuffer::copy_to_slice`) while holding the GIL, then releases the GIL and encodes on a worker thread. Holding Blender's buffer across threads would need `unsafe` and gains < 0.3 ms.
+- **`read()` is mostly GPU wait, and deferring it hides that wait.** Drawing on one timer tick and reading on the next cuts Solid to ≤ 3 ms total and Material 540p to about 10 ms (draw 6.9 + read 3.1). The `gpu` module has no fence or async-read API (`GPUTexture` exposes only `read`), so deferral is the only way to overlap. It adds one tick of latency.
+- **EEVEE's cost is in `draw_view3d` itself** (76 ms median at 540p), so it can't be deferred or time-sliced.
+
+Proposed defaults (to confirm after the UI run and the other OSes): 960×540, Solid, 30 fps, deferred read (main thread about 3 ms per frame). Material Preview at 540p looks feasible at about 20 fps with deferral (GPU about 40–45 ms per frame).
+
+**Conflict flagged (not resolved here):** FR-REN-002 makes EEVEE a selectable stream mode, but on this machine a single EEVEE `draw_view3d` blocks the main thread for 76 ms median at 540p. That breaks FR-REN-004's 12 ms default budget and NFR-PERF-002's 50 ms limit, and frame skipping can't help because one frame already exceeds both. Material 720p/1080p also breaks the 12 ms budget. The owner must decide: exempt EEVEE (and heavy Material) from these limits with a UI warning, require lighter EEVEE settings (untested), or drop EEVEE streaming from T2.
+
+Still open for S-1: the same benchmark inside the Blender UI with a timer (a visible viewport also competes for the GPU), and Windows and Linux on mid-range GPUs.
+
 ---
 
 ## Appendix A — What changed
