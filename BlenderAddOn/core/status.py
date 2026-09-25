@@ -23,6 +23,14 @@ def tracking_label(tracking_state: int | None) -> str:
     return TRACKING.get(tracking_state, "Limited")
 
 
+def hold_label(tracking_state: int, has_good_pose: bool) -> str:
+    """FR-TRK-002: why the camera isn't following the device, for the N-panel."""
+    reason = tracking_label(tracking_state)
+    if not has_good_pose:
+        return f"Holding: no normal pose yet ({reason})"
+    return f"Holding last good pose ({reason})"
+
+
 def scale_label(motion_scale: float) -> str:
     """vcp.md §6.2: host metres per device metre, shown as device:host (10.0 → "1:10")."""
     if motion_scale >= 1.0:

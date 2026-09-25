@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Rig math: device pose → camera local transform under VCam_Origin (task 1.3.2a).
+"""Rig math: device pose → camera local transform under VCam_Origin (tasks 1.3.2a, 1.3.6).
 
-FR-BL-003, FR-CTL-004, FR-TRK-003, vcp.md §6.2. Pure Python (no bpy/mathutils), so pytest can
-check it against `testdata/rig/rig_cases.json`. Quaternions are (x, y, z, w); axes are
-canonical (Blender's: Z up; an identity camera looks down −Z with +Y up).
+FR-BL-003, FR-CTL-004, FR-TRK-002, FR-TRK-003, vcp.md §6.1/§6.2. Pure Python (no bpy/mathutils),
+so pytest can check it against `testdata/rig/rig_cases.json` and `testdata/rig/hold.json`.
+Quaternions are (x, y, z, w); axes are canonical (Blender's: Z up; an identity camera looks down
+−Z with +Y up).
 
 The incoming pose is never edited. The camera's local transform under `VCam_Origin` is:
 
@@ -18,6 +19,11 @@ The incoming pose is never edited. The camera's local transform under `VCam_Orig
 3. **Motion scale:** p_local = motion_scale · p_rel. Rotation is never scaled.
 
 The user places, turns and scales `VCam_Origin` in the scene; Blender composes that on top.
+
+**Hold last good pose** (FR-TRK-002, `PoseHold`): with the option on, a pose whose
+`tracking_state` isn't normal (5) is not applied; the camera keeps the last normal pose of the
+session (or doesn't move, if there hasn't been one yet), and the next normal pose resumes.
+Controls still apply to the held pose.
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ LOCK_HEIGHT = 1 << 0
 LOCK_ROLL = 1 << 1
 PAN_ONLY = 1 << 2
 _EPS = 1e-9
+TRACKING_NORMAL = 5  # vcp.md §6.1
 
 
 def qmul(a, b):
@@ -149,3 +156,24 @@ class Controls:
             set_origin = self.origin_epoch is not None and epoch != self.origin_epoch
             self.origin_epoch = epoch
         return True, set_origin
+
+
+class PoseHold:
+    """FR-TRK-002: which device pose to show, per session.
+
+    `select` takes an opaque `sample` (the caller's pose) and returns (sample to apply, or None
+    to leave the camera alone; holding). The last normal sample is remembered whether or not
+    holding is enabled, so turning the option on during a limited span holds at the last normal
+    pose, not at the last degraded one.
+    """
+
+    def __init__(self) -> None:
+        self.good = None
+
+    def select(self, sample, tracking_state: int, enabled: bool):
+        if tracking_state == TRACKING_NORMAL:
+            self.good = sample
+            return sample, False
+        if enabled:
+            return self.good, True
+        return sample, False

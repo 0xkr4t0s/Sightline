@@ -15,6 +15,9 @@ Timers don't run in a background script, so the test calls the session poll itse
   checked against the `scripted_*` cases of `testdata/rig/rig_cases.json` (task 1.3.2b).
 - A stub session drives Set origin + motion scale + locks through real Blender objects,
   checked against `testdata/rig/rig_cases.json`.
+- Hold last good pose (task 1.3.6, FR-TRK-002): the fake iPhone sends a limited span
+  (`testdata/rig/hold.json` "scripted"); with the option on the camera stays on the last normal
+  keypose throughout and resumes after it, with it off the degraded poses are applied.
 
 CI runs this, `addon_panel.py` and `addon_robust.py` on Linux, Windows and macOS against a
 release build of the fake iPhone (`blender-smoke` job in `.github/workflows/ci.yml`, task 1.3.5).
@@ -38,10 +41,13 @@ FAKE = os.environ["FAKE_IPHONE"]
 addon_utils.enable(MODULE, default_set=True, handle_error=None)
 session = importlib.import_module(MODULE + ".core.session")
 apply = importlib.import_module(MODULE + ".core.apply")
+rig = importlib.import_module(MODULE + ".core.rig")
 with open(os.path.join(MOTION, "scripted.json"), encoding="utf-8") as f:
     script = json.load(f)
 with open(os.path.join(ROOT, "testdata", "rig", "rig_cases.json"), encoding="utf-8") as f:
     rig_doc = json.load(f)
+with open(os.path.join(ROOT, "testdata", "rig", "hold.json"), encoding="utf-8") as f:
+    hold_doc = json.load(f)
 rig_cases = {c["name"]: c for c in rig_doc["cases"]}
 
 camera = bpy.context.scene.camera
@@ -61,8 +67,10 @@ state_file = os.path.join(session.config_dir(), "fake-iphone.key")
 holds = {k["name"]: range(k["frame"] - 28, k["frame"] + 2) for k in script["keyposes"]}
 
 
-def run_fake(*extra):
-    """Streams the script from the fake iPhone; returns ({keypose: (local, world)}, DONE fields)."""
+def run_fake(*extra, observe=None):
+    """Streams the script from the fake iPhone; returns ({keypose: (local, world)}, DONE fields).
+
+    `observe()` runs after every poll."""
     child = subprocess.Popen(
         [FAKE, "--host", f"127.0.0.1:{live.port()}", "--state", state_file,
          "--motion", os.path.join(MOTION, "scripted.bin"), "--rate", "120", "--linger", "1.0", *extra],
@@ -78,6 +86,8 @@ def run_fake(*extra):
                 # matrix_world of a child is only re-evaluated by the depsgraph (every redraw in the GUI).
                 bpy.context.view_layer.update()
                 seen[name] = ([list(r) for r in camera.matrix_basis], [list(r) for r in camera.matrix_world])
+        if observe is not None:
+            observe()
         time.sleep(0.002)
     out, err = child.communicate()
     assert child.returncode == 0, err
@@ -126,6 +136,57 @@ for name in sc["cases"]:
 assert scripted_err < 1e-5, scripted_err
 assert fields["control_ack"] == "2", fields  # Set origin was state_seq 2
 
+# Runs 3 and 4 (task 1.3.6): a limited span over the tilt move, controls back to default.
+hs = hold_doc["scripted"]
+keys = {k["name"]: k for k in script["keyposes"]}
+apply.clear_zero(origin)
+limited = ("--limited", "{}-{}".format(*hs["limited_frames"]))
+
+
+class HoldWatch:
+    """What the host did after each poll, by the seq of the pose that poll handled (seq = frame + 1)."""
+
+    def __init__(self):
+        self.limited_ticks = self.holding_ticks = self.holding_when_normal = 0
+        self.held_err = 0.0
+
+    def __call__(self):
+        applier = session._applier
+        if session.state.session_id is None or applier.session_id != session.state.session_id:
+            return
+        first, end = hs["limited_frames"]
+        if not first + 1 <= applier._seen_seq < end + 1:
+            self.holding_when_normal += applier.holding
+            return
+        self.limited_ticks += 1
+        assert session.state.tracking_state == hs["tracking_state"], session.state  # the panel's reason
+        if applier.holding:
+            self.holding_ticks += 1
+            held = keys[hs["held_keypose"]]["matrix_world"]
+            self.held_err = max(self.held_err, max_diff(camera.matrix_basis, held))
+
+
+assert bpy.context.scene.vcam_props.hold_last_good, "Hold Last Good Pose is on by default"
+watch_on = HoldWatch()
+seen, fields = run_fake(*limited, observe=watch_on)
+assert watch_on.limited_ticks > 20 and watch_on.holding_ticks == watch_on.limited_ticks, vars(watch_on)
+assert watch_on.holding_when_normal == 0, vars(watch_on)
+assert watch_on.held_err < 1e-5, vars(watch_on)
+assert not set(hs["hidden_keyposes"]) & set(seen), sorted(seen)
+hold_err = 0.0
+for name in hs["resumed_keyposes"]:
+    assert name in seen, f"keypose {name} not applied after the limited span: {sorted(seen)}"
+    hold_err = max(hold_err, max_diff(seen[name][0], keys[name]["matrix_world"]))
+assert hold_err < 1e-5, hold_err
+
+bpy.context.scene.vcam_props.hold_last_good = False
+watch = HoldWatch()
+seen, _ = run_fake(*limited, observe=watch)
+assert watch.limited_ticks > 20 and watch.holding_ticks == 0, vars(watch)
+for name in hs["hidden_keyposes"]:  # applied as ARKit reported it
+    assert name in seen and max_diff(seen[name][0], keys[name]["matrix_world"]) < 1e-5, sorted(seen)
+bpy.context.scene.vcam_props.hold_last_good = True
+
 
 class Stub:
     """A session whose pose and CONTROL_STATE the test sets; records STATUS."""
@@ -151,24 +212,38 @@ def control(seq, scale, locks, epoch):
 case = rig_cases["combined"]
 zp = case["zero_pose"]
 stub, applier = Stub(), apply.Applier()
-stub.pose = {"seq": 1, "smoothed_position": zp["position"], "smoothed_orientation": zp["orientation"]}
+stub.pose = {"seq": 1, "smoothed_position": zp["position"], "smoothed_orientation": zp["orientation"],
+             "tracking_state": 5}
 stub.control = control(1, 1.0, 0, 7)  # first epoch in a session: not a Set origin
 applier.tick(stub, 11, bpy.context.scene, 0.0)
 stub.control = control(2, None, None, 8)  # operator pressed Set origin at the zero pose
 applier.tick(stub, 11, bpy.context.scene, 0.1)
 assert abs(origin[apply.ZERO_YAW_KEY] - case["zero_yaw"]) < 1e-9, origin[apply.ZERO_YAW_KEY]
 stub.control = control(3, case["motion_scale"], case["lock_flags"], None)
-stub.pose = {"seq": 2, "smoothed_position": case["position"], "smoothed_orientation": case["orientation"]}
+stub.pose = {"seq": 2, "smoothed_position": case["position"], "smoothed_orientation": case["orientation"],
+             "tracking_state": 5}
 applier.tick(stub, 11, bpy.context.scene, 0.2)
 rig_err = max_diff(camera.matrix_basis, apply.pose_matrix(case["expected_position"], case["expected_orientation"]))
 assert rig_err < 1e-6, rig_err
 assert stub.calls[-1] == (11, 2, 3, apply.ERROR_NONE, camera.name), stub.calls[-1]
 
+# Hold (task 1.3.6): a limited pose isn't applied and STATUS keeps the held seq; a controls
+# change still applies, to the held pose.
+stub.pose = {"seq": 3, "smoothed_position": (9, 9, 9), "smoothed_orientation": (0, 0, 0, 1), "tracking_state": 2}
+applier.tick(stub, 11, bpy.context.scene, 0.3)
+assert applier.holding and max_diff(camera.matrix_basis, apply.pose_matrix(case["expected_position"],
+                                                                             case["expected_orientation"])) < 1e-6
+stub.control = control(4, 1.0, 0, None)
+applier.tick(stub, 11, bpy.context.scene, 0.4)
+held = rig.local_pose(case["position"], case["orientation"], apply.read_zero(origin))
+assert max_diff(camera.matrix_basis, apply.pose_matrix(*held)) < 1e-6, "controls not applied to the held pose"
+assert stub.calls[-1] == (11, 2, 4, apply.ERROR_NONE, camera.name), stub.calls[-1]
+
 # No camera: nothing is applied and STATUS reports error 1 (no camera) without a name.
 before = camera.matrix_basis.copy()
 bpy.context.scene.camera = None
 stub, applier = Stub(), apply.Applier()
-stub.pose = {"seq": 1, "smoothed_position": (1, 2, 3), "smoothed_orientation": (0, 0, 0, 1)}
+stub.pose = {"seq": 1, "smoothed_position": (1, 2, 3), "smoothed_orientation": (0, 0, 0, 1), "tracking_state": 5}
 applier.tick(stub, 9, bpy.context.scene, 0.0)
 assert stub.calls == [(9, 0, 0, apply.ERROR_NO_CAMERA, None)], stub.calls
 assert camera.matrix_basis == before
@@ -180,4 +255,5 @@ assert len(stub.calls) == 2, "STATUS repeats at 2 Hz"
 assert bpy.ops.vcam.session_stop() == {'FINISHED'}
 addon_utils.disable(MODULE, default_set=True)
 print(f"VCAM_ADDON_APPLY_OK keyposes=5 max_err={worst:.2e} scripted_err={scripted_err:.2e} rig_err={rig_err:.2e} "
-      f"applied_pose_seq={fields['applied_pose_seq']} camera={fields['camera']}")
+      f"applied_pose_seq={fields['applied_pose_seq']} camera={fields['camera']} "
+      f"held_ticks={watch_on.holding_ticks} held_err={watch_on.held_err:.2e} resumed_err={hold_err:.2e}")

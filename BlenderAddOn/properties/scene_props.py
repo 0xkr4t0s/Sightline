@@ -13,6 +13,10 @@ def _smoothing_changed(self, _context):
     session.set_smoothing(self.smoothing)
 
 
+def _hold_changed(_self, _context):
+    session.applier().reapply()  # show the degraded or the held pose at once
+
+
 class VCamProperties(bpy.types.PropertyGroup):
     """Persistent VCam settings saved with the .blend."""
 
@@ -39,4 +43,10 @@ class VCamProperties(bpy.types.PropertyGroup):
         description="Smooth the incoming pose (One-Euro filter). Raw poses are always kept",
         default=False,
         update=_smoothing_changed,
+    )
+    hold_last_good: bpy.props.BoolProperty(
+        name="Hold Last Good Pose",
+        description="While iPhone tracking is limited, keep the camera at the last normal pose",
+        default=True,
+        update=_hold_changed,
     )
