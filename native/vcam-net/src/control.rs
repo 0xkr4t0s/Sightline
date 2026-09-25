@@ -23,6 +23,8 @@ use crate::discovery::{self, Discovery};
 use crate::{ControlSample, HostStatus, PoseSample, ReceiverStats, UdpReceiver};
 
 const POLL: Duration = Duration::from_millis(50);
+/// How long a connection refused with `ERROR` keeps draining input before closing.
+const ERROR_LINGER: Duration = Duration::from_secs(1);
 
 /// A device paired with this host.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -420,11 +422,38 @@ impl Conn<'_> {
                 code,
                 message: message.to_owned(),
             });
-            if let Ok(frame) = msg.encode() {
-                let _ = self.stream.write_all(&frame);
+            if let Ok(frame) = msg.encode()
+                && self.stream.write_all(&frame).is_ok()
+            {
+                self.linger_close();
             }
         }
         let _ = self.stream.shutdown(std::net::Shutdown::Both);
+    }
+
+    /// Sends FIN after an `ERROR`, then discards what the peer still sends until it
+    /// closes (bounded by `ERROR_LINGER`). Closing with unread input makes the stack
+    /// send RST, and Windows then drops the `ERROR` the peer hasn't read yet.
+    fn linger_close(&mut self) {
+        if self.stream.shutdown(std::net::Shutdown::Write).is_err() {
+            return;
+        }
+        let deadline = Instant::now() + ERROR_LINGER;
+        let mut sink = [0u8; 512];
+        while !self.shared.stop.load(Ordering::Acquire) && Instant::now() < deadline {
+            match self.stream.read(&mut sink) {
+                Ok(0) => return,
+                Ok(_) => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                            | io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => return,
+            }
+        }
     }
 
     fn run(&mut self) -> Result<(), End> {

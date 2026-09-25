@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use vcam_net::{ControlEvent, ControlServer, HostStatus, MemoryStore, ServerConfig};
@@ -14,15 +15,17 @@ const MOTION: &str = concat!(
 const FRAMES: u32 = 390;
 const LAST_POSITION: [f32; 3] = [-2.0, 0.0, 3.1];
 
-/// A unique scratch directory, removed on drop.
+/// A unique scratch directory, removed on drop. The name is built from characters every OS
+/// accepts (an `Instant`'s `Debug` form contains `:`, which Windows rejects).
 struct Scratch(PathBuf);
 
 impl Scratch {
     fn new(tag: &str) -> Self {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "vcam-fake-iphone-{tag}-{}-{:?}",
+            "vcam-fake-iphone-{tag}-{}-{}",
             std::process::id(),
-            Instant::now()
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -222,9 +225,12 @@ fn scripted_controls_reach_the_host_in_order() {
     let server = server();
     let scratch = Scratch::new("controls");
     let code = server.enable_pairing().unwrap();
+    // The host keeps only the latest control state and this test samples it every 5 ms, so state 1
+    // must stay current for many samples before Set origin replaces it: frame 200 of the 390-frame
+    // script at 600 Hz is ~330 ms in. (At 2000 Hz and frame 10 it was 5 ms: one sample, and flaky.)
     let args = [
         "--rate",
-        "2000",
+        "600",
         "--linger",
         "0.6",
         "--scale",
@@ -232,7 +238,7 @@ fn scripted_controls_reach_the_host_in_order() {
         "--locks",
         "5",
         "--set-origin-at",
-        "10",
+        "200",
     ];
     let child = spawn(&server, &scratch.state(), Some(&code), &args);
     let mut states = Vec::new();

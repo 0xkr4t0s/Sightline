@@ -46,6 +46,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: native -> target.nosync
+      # turbojpeg-sys (vcam-video dev-dependency) builds libjpeg-turbo's x86-64 SIMD with NASM.
+      - name: Install NASM (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nasm
+      - name: Install NASM (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install nasm --no-progress -y
+          "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
       - name: cargo clippy
         working-directory: native
         run: cargo clippy --all-targets -- -D warnings
@@ -257,12 +266,18 @@ jobs:
       - name: xcodebuild test (unit tests; ARKit can't run in the simulator)
         run: |
           xcodebuild test -project VCamIOS/VCamIOS.xcodeproj -scheme VCamIOS \
-            -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath xcresult/debug
       - name: Pose send path allocates nothing (NFR-LAT-002; needs optimised code)
         run: |
           xcodebuild test -configuration Release -project VCamIOS/VCamIOS.xcodeproj -scheme VCamIOS \
-            -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath xcresult/release \
             -only-testing:VCamIOSTests/TrackingPipelineTests/testPoseSendPathAllocatesNothing
+      # Crash logs of a test process that died live only in the result bundle.
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: ios-xcresult
+          path: xcresult/
 
   ci-ok:
     # The single required check on main (branch protection). It fails unless every job ran and

@@ -36,6 +36,7 @@ pub struct FileStore {
 impl FileStore {
     pub fn open(config_dir: impl AsRef<Path>) -> io::Result<Self> {
         let directory = config_dir.as_ref().join("vcam-pairings");
+        #[cfg_attr(not(unix), allow(unused_mut))] // `mode` is Unix-only
         let mut builder = DirBuilder::new();
         #[cfg(unix)]
         builder.mode(0o700);

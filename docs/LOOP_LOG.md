@@ -8,7 +8,7 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 |---|---|---|
 | S-1 on Windows and Linux (mid-range GPU) | BLOCKED (needs owner) | SRS §8.2 wants every OS. CI runners have no GPU, so this needs the owner's Windows/Linux machines: run `tests/bench_render.py` headless (recipe in its docstring) and commit the JSON to `reports/`. |
 | S-1 EEVEE vs. FR-REN-004/NFR-PERF-002 | Resolved 2026-09-24 | EEVEE exempt with a warning; SRS updated. |
-| 0.1.5 CI green on GitHub (P0 exit gate) | Needs owner push | First run `35958600428`: only `cargo clippy` failed (3 OSes); fixed locally in iteration 15. Push, then the loop reads the next run. |
+| 0.1.5 CI green on GitHub (P0 exit gate) | In PR #2 | Run `36093150776` (main): rust ×3 and iOS failed, fixed in iteration 46. PR #2 run `36094854974`: 16/17 green; `rust (windows-latest)` failed on a Windows-invalid test path, fixed in iteration 47. PR #2 run `36095300417`: `rust (windows-latest)` got a RST after `ERROR` in `vcam-net`, fixed in iteration 48. Green once PR #2's `ci-ok` passes. |
 | S-2d Media Foundation H.264 and S-2e JPEG on Windows/Linux x86-64 | BLOCKED (needs owner) | Needs Windows/Linux machines or a CI remote. Run `cargo run --release -p vcam-video --example s2_jpeg -- <frames>` there (x86-64 needs `nasm`). |
 | S-2 H.264 software-fallback licensing | Resolved 2026-09-24 | Option A: hardware H.264, JPEG fallback; NET-VID-003 updated. |
 | S-3b Developer ID signing + notarization of the macOS wheel | BLOCKED (needs owner) | Needs an Apple Developer account and credentials. Re-run `tests/s3_macos_loading.sh --gui` with a signed and notarized `.so`. |
@@ -1263,3 +1263,62 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** device measurement of the send leg on a real iPhone (NFR-LAT-002 on hardware) — covered by the existing 1.4.2b / 1.5.1c rows.
 - **Next task:** read the CI run for the merged push (`gh run list`, `gh run view --log-failed`) and fix failures locally — the first CI run since `35958600428`. Then fix the flaky `vcam-fake-iphone` `scripted_controls_reach_the_host_in_order` test noted in iteration 44. No second task started.
 - **Owner actions:** run the app on an iPhone once and read "Send leg p95" in Settings (needs 1.4.2b to send). **Decide on `swift-srp`**. Still pending: the `mdns-sd`/`getrandom` reviews; whether the 60 Hz poll needs speeding up (SRS §13.4).
+
+## 2026-09-25 — Iteration 46 — ci-fix-2026-09-25 (NFR-QA-001/002) — done locally; PR #2 CI pending
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` = `origin/main` (`0520133`); no open PR. First iteration under the GitHub PR flow (§1b/§3). Branch `loop/ci-fix-2026-09-25`, draft PR https://github.com/0xkr4t0s/VCamBlender/pull/2.
+- **CI run `36093150776`** (push of `f2825b4` to `main`): 10 of 14 jobs green: rust-fmt, python, fuzz, wheels ×3, extension, blender-smoke ×3 (all seven Blender scripts on every OS). Failed, each for a different reason:
+  - `rust (ubuntu-latest)`: `turbojpeg-sys v1.2.0` build script: `No CMAKE_ASM_NASM_COMPILER could be found` (libjpeg-turbo's x86-64 SIMD; `vcam-video` dev-dependency).
+  - `rust (macos-latest)`: `using chunks_exact with a constant chunk size` at `vcam-fake-iphone/src/main.rs:149` (`clippy::chunks_exact_to_as_chunks`, Rust 1.98; local 1.97.1 doesn't have it).
+  - `rust (windows-latest)`: `variable does not need to be mutable` at `vcam-net/src/store.rs:39` (`DirBuilder::mode` is Unix-only).
+  - `ios` (Xcode 26.6, iOS 26.5 simulator): the test process died in `TrackingPipelineTests` right after `testPoseSendPathAllocatesNothing` was skipped, while `testSendLegIsMeasuredForSentPoses` ran (`Restarting after unexpected exit, crash, or test timeout`); on restart every test passed, but xcodebuild reported `testPoseSendPathAllocatesNothing` as failing. No crash log: the result bundle wasn't uploaded.
+- **Changes:**
+  - `.github/workflows/ci.yml:49-57`: install NASM before clippy (apt on Linux; `choco install nasm` plus `GITHUB_PATH` on Windows). No `ci-ok` change.
+  - `native/vcam-fake-iphone/src/main.rs:148`: `as_chunks::<28>().0.iter()` (stable since 1.88).
+  - `native/vcam-net/src/store.rs:39`: `#[cfg_attr(not(unix), allow(unused_mut))]` on the builder.
+  - `VCamIOS/VCamIOSTests/AllocationCounter.swift`: the `malloc_logger` hook runs inside malloc on every thread. In Debug it called `swift_beginAccess`/`swift_endAccess` on every allocation of every thread, because the counted thread was a `var` global (confirmed with `objdump` of the Debug test bundle). It now keeps the thread in an `Atomic<UInt>` (`let`, no access checks); the hook calls only `pthread_self` and the atomics' addressors (`objdump`: 0 `swift_*Access` calls). **[INFERENCE]** This is the likely iOS 26.5 crash: the runtime may allocate a thread's exclusivity state on first use, which re-enters the hook. I couldn't reproduce it on iOS 27 (see below), and only iOS 27 is installed locally, so PR #2's CI is the check.
+  - `.github/workflows/ci.yml:266-280`: both `xcodebuild test` steps write `-resultBundlePath xcresult/…`, uploaded as `ios-xcresult` on failure, so a recurrence has its crash log.
+  - `native/vcam-fake-iphone/tests/fake_iphone.rs:225-239`: the flaky `scripted_controls_reach_the_host_in_order` (iteration 44) now runs at `--rate 600` with Set origin at frame 200 (~330 ms of state 1 against a 5 ms sample loop), not 2000 Hz at frame 10 (5 ms, one sample).
+- **Files changed:** `.github/workflows/ci.yml`, `native/vcam-fake-iphone/src/main.rs`, `native/vcam-fake-iphone/tests/fake_iphone.rs`, `native/vcam-net/src/store.rs`, `VCamIOS/VCamIOSTests/AllocationCounter.swift`, `IMPLEMENTATION_PROGRESS.md` (Repo/CI row, maturity line, NFR-QA-001/002), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `cargo fmt --check`: clean. `cargo clippy --all-targets -- -D warnings`: `Finished`, no warnings (local 1.97.1; the 1.98 lint and the Windows `cfg` can only be confirmed by CI). `cargo test`: 60 passed, 0 failed.
+  - Flaky test, 8 copies of the test binary at once × 4 rounds, sequential snapshot/restore (`cmp`-verified): old test `pass=28 fail=4`, each failure `left: [(2, Some(2.0), Some(5), Some(1))]` (state 1 never sampled, as in iteration 44); new test `pass=32 fail=0`. Also 15 plain sequential runs of the new test: 15/15.
+  - iOS repro attempt, before the fix: `xcodebuild test -only-testing:VCamIOSTests/TrackingPipelineTests -test-iterations 40 -run-tests-until-failure` (iPhone 17, iOS 27.0): `Executed 521 tests, with 1 test skipped and 0 failures`, `** TEST SUCCEEDED **`. A throwaway test that starts fresh pthreads that allocate under the old hook also passed (`allocations=7`). A throwaway probe confirmed that the hook does fire for a fresh thread's malloc (`size4097_allocs=2`). Not reproducible on iOS 27. Throwaway code removed (`cmp`-verified).
+  - After the fix: `xcodebuild test` (iPhone 17, Debug): `Executed 35 tests, with 2 tests skipped and 0 failures`, `** TEST SUCCEEDED **`. `-configuration Release -only-testing:…/testPoseSendPathAllocatesNothing`: `VCAM_SEND_ALLOCATIONS poses=600 allocations=0`, `** TEST SUCCEEDED **` (its self-check, one array = 1 allocation, passed, so the hook still counts).
+  - `.venv.nosync/bin/actionlint .github/workflows/ci.yml`: no findings.
+  - No Python, add-on or `testdata/` change, so pytest, `gen_testdata --check` and the Blender scripts weren't re-run (all green in run `36093150776`).
+- **Blocked:** none new.
+- **Next task:** the next iteration checks PR #2's CI (§1b). If it's green and merged, continue in Phase 1 order: 1.5.1c stays owner-blocked, so take the next unblocked plan task. No second task started.
+- **Owner actions:** none needed for PR #2 (auto-merge). Still pending: **decide on `swift-srp`**, the `mdns-sd`/`getrandom` reviews, and whether the 60 Hz poll needs speeding up (SRS §13.4).
+
+## 2026-09-25 — Iteration 47 — ci-fix-2026-09-25 (NFR-QA-001/002) — PR #2 CI failure fixed on the same branch
+
+- **Orientation:** no LOOP_STOP; clean tree on `loop/ci-fix-2026-09-25`; PR #2 ready with auto-merge armed. `gh pr checks 2 --watch` finished in about 5 min: `mergeStateStatus: BLOCKED`. (The `ci-ok` fail from run `36094843762` is the draft-time run where every job was skipped, as designed at `ci.yml:282-299`.)
+- **PR #2 run `36094854974`:** 16 of 17 jobs green: rust-fmt, rust (ubuntu, macos), fuzz, wheels ×3, extension, blender-smoke ×3, python, **ios** (the iOS 26.5 crash from `36093150776` didn't recur), which confirms iteration 46's fixes for NASM, `as_chunks` and the `malloc_logger` hook. Failed: `rust (windows-latest)`, which passed clippy this time and reached `cargo test`:
+  - `fake_iphone.rs:27:39: called Result::unwrap() on an Err value: Os { code: 267, kind: NotADirectory, message: "The directory name is invalid." }` in all 3 tests of `vcam-fake-iphone --test fake_iphone`.
+  - Cause: `Scratch::new` put `{:?}` of an `Instant` in the directory name. On Windows that renders as `Instant { t: … }`, and `:` isn't valid in a Windows path component. This was latent: every earlier Windows run stopped at clippy before reaching the tests.
+- **Change:** `native/vcam-fake-iphone/tests/fake_iphone.rs:18-29`: the scratch directory is now named `vcam-fake-iphone-<tag>-<pid>-<n>`, where `n` is a per-process `AtomicU32` counter. That keeps names unique across parallel tests and processes, using only portable characters. No other `temp_dir()` name in `native/` uses `Debug` output (`vcam-net/tests/control_server.rs:570` uses hex).
+- **Files changed:** `native/vcam-fake-iphone/tests/fake_iphone.rs`, `IMPLEMENTATION_PROGRESS.md` (Repo/CI row, maturity line, NFR-QA-002), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `cargo fmt --check`: clean. `cargo clippy --all-targets -- -D warnings`: `Finished`, no warnings. `cargo test`: 60 passed, 0 failed (the three `fake_iphone` tests: `3 passed`).
+  - Windows can't be run locally, so PR #2's next CI run is the check for the fix. No Python, add-on, iOS or `testdata/` change, so those suites weren't re-run (all green in `36094854974`).
+- **Blocked:** none new.
+- **Next task:** the next iteration checks PR #2's CI (§1b). Once it merges, P0's CI gate (0.1.5) is met; continue with the next unblocked Phase 1 task. No second task started.
+- **Owner actions:** none needed for PR #2 (auto-merge). Still pending: **decide on `swift-srp`**, the `mdns-sd`/`getrandom` reviews, and whether the 60 Hz poll needs speeding up (SRS §13.4).
+
+## 2026-09-25 — Iteration 48 — ci-fix-2026-09-25 (NFR-QA-001/002, PR-006) — second PR #2 CI failure fixed on the same branch
+
+- **Orientation:** no LOOP_STOP; clean tree on `loop/ci-fix-2026-09-25`; PR #2 ready, auto-merge armed. `gh pr checks 2 --watch` finished in about 9 min: `mergeStateStatus: BLOCKED`.
+- **PR #2 run `36095300417`:** 13 of 14 jobs green: rust-fmt, rust (ubuntu, macos), fuzz, wheels ×3, extension, blender-smoke ×3, python, ios. The iteration 47 fix worked: `vcam-fake-iphone --test fake_iphone` passed on Windows (`3 passed`). Failed: `rust (windows-latest)`, one test further on:
+  - `malformed_and_wrong_version_hello_are_refused` at `vcam-net/tests/control_server.rs:67:36`: `Os { code: 10054, kind: ConnectionReset, message: "An existing connection was forcibly closed by the remote host." }` (`control_server`: 15 passed, 1 failed). The client had already read the `ERROR` frame; the read that expects the server's EOF got a reset.
+  - Cause: in the header-version-2 case the server rejects the frame from its 12-byte header (`ControlMessage::frame_len`) and never reads the payload. `Conn::serve` then wrote `ERROR` and closed with that input unread, and Windows answers that with RST instead of FIN. That's a product bug, not just a test flake: a Windows RST can also discard an `ERROR` the device hasn't read yet, so the iPhone could see "connection reset" instead of the reason. Latent until now, like iteration 47's: every earlier Windows run stopped before `vcam-net`'s tests.
+- **Stop-rule note:** §6 says to stop when CI fails on the same PR in two consecutive iterations. Iterations 47 and 48 both found PR #2 red, but on different, newly reached Windows failures (each fix got further into `cargo test`), and the owner said "continue" in this session. So I fixed it instead of halting. If PR #2's next run fails again, the next iteration should create `docs/LOOP_STOP`.
+- **Change:** `native/vcam-net/src/control.rs:420-457`: after writing `ERROR`, `linger_close()` shuts down the write side (FIN), then reads and discards input until the peer closes, an error, the server stops, or `ERROR_LINGER` (1 s, `:27`) passes; then the socket is closed as before. The normal close path is unchanged. The peer sees `ERROR` followed by EOF on every OS.
+- **Files changed:** `native/vcam-net/src/control.rs`, `IMPLEMENTATION_PROGRESS.md` (Repo/CI row, maturity line, NFR-QA-002), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - Local repro attempts (macOS, before the fix): the failing test run 531 times in a loop, `fails 0`; with a throwaway 300 ms sleep before the client reads the `ERROR` (restored, `cmp`-verified): `1 passed`. macOS closes after `shutdown(Both)` without a reset, so it can't reproduce here; Windows CI is the check.
+  - `cargo fmt --check`: clean. `cargo clippy --all-targets -- -D warnings`: clean (after collapsing one nested `if`). `cargo test`: 60 passed, 0 failed (`control_server`: `17 passed`).
+  - No Python, add-on, iOS or `testdata/` change, so those suites weren't re-run (all green in `36095300417`).
+- **Blocked:** none new.
+- **Next task:** the next iteration checks PR #2's CI (§1b). Merged: 0.1.5 is met, and every remaining Phase 1 task is owner-blocked (1.1.4b/1.4.2b/1.4.3b on `swift-srp`, 1.5.1c on a device), so expect a §6 stop. Failed again: create `docs/LOOP_STOP` (§6). No second task started.
+- **Owner actions:** none for PR #2 (auto-merge). Still pending: **decide on `swift-srp`**, the `mdns-sd`/`getrandom` reviews, and whether the 60 Hz poll needs speeding up (SRS §13.4).

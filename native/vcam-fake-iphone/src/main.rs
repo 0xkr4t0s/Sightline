@@ -146,7 +146,9 @@ fn parse_motion(bytes: &[u8]) -> Result<Motion> {
         return Err(format!("motion body is {} bytes, expected {count} x 28", body.len()).into());
     }
     let frames = body
-        .chunks_exact(28)
+        .as_chunks::<28>()
+        .0
+        .iter()
         .map(|c| {
             let f =
                 |i: usize| f32::from_le_bytes([c[4 * i], c[4 * i + 1], c[4 * i + 2], c[4 * i + 3]]);
