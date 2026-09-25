@@ -17,10 +17,15 @@ nonisolated enum UDPSenderError: LocalizedError {
 
 /// One UDP connection, reused while the destination stays the same. Not thread-safe: its owner
 /// (`TrackingPipeline`) calls it only on `queue`, which is also where completions run.
+///
+/// The connection also reads what the host sends back to the same port (vcp.md §3: the host
+/// replies to the source of the device's datagrams) and hands each datagram to `onReceive`.
 nonisolated final class UDPSender {
     private let queue: DispatchQueue
     private var connection: NWConnection?
     private var destinationKey: String?
+    /// Called on `queue` for every datagram received on the current connection.
+    var onReceive: (@Sendable (Data) -> Void)?
 
     init(queue: DispatchQueue) {
         self.queue = queue
@@ -68,7 +73,28 @@ nonisolated final class UDPSender {
 
         let connection = NWConnection(host: nwHost, port: nwPort, using: .udp)
         connection.start(queue: queue)
+        if let onReceive {
+            Self.receive(on: connection, deliver: onReceive)
+        }
         self.connection = connection
         destinationKey = key
+    }
+
+    /// Reads datagrams until the connection fails or is cancelled (`close`).
+    private static func receive(on connection: NWConnection, deliver: @escaping @Sendable (Data) -> Void) {
+        connection.receiveMessage { data, _, _, error in
+            if let data, !data.isEmpty {
+                deliver(data)
+            }
+            guard error == nil else {
+                return
+            }
+            switch connection.state {
+            case .cancelled, .failed:
+                return
+            default:
+                receive(on: connection, deliver: deliver)
+            }
+        }
     }
 }

@@ -10,6 +10,10 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var controller: TrackingSessionController
     @State private var browser = HostBrowser()
+    @State private var customScale = ""
+
+    /// FR-CTL-004's examples: 1:1, 1:2, 1:10, plus 1:5; anything else via Custom.
+    private static let scalePresets: [Float] = [1, 2, 5, 10]
 
     var body: some View {
         NavigationStack {
@@ -62,6 +66,39 @@ struct ContentView: View {
                     }
                 }
 
+                Section("Rig") {
+                    Button("Set Origin") {
+                        controller.controls.setOrigin()
+                    }
+                    .disabled(!controller.isTracking)
+
+                    Picker("Motion scale", selection: $controller.controls.motionScale) {
+                        ForEach(Self.scalePresets, id: \.self) { scale in
+                            Text("1:\(Self.format(scale))").tag(scale)
+                        }
+                        if !Self.scalePresets.contains(controller.controls.motionScale) {
+                            Text("1:\(Self.format(controller.controls.motionScale))")
+                                .tag(controller.controls.motionScale)
+                        }
+                    }
+                    HStack {
+                        Text("Custom 1:")
+                        TextField("25", text: $customScale)
+                            .keyboardType(.decimalPad)
+                        Button("Apply") {
+                            if let scale = DeviceControls.parseScale(customScale) {
+                                controller.controls.motionScale = scale
+                            }
+                        }
+                        .disabled(DeviceControls.parseScale(customScale) == nil)
+                    }
+
+                    Toggle("Lock height", isOn: lock(DeviceControls.lockHeight))
+                    Toggle("Lock roll", isOn: lock(DeviceControls.lockRoll))
+                    Toggle("Pan only (lock position)", isOn: lock(DeviceControls.panOnly))
+                    LabeledContent("Blender", value: controlStatus)
+                }
+
                 Section("Pose (Blender axes)") {
                     let pose = controller.latestPose
                     LabeledContent("Seq", value: pose.map { "\($0.seq)" } ?? "–")
@@ -81,6 +118,29 @@ struct ContentView: View {
 
     private func formatted<V: SIMD>(_ v: V) -> String where V.Scalar == Float {
         v.indices.map { String(format: "%.3f", v[$0]) }.joined(separator: " ")
+    }
+
+    private static func format(_ scale: Float) -> String {
+        String(format: "%g", scale)
+    }
+
+    private func lock(_ flag: UInt8) -> Binding<Bool> {
+        Binding(get: { controller.controls.isLocked(flag) },
+                set: { controller.controls.setLock(flag, $0) })
+    }
+
+    /// Whether Blender has applied the latest controls (`STATUS.control_ack`, vcp.md §6.2).
+    private var controlStatus: String {
+        if controller.sessionEndpoint == nil {
+            return "Not sent (not paired)"
+        }
+        if !controller.isTracking {
+            return "Sent when tracking starts"
+        }
+        if controller.controlSeq > 0, controller.controlAck >= controller.controlSeq {
+            return "Applied (#\(controller.controlSeq))"
+        }
+        return "Waiting for Blender (#\(controller.controlSeq))"
     }
 }
 

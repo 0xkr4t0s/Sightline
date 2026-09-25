@@ -20,6 +20,14 @@ final class TrackingSessionController {
     private(set) var sessionEndpoint: VCPEndpoint?
     private(set) var sessionStatus = "Idle"
     private(set) var lastError: String?
+    /// Motion scale, axis locks and the Set origin counter (FR-CTL-004, FR-TRK-003). Every change
+    /// goes to the pipeline, which sends it to Blender as `CONTROL_STATE` during a run.
+    var controls = DeviceControls() {
+        didSet { pipeline.setControls(controls) }
+    }
+    /// `state_seq` of the newest control state this run, and the host's highest acknowledgement.
+    private(set) var controlSeq: UInt32 = 0
+    private(set) var controlAck: UInt32 = 0
 
     @ObservationIgnored private let session = ARSession()
     @ObservationIgnored private let pipeline: TrackingPipeline
@@ -79,6 +87,8 @@ final class TrackingSessionController {
 
             lastError = nil
             packetsSent = 0
+            controlSeq = 0
+            controlAck = 0
             latestPose = nil
             isTracking = true
             sessionStatus = "Starting"
@@ -129,6 +139,8 @@ final class TrackingSessionController {
         }
         latestPose = snapshot.pose
         packetsSent = snapshot.packetsSent
+        controlSeq = snapshot.controlSeq
+        controlAck = snapshot.controlAck
         if let error = snapshot.sendError {
             lastError = error
             sessionStatus = "Send error"
