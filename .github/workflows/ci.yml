@@ -3,9 +3,11 @@
 # -> headless Blender smoke + fake-iPhone integration tests per OS. Plus Python and iOS unit tests.
 name: CI
 
+# Runs on PRs once they're ready (drafts skip every job) and on demand. Every change reaches
+# main through a PR that passed ci-ok, so there's no separate push run on main.
 on:
-  push:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 concurrency:
@@ -21,6 +23,7 @@ env:
 
 jobs:
   rust-fmt:
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -29,6 +32,7 @@ jobs:
         run: cargo fmt --check
 
   rust:
+    if: github.event.pull_request.draft != true
     strategy:
       fail-fast: false
       matrix:
@@ -50,6 +54,7 @@ jobs:
         run: cargo test
 
   fuzz:
+    if: github.event.pull_request.draft != true
     # PR-005 / NFR-QA-002: time-boxed cargo-fuzz run per target, seeded from testdata/.
     runs-on: ubuntu-latest
     steps:
@@ -92,6 +97,7 @@ jobs:
           path: native/fuzz/artifacts/
 
   wheels:
+    if: github.event.pull_request.draft != true
     strategy:
       fail-fast: false
       matrix:
@@ -231,6 +237,7 @@ jobs:
           done
 
   python:
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -243,6 +250,7 @@ jobs:
         run: python tools/gen_testdata.py --check
 
   ios:
+    if: github.event.pull_request.draft != true
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
@@ -255,3 +263,22 @@ jobs:
           xcodebuild test -configuration Release -project VCamIOS/VCamIOS.xcodeproj -scheme VCamIOS \
             -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
             -only-testing:VCamIOSTests/TrackingPipelineTests/testPoseSendPathAllocatesNothing
+
+  ci-ok:
+    # The single required check on main (branch protection). It fails unless every job ran and
+    # passed, so a draft (all jobs skipped) can't satisfy it and trigger auto-merge early.
+    if: always()
+    needs: [rust-fmt, rust, fuzz, wheels, extension, blender-smoke, python, ios]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: ${RESULTS}"
+          for r in ${RESULTS}; do
+            if [ "${r}" != success ]; then
+              echo "::error::Not every job passed (drafts skip CI: mark the PR ready to run it)"
+              exit 1
+            fi
+          done
