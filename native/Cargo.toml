@@ -13,6 +13,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 publish = false
+license = "Apache-2.0"
 
 [workspace.dependencies]
 vcam-protocol = { path = "vcam-protocol" }

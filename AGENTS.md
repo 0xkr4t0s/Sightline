@@ -9,7 +9,7 @@ The product is called **Sightline** (renamed from "VCam for Blender" on 2026-09-
 ## Startup Checklist
 
 - Read `IMPLEMENTATION_PROGRESS.md` (status by requirement ID), then the relevant part of `docs/SRS.md` (v3.0) and `docs/IMPLEMENTATION_PLAN.md` (v3.0).
-- The PDF `Software Requirements Specification (SRS) .pdf` is the superseded v1. Don't implement from it.
+- The superseded v1 PDF SRS was removed from the tree on 2026-09-25 (it's still in git history). Don't implement from it.
 - Cite requirement IDs in commits. After changing a requirement's status, update `IMPLEMENTATION_PROGRESS.md`.
 
 ## Architecture (v3)

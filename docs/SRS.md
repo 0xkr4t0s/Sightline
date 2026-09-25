@@ -4,7 +4,7 @@
 |---|---|
 | Document version | 3.0 |
 | Date | 2026-09-24 |
-| Supersedes | v2.0 (same day, withdrawn: it wrongly assumed a system virtual webcam and iPhone→desktop video) and `Software Requirements Specification (SRS) .pdf` (v1, April 2026) |
+| Supersedes | v2.0 (same day, withdrawn: it wrongly assumed a system virtual webcam and iPhone→desktop video) and the v1 PDF `Software Requirements Specification (SRS) .pdf` (April 2026; removed from the tree on 2026-09-25, still in git history) |
 | Status | Draft for owner review |
 | Companion documents | `docs/IMPLEMENTATION_PLAN.md`, `IMPLEMENTATION_PROGRESS.md` |
 
@@ -599,6 +599,12 @@ Heap blocks per call before the change (a throwaway probe; the loop's own block 
 Results after the change: 0 blocks over 600 poses in an optimised build. At `-Onone` about 12 blocks per pose remain from unspecialised generics and boxed closures, so the check runs with `-configuration Release` (a CI step). Send leg p50 / p95 / max: 0.01–0.02 / 0.02 / 0.022–0.025 ms optimised, 0.02–0.026 / 0.02–0.026 / 0.020–0.026 ms at `-Onone` (10 µs bins). NFR-LAT-002's 2 ms p95 has about 100× headroom on this host; a device run is still needed.
 
 Flag (no requirement changed): §1.4 lists the Network framework (`NetworkConnection`) as the iOS networking API. To meet NFR-LAT-002's "no allocation per pose", the pose/control UDP socket is now a BSD socket (`SightlineIOS/SightlineIOS/UDPSender.swift`); discovery stays on `NetworkBrowser`, and the TCP session (1.4.2b) can still use `NetworkConnection`. Two consequences: host names are resolved with `getaddrinfo` off the ARKit queue (addresses connect at once), and IPv4 results come first, because Blender's session binds `0.0.0.0` (`BlenderAddOn/core/session.py:116`), so `localhost` → `::1` or `.local` → `fe80::…` would never reach it.
+
+### 13.6 S-5 licence decision — 2026-09-25 (owner, before the repository went public)
+
+- `native/` (every Rust crate, including `vcam-py` and the fuzz crate), the VCP spec (`docs/protocol/`), `testdata/`, `tools/` and `tests/`: **Apache-2.0**. The root `LICENSE` covers everything without its own licence file; the crates declare `license = "Apache-2.0"`.
+- `BlenderAddOn/` stays **GPL-3.0-or-later** (`BlenderAddOn/LICENSE`, manifest). The `vcam_native` wheel it bundles is Apache-2.0 source, which is GPL-3.0 compatible, so C-1 holds.
+- `SightlineIOS/` stays **Apache-2.0**. Because `vcam-protocol` is now Apache-2.0, ARC-007 (sharing it with iOS through UniFFI) is licence-clear. No requirement text changed.
 
 ---
 
