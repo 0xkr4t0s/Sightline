@@ -106,6 +106,9 @@ struct SettingsView: View {
                             .foregroundStyle(leg.meetsTarget ? Color.primary : Color.orange)
                     }
                     LabeledContent("Session", value: controller.sessionStatus)
+                    if let seconds = controller.lastReconnectSeconds {
+                        LabeledContent("Last reconnect", value: String(format: "%.2f s", seconds))
+                    }
                     if let understanding = controller.sceneUnderstanding {
                         LabeledContent("Scene understanding", value: understanding.summary)
                     }

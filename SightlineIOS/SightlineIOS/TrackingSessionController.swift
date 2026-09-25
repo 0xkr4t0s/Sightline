@@ -51,6 +51,20 @@ final class TrackingSessionController {
     @ObservationIgnored private var liveSession: VCPLiveSession?
     /// True while a start waits for camera permission or Blender's handshake.
     private(set) var isStarting = false
+    /// True while a run that lost its session tries to start a new one (NET-004). AR keeps running.
+    private(set) var isReconnecting = false
+    /// Loss detected → new session accepted, for the last reconnect this run (NET-004: ≤ 3 s once
+    /// the network and Blender are back).
+    private(set) var lastReconnectSeconds: Double?
+    /// Where this run's sessions come from; a reconnect goes back to the same place.
+    @ObservationIgnored private var sessionTarget: SessionTarget?
+    @ObservationIgnored private var reconnectTask: Task<Void, Never>?
+    /// The handshake of a start in progress, so an explicit stop can cancel it.
+    @ObservationIgnored private var pendingConnect: Task<Result<VCPLiveSession, VCPLinkError>, Never>?
+    /// Bumped by every stop: a start that was waiting (camera prompt, handshake) sees it and quits.
+    @ObservationIgnored private var runGeneration: UInt64 = 0
+    /// Set when the app leaves the foreground mid-run, so the run restarts when it comes back.
+    @ObservationIgnored private var resumeWhenActive = false
 
     init() {
         let settings = TrackingSettings.load()
@@ -179,6 +193,7 @@ final class TrackingSessionController {
 
         isStarting = true
         defer { isStarting = false }
+        let generation = runGeneration
         do {
             // An unpaired discovered host can still show local AR poses; it has no UDP destination.
             let destination: (host: String, port: UInt16) = if selectedServiceName == nil {
@@ -187,6 +202,9 @@ final class TrackingSessionController {
                 ("", 0)
             }
             let granted = await requestCameraAccessIfNeeded()
+            guard generation == runGeneration else {
+                return  // stopped while the camera prompt was up
+            }
             guard granted else {
                 sessionStatus = "Permission denied"
                 lastError = "Camera permission is required to run AR tracking."
@@ -198,22 +216,39 @@ final class TrackingSessionController {
                 host = destination.host
             }
             var link: VCPLiveSession?
+            let target: SessionTarget = if let selectedServiceName {
+                .service(selectedServiceName)
+            } else {
+                .address(host: destination.host, port: destination.port)
+            }
             if let pairing {
                 sessionStatus = "Connecting to Blender"
-                do throws(VCPLinkError) {
-                    if let selectedServiceName {
-                        link = try await VCPSessionClient.connect(serviceName: selectedServiceName,
-                                                                  device: device, pairing: pairing)
-                    } else {
-                        link = try await VCPSessionClient.connect(host: destination.host, port: destination.port,
-                                                                  device: device, pairing: pairing)
+                let device = device
+                let connect = Task { () async -> Result<VCPLiveSession, VCPLinkError> in
+                    do throws(VCPLinkError) {
+                        return .success(try await target.connect(device: device, pairing: pairing,
+                                                                 timeout: VCPSessionClient.handshakeTimeout))
+                    } catch {
+                        return .failure(error)
                     }
-                } catch {
+                }
+                pendingConnect = connect
+                let result = await connect.value
+                pendingConnect = nil
+                guard generation == runGeneration else {
+                    if case let .success(late) = result { late.close() }
+                    return  // stopped during the handshake
+                }
+                switch result {
+                case let .success(session):
+                    link = session
+                case let .failure(error):
                     sessionStatus = "Not connected"
                     lastError = error.message
                     return
                 }
             }
+            sessionTarget = target
             // A new session per run: the run's seq and state_seq restart at 1, as a new session's
             // must (vcp.md §8).
             liveSession = link
@@ -235,6 +270,7 @@ final class TrackingSessionController {
             rateMeter = PoseRateMeter()
             poseRate = nil
             sendLeg = nil
+            lastReconnectSeconds = nil
             sceneUnderstanding = understanding
             isTracking = true
             sessionStatus = "Starting"
@@ -245,20 +281,85 @@ final class TrackingSessionController {
         }
     }
 
-    /// Stops the run when Blender ends the session: the TCP connection closed or the host sent
-    /// `ERROR` (vcp.md §8). Poses stop leaving the device at once.
+    /// Watches the run's TCP connection: Blender closing it or sending `ERROR` loses the session
+    /// (vcp.md §8).
     private func watch(_ link: VCPLiveSession) {
         Task { [weak self] in
             let reason = await link.ended()
             guard let self, self.liveSession === link else {
                 return
             }
-            self.lastError = reason.message
-            self.stopTracking(reason: "Blender session ended")
+            self.sessionLost(reason.message)
+        }
+    }
+
+    /// vcp.md §8, NET-004: a lost session is replaced by a new one with the stored pairing
+    /// (`HELLO` mode 1), with no re-pairing. AR tracking keeps running and poses stay on screen,
+    /// but nothing leaves the device until the new session is up; its `seq` and `state_seq`
+    /// restart at 1 and it opens with the complete `CONTROL_STATE` (`TrackingPipeline.start`).
+    private func sessionLost(_ reason: String) {
+        guard isTracking, let pairing, let target = sessionTarget else {
+            lastError = reason
+            stopTracking(reason: "Blender session ended")
+            return
+        }
+        liveSession?.close()
+        liveSession = nil
+        sessionEndpoint = nil
+        pipeline.start(TrackingDestination(host: "", port: 0, endpoint: nil))
+        lastError = reason
+        sessionStatus = "Reconnecting to Blender"
+        isReconnecting = true
+        reconnectTask?.cancel()
+        let device = device
+        let lostAt = ContinuousClock.now
+        reconnectTask = Task { [weak self] in
+            let result: Result<VCPLiveSession, VCPLinkError>
+            do throws(VCPLinkError) {
+                result = .success(try await VCPReconnect.run { () async throws(VCPLinkError) -> VCPLiveSession in
+                    try await target.connect(device: device, pairing: pairing, timeout: VCPReconnect.attemptTimeout)
+                })
+            } catch {
+                result = .failure(error)
+            }
+            guard let self, !Task.isCancelled else {
+                if case let .success(late) = result { late.close() }
+                return
+            }
+            self.reconnected(result, after: ContinuousClock.now - lostAt)
+        }
+    }
+
+    private func reconnected(_ result: Result<VCPLiveSession, VCPLinkError>, after elapsed: Duration) {
+        reconnectTask = nil
+        isReconnecting = false
+        switch result {
+        case let .success(link):
+            liveSession = link
+            sessionEndpoint = link.endpoint
+            pipeline.start(link.destination)
+            watch(link)
+            controlSeq = 0
+            controlAck = 0
+            lastReconnectSeconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) * 1e-18
+            lastError = nil
+            sessionStatus = "Reconnected"
+        case let .failure(error):
+            // Only a fatal error ends the loop (a stop cancels this task first): pair again.
+            lastError = error.message
+            stopTracking(reason: "Pairing no longer accepted")
         }
     }
 
     func stopTracking(reason: String? = nil) {
+        runGeneration &+= 1
+        resumeWhenActive = false
+        pendingConnect?.cancel()
+        pendingConnect = nil
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        isReconnecting = false
+        sessionTarget = nil
         session.pause()
         pipeline.stop()
         liveSession?.close()
@@ -274,23 +375,24 @@ final class TrackingSessionController {
         }
     }
 
+    /// Leaving the foreground ends the run (ARKit stops in the background); coming back starts it
+    /// again with a new session from the stored pairing (NET-004), unless the operator stopped it.
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
-            if !isTracking, lastError == nil, sessionStatus == "Inactive" || sessionStatus == "Backgrounded" {
+            if resumeWhenActive {
+                resumeWhenActive = false
+                Task { await startTracking() }
+            } else if !isTracking, lastError == nil, sessionStatus == "Inactive" || sessionStatus == "Backgrounded" {
                 sessionStatus = "Idle"
             }
-        case .inactive:
-            if isTracking {
-                stopTracking(reason: "Inactive")
+        case .inactive, .background:
+            let reason = phase == .background ? "Backgrounded" : "Inactive"
+            if isTracking || isStarting {
+                stopTracking(reason: reason)
+                resumeWhenActive = true
             } else {
-                sessionStatus = "Inactive"
-            }
-        case .background:
-            if isTracking {
-                stopTracking(reason: "Backgrounded")
-            } else {
-                sessionStatus = "Backgrounded"
+                sessionStatus = reason
             }
         @unknown default:
             break
@@ -302,8 +404,7 @@ final class TrackingSessionController {
             return
         }
         if snapshot.sessionLost {
-            lastError = "No authenticated reply from Blender for three seconds."
-            stopTracking(reason: "Blender session lost")
+            sessionLost("No authenticated reply from Blender for three seconds.")
             return
         }
         latestPose = snapshot.pose
@@ -327,7 +428,7 @@ final class TrackingSessionController {
     private func handle(_ event: ARFrameReceiver.Event) {
         switch event {
         case .trackingState(let description):
-            if isTracking {
+            if isTracking, !isReconnecting {
                 sessionStatus = description
             }
         case .failed(let message):
@@ -362,6 +463,23 @@ final class TrackingSessionController {
             return false
         @unknown default:
             return false
+        }
+    }
+}
+
+/// Where a run's sessions come from: the Bonjour service picked in Settings, or a typed address and
+/// control port. A reconnect (NET-004) goes back to the same one.
+nonisolated enum SessionTarget: Sendable {
+    case service(String)
+    case address(host: String, port: UInt16)
+
+    func connect(device: VCPDeviceIdentity, pairing: VCPHostPairing,
+                 timeout: Double) async throws(VCPLinkError) -> VCPLiveSession {
+        switch self {
+        case let .service(name):
+            try await VCPSessionClient.connect(serviceName: name, device: device, pairing: pairing, timeout: timeout)
+        case let .address(host, port):
+            try await VCPSessionClient.connect(host: host, port: port, device: device, pairing: pairing, timeout: timeout)
         }
     }
 }

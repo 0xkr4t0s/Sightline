@@ -82,9 +82,9 @@ struct ContentView: View {
 
     private var controlRail: some View {
         VStack(spacing: 20) {
-            railButton(controller.isTracking ? "Stop" : "Start",
-                       systemImage: controller.isTracking ? "stop.fill" : "play.fill") {
-                if controller.isTracking {
+            let running = controller.isTracking || controller.isStarting
+            railButton(running ? "Stop" : "Start", systemImage: running ? "stop.fill" : "play.fill") {
+                if running {
                     controller.stopTracking()
                 } else {
                     Task { await controller.startTracking() }
@@ -137,6 +137,9 @@ struct ContentView: View {
         }
         if controller.sessionStatus == "Send error" {
             return "Send error"
+        }
+        if controller.isReconnecting {
+            return "Reconnecting"
         }
         return controller.sessionEndpoint != nil ? "Sending to Blender" : "Paired"
     }
