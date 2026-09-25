@@ -326,31 +326,105 @@ nonisolated enum VCPSessionClient {
     }
 
     /// Connects to Blender's control port and starts a session with `pairing`, within `timeout`.
-    /// On failure the connection is closed.
+    /// On failure, or if the calling task is cancelled, the connection is closed (cancellation
+    /// throws `.closed` at once instead of waiting for the deadline). `nonce` is a parameter only so
+    /// tests can replay the golden transcript.
     static func connect(host: String, port: UInt16, device: VCPDeviceIdentity, pairing: VCPHostPairing,
-                        timeout: Double = handshakeTimeout) async throws(VCPLinkError) -> VCPLiveSession {
+                        timeout: Double = handshakeTimeout,
+                        nonce: [UInt8] = VCPPairing.randomBytes(16)) async throws(VCPLinkError) -> VCPLiveSession {
         let channel = try VCPControlChannel(host: host, port: port)
-        return try await connect(on: channel, device: device, pairing: pairing, timeout: timeout)
+        return try await connect(on: channel, device: device, pairing: pairing, timeout: timeout, nonce: nonce)
     }
 
     static func connect(serviceName: String, device: VCPDeviceIdentity, pairing: VCPHostPairing,
                         timeout: Double = handshakeTimeout) async throws(VCPLinkError) -> VCPLiveSession {
         try await connect(on: VCPControlChannel(serviceName: serviceName), device: device,
-                          pairing: pairing, timeout: timeout)
+                          pairing: pairing, timeout: timeout, nonce: VCPPairing.randomBytes(16))
     }
 
-    private static func connect(on channel: VCPControlChannel, device: VCPDeviceIdentity,
-                                pairing: VCPHostPairing, timeout: Double) async throws(VCPLinkError) -> VCPLiveSession {
-        do {
-            return try await channel.withDeadline(timeout) { () async throws(VCPLinkError) -> VCPLiveSession in
-                try await channel.open()
-                return try await startSession(on: channel, device: device) {
-                    $0 == pairing.hostID ? pairing.pairingKey : nil
+    private static func connect(on channel: VCPControlChannel, device: VCPDeviceIdentity, pairing: VCPHostPairing,
+                                timeout: Double, nonce: [UInt8]) async throws(VCPLinkError) -> VCPLiveSession {
+        do throws(VCPLinkError) {
+            // The operation returns a Result: before Swift 6.3 (Xcode 26), withTaskCancellationHandler
+            // only rethrows, so a thrown VCPLinkError would come back as `any Error`.
+            let outcome = await withTaskCancellationHandler { () async -> Result<VCPLiveSession, VCPLinkError> in
+                do throws(VCPLinkError) {
+                    return .success(try await channel.withDeadline(timeout) { () async throws(VCPLinkError) -> VCPLiveSession in
+                        try await channel.open()
+                        return try await startSession(on: channel, device: device, pairingKey: {
+                            $0 == pairing.hostID ? pairing.pairingKey : nil
+                        }, nonce: nonce)
+                    })
+                } catch {
+                    return .failure(error)
                 }
+            } onCancel: {
+                channel.close()
             }
+            let link = try outcome.get()
+            // Cancelled just as the handshake finished: the caller no longer wants this session.
+            guard !Task.isCancelled else {
+                throw VCPLinkError.closed
+            }
+            return link
         } catch {
             channel.close()
             throw error
         }
+    }
+}
+
+/// NET-004, vcp.md §8: after a session is lost, the device starts a new one with the stored pairing
+/// (`HELLO` mode 1), without re-pairing. Attempts start at most `retryInterval` apart, and each is
+/// bounded by `attemptTimeout`, so a handshake that stalls on a dead network is abandoned and
+/// retried instead of holding up the reconnect for the full 10 s handshake deadline.
+nonisolated enum VCPReconnect {
+    static let retryInterval: Duration = .milliseconds(500)
+    static let attemptTimeout: Double = 2
+
+    /// Errors that retrying can't fix: Blender no longer accepts this pairing, or the host proves
+    /// a different key. The operator has to pair again.
+    static func isFatal(_ error: VCPLinkError) -> Bool {
+        switch error {
+        case .unknownHost, .pairing:
+            true
+        case let .host(code, _):
+            code == VCPControlErrorMessage.notPaired || code == VCPControlErrorMessage.proofFailed
+        case .network, .timeout, .closed, .unexpected:
+            false
+        }
+    }
+
+    /// Runs `attempt` until it returns a session. Each attempt starts `retryInterval` after the
+    /// previous one started, or at once if that one took longer. A fatal error (`isFatal`) is
+    /// rethrown; any other failure goes to `onFailure` and is retried. Cancelling the calling task
+    /// ends the loop with `.closed`, and a session that arrives after that is closed, not returned.
+    static func run(retryInterval: Duration = retryInterval,
+                    attempt: () async throws(VCPLinkError) -> VCPLiveSession,
+                    onFailure: (VCPLinkError) -> Void = { _ in }) async throws(VCPLinkError) -> VCPLiveSession {
+        let clock = ContinuousClock()
+        while !Task.isCancelled {
+            let started = clock.now
+            let error: VCPLinkError
+            do throws(VCPLinkError) {
+                let link = try await attempt()
+                guard !Task.isCancelled else {
+                    link.close()
+                    throw VCPLinkError.closed
+                }
+                return link
+            } catch let failure {
+                error = failure
+            }
+            guard !Task.isCancelled else {
+                break
+            }
+            if isFatal(error) {
+                throw error
+            }
+            onFailure(error)
+            do { try await clock.sleep(until: started + retryInterval) } catch { break }
+        }
+        throw .closed
     }
 }
