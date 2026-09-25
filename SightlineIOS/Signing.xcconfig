@@ -1,0 +1,6 @@
+// Signing for device builds. The Apple Team ID isn't committed: put yours in
+// Signing.local.xcconfig next to this file (git-ignored), for example:
+//   DEVELOPMENT_TEAM = ABCDE12345
+// Simulator builds and CI need no team.
+DEVELOPMENT_TEAM =
+#include? "Signing.local.xcconfig"

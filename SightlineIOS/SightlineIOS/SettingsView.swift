@@ -2,8 +2,6 @@
 //  SettingsView.swift
 //  SightlineIOS
 //
-//  Created by 0xKr4t0s on 7/4/2026.
-//
 
 import SwiftUI
 

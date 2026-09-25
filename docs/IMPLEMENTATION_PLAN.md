@@ -163,7 +163,7 @@ VCamBlender/
 - AR passthrough: composite Blender's render over the iPhone camera feed (needs an alpha or depth stream). SRS §2.4 T4
 - iPad director monitor (a second receiver of the same stream)
 - OSC triggers; multiple iPhones driving multiple cameras
-- Shared Rust `vcam-protocol` on iOS through UniFFI (ARC-007, once S-5 settles the licence)
+- Shared Rust `vcam-protocol` on iOS through UniFFI (ARC-007; licence-clear since S-5 chose Apache-2.0 for `native/`, SRS §13.6)
 - Take repair (owner idea, 2026-09-25): after a take is recorded, fill gaps where poses were lost (Wi-Fi drop-outs) by interpolating across them (slerp for rotation, a spline for position), and find and smooth sudden position jumps (for example ARKit relocalising). Works on the raw take buffer from 3.1, so the raw data is kept; repaired spans are marked and the thresholds are adjustable. Builds on FR-TAKE-001/004/005. FR-TAKE-006
 - Android app (owner, 2026-09-25): an ARCore client speaking the same VCP protocol, so the Blender side is unchanged. Starts only after the repo is public and Android contributors are on board; not a loop task. Keep VCP and `testdata/` platform-neutral so a Kotlin client can reuse the golden vectors.
 
@@ -218,4 +218,4 @@ Still owner-blocked, don't wait on them: 1.5.1c (real iPhone), S-1 on Windows/Li
 | H.264 software-encoder licensing | Medium | T3 distribution | Prefer OS hardware encoders; legal check before shipping OpenH264 |
 | Blender Python API changes in 5.x → 6.0 | Medium | Rework | Pin 5.2 LTS; keep `bpy`/`gpu` usage in a thin layer; CI against the next Blender beta |
 | GPL boundary mistakes with the iOS app | Low | Legal | No GPL code in iOS; share only test vectors, or MIT/Apache crates (S-5) |
-| ~~iCloud Drive sync corrupts `target/` or `.git`~~ | Closed 2026-09-24 | — | `~/iCloud Drive (Archive)` is a local, non-synced folder (macOS's archive copy), so the repo isn't in iCloud. No remote backup exists yet; the owner should add a private remote. |
+| ~~iCloud Drive sync corrupts `target/` or `.git`~~ | Closed 2026-09-24 | — | `~/iCloud Drive (Archive)` is a local, non-synced folder (macOS's archive copy), so the repo isn't in iCloud. The remote is GitHub `0xkr4t0s/Sightline` (public from 2026-09-25). |
