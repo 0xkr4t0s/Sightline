@@ -7,6 +7,7 @@
 //! vcam-fake-iphone --host 127.0.0.1:47000 --state DIR/fake-iphone.key [--code 123456]
 //!                  --motion testdata/motion/scripted.bin [--rate HZ] [--linger SECONDS]
 //!                  [--name NAME] [--scale S] [--locks FLAGS] [--set-origin-at FRAME]
+//!                  [--limited FROM-TO]
 //! ```
 //! Prints `FAKE_IPHONE_PAIRED`, `FAKE_IPHONE_SESSION ...` and a final `FAKE_IPHONE_DONE ...`
 //! line on stdout. Any failure exits 1 with the reason on stderr.
@@ -32,6 +33,8 @@ const CONTROL_INTERVAL: Duration = Duration::from_millis(500);
 const TCP_TIMEOUT: Duration = Duration::from_secs(5);
 /// Offset of the fake device clock, so host and device clocks visibly differ (NET-003).
 const DEVICE_CLOCK_OFFSET_NS: u64 = 1_000_000_000_000;
+/// `tracking_state` for ARKit `.limited(.relocalizing)` (vcp.md §6.1), sent inside `--limited`.
+const TRACKING_RELOCALIZING: u8 = 4;
 
 fn version_line() -> String {
     format!(
@@ -60,6 +63,8 @@ struct Args {
     locks: u8,
     /// Press Set origin just before sending this frame index (bumps `origin_epoch`).
     set_origin_at: Option<usize>,
+    /// Frame indices `FROM..TO` (end exclusive) are sent as `limited(.relocalizing)`.
+    limited: std::ops::Range<usize>,
 }
 
 fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
@@ -72,7 +77,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
         Duration::ZERO,
         "Fake iPhone".to_owned(),
     );
-    let (mut scale, mut locks, mut set_origin_at) = (1.0f32, 0u8, None);
+    let (mut scale, mut locks, mut set_origin_at, mut limited) = (1.0f32, 0u8, None, 0..0);
     while let Some(flag) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("{flag} needs a value"));
         match flag.as_str() {
@@ -104,6 +109,14 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
                 locks = v;
             }
             "--set-origin-at" => set_origin_at = Some(value()?.parse()?),
+            "--limited" => {
+                let v = value()?;
+                let (from, to) = v.split_once('-').ok_or("--limited needs FROM-TO")?;
+                limited = from.parse()?..to.parse()?;
+                if limited.is_empty() {
+                    return Err("--limited needs FROM < TO".into());
+                }
+            }
             other => return Err(format!("unknown argument {other}").into()),
         }
     }
@@ -118,6 +131,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
         scale,
         locks,
         set_origin_at,
+        limited,
     })
 }
 
@@ -421,7 +435,11 @@ fn run(args: &Args) -> Result<String> {
             capture_time_ns: s.device_ns(),
             position_m: *position_m,
             orientation: *orientation,
-            tracking_state: Pose::TRACKING_NORMAL,
+            tracking_state: if args.limited.contains(&i) {
+                TRACKING_RELOCALIZING
+            } else {
+                Pose::TRACKING_NORMAL
+            },
             flags: 0,
         };
         s.send(&Message::Pose(pose))?;

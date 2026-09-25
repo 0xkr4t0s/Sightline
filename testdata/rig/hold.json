@@ -1,0 +1,228 @@
+{
+  "note": "Hold last good pose (BlenderAddOn/core/rig.py PoseHold, core/apply.py). Steps run in order in one session. shown_seq null means the camera is not moved; holding is what the N-panel shows. tracking_state codes are vcp.md §6.1 (5 = normal).",
+  "scripted": {
+    "held_keypose": "pan",
+    "hidden_keyposes": [
+      "tilt"
+    ],
+    "limited_frames": [
+      120,
+      210
+    ],
+    "motion": "motion/scripted.bin",
+    "note": "fake iPhone --limited 120-210: frames [120, 210) are sent with tracking_state 4; with hold on the camera shows the pan keypose throughout",
+    "resumed_keyposes": [
+      "dolly",
+      "crane"
+    ],
+    "tracking_state": 4
+  },
+  "sequences": [
+    {
+      "name": "limited_span_held",
+      "note": "hold on: every non-normal state keeps the last normal pose; normal resumes",
+      "steps": [
+        {
+          "hold": true,
+          "holding": false,
+          "seq": 1,
+          "shown_seq": 1,
+          "tracking_state": 5
+        },
+        {
+          "hold": true,
+          "holding": true,
+          "seq": 2,
+          "shown_seq": 1,
+          "tracking_state": 2
+        },
+        {
+          "hold": true,
+          "holding": true,
+          "seq": 3,
+          "shown_seq": 1,
+          "tracking_state": 4
+        },
+        {
+          "hold": true,
+          "holding": true,
+          "seq": 4,
+          "shown_seq": 1,
+          "tracking_state": 3
+        },
+        {
+          "hold": true,
+          "holding": true,
+          "seq": 5,
+          "shown_seq": 1,
+          "tracking_state": 0
+        },
+        {
+          "hold": true,
+          "holding": true,
+          "seq": 6,
+          "shown_seq": 1,
+          "tracking_state": 6
+        },
+        {
+          "hold": true,
+          "holding": false,
+          "seq": 7,
+          "shown_seq": 7,
+          "tracking_state": 5
+        },
+        {
+          "hold": true,
+          "holding": false,
+          "seq": 8,
+          "shown_seq": 8,
+          "tracking_state": 5
+        }
+      ]
+    },
+    {
+      "name": "hold_off_applies_degraded",
+      "note": "hold off: limited poses are applied as ARKit reported them",
+      "steps": [
+        {
+          "hold": false,
+          "holding": false,
+          "seq": 1,
+          "shown_seq": 1,
+          "tracking_state": 5
+        },
+        {
+          "hold": false,
+          "holding": false,
+          "seq": 2,
+          "shown_seq": 2,
+          "tracking_state": 2
+        },
+        {
+          "hold": false,
+          "holding": false,
+          "seq": 3,
+          "shown_seq": 3,
+          "tracking_state": 4
+        },
+        {
+          "hold": false,
+          "holding": false,
+          "seq": 4,
+          "shown_seq": 4,
+          "tracking_state": 5
+        }
+      ]
+    },
+    {
+      "name": "starts_limited",
+      "note": "no normal pose yet: the camera isn't moved until the first one",
+      "steps": [
+        {
+          "hold": true,
+          "holding": true,
+          "seq": 1,
+          "shown_seq": null,
+          "tracking_state": 1
+        },
+        {
+          "hold": true,
+          "holding": true,
+          "seq": 2,
+          "shown_seq": null,
+          "tracking_state": 1
+        },
+        {
+          "hold": true,
+          "holding": false,
+          "seq": 3,
+          "shown_seq": 3,
+          "tracking_state": 5
+        },
+        {
+          "hold": true,
+          "holding": true,
+          "seq": 4,
+          "shown_seq": 3,
+          "tracking_state": 4
+        }
+      ]
+    },
+    {
+      "name": "enabled_mid_span",
+      "note": "turned on during a limited span: holds the last normal pose, not the last applied one",
+      "steps": [
+        {
+          "hold": true,
+          "holding": false,
+          "seq": 1,
+          "shown_seq": 1,
+          "tracking_state": 5
+        },
+        {
+          "hold": false,
+          "holding": false,
+          "seq": 2,
+          "shown_seq": 2,
+          "tracking_state": 4
+        },
+        {
+          "hold": false,
+          "holding": false,
+          "seq": 3,
+          "shown_seq": 3,
+          "tracking_state": 4
+        },
+        {
+          "hold": true,
+          "holding": true,
+          "seq": 4,
+          "shown_seq": 1,
+          "tracking_state": 4
+        },
+        {
+          "hold": false,
+          "holding": false,
+          "seq": 5,
+          "shown_seq": 5,
+          "tracking_state": 4
+        },
+        {
+          "hold": true,
+          "holding": false,
+          "seq": 6,
+          "shown_seq": 6,
+          "tracking_state": 5
+        }
+      ]
+    },
+    {
+      "name": "normal_while_off_is_remembered",
+      "note": "normal poses count as good while the option is off",
+      "steps": [
+        {
+          "hold": false,
+          "holding": false,
+          "seq": 1,
+          "shown_seq": 1,
+          "tracking_state": 5
+        },
+        {
+          "hold": false,
+          "holding": false,
+          "seq": 2,
+          "shown_seq": 2,
+          "tracking_state": 5
+        },
+        {
+          "hold": true,
+          "holding": true,
+          "seq": 3,
+          "shown_seq": 2,
+          "tracking_state": 4
+        }
+      ]
+    }
+  ],
+  "tracking_normal": 5
+}

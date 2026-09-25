@@ -36,6 +36,10 @@ testdata/vcp/srp-rfc5054-appendix-b.json   the RFC 5054 vectors (SHA-1, 1024-bit
 testdata/coords/arkit_to_canonical.json    DM-004 cases (vcp.md §7).
 testdata/rig/rig_cases.json   rig math (task 1.3.2a): device pose + Set-origin zero + motion scale + lock
                              flags -> the camera's local pose under VCam_Origin.
+testdata/rig/hold.json   hold last good pose (task 1.3.6, FR-TRK-002): sequences of poses (seq,
+                             tracking_state, hold option) -> the seq whose pose the camera shows
+                             (null = camera not moved) and whether the host is holding; plus the
+                             limited span of the scripted fake-iPhone run.
 testdata/motion/scripted.json   fake-iPhone motion (task 1.2.7): canonical frames at rate_hz and the
                              named keyposes (frame index, position, orientation, matrix_world).
 testdata/motion/scripted.bin    the same frames for vcam-fake-iphone: "VCMO", u16 version 1,
@@ -985,6 +989,70 @@ def build_rig(motion: dict) -> dict:
     }
 
 
+def build_hold(motion: dict) -> dict:
+    """Hold last good pose (task 1.3.6; FR-TRK-002, vcp.md §6.1): which pose the camera shows.
+
+    Written by hand; `rule` re-derives each expectation so a typo in a table can't slip through.
+    """
+    N, INIT, MOTION, FEATURES, RELOC, NOT_AVAIL, OTHER = 5, 1, 2, 3, 4, 0, 6
+    sequences = []
+
+    def rule(steps):
+        good, out = None, []
+        for seq, state, hold in steps:
+            if state == N:
+                good = seq
+                out.append((seq, False))
+            elif hold:
+                out.append((good, True))
+            else:
+                out.append((seq, False))
+        return out
+
+    def sequence(name, note, steps, expected):
+        assert rule(steps) == expected, (name, rule(steps), expected)
+        sequences.append({"name": name, "note": note, "steps": [
+            {"seq": seq, "tracking_state": state, "hold": hold, "shown_seq": shown, "holding": holding}
+            for (seq, state, hold), (shown, holding) in zip(steps, expected)]})
+
+    sequence("limited_span_held", "hold on: every non-normal state keeps the last normal pose; normal resumes",
+             [(1, N, True), (2, MOTION, True), (3, RELOC, True), (4, FEATURES, True), (5, NOT_AVAIL, True),
+              (6, OTHER, True), (7, N, True), (8, N, True)],
+             [(1, False), (1, True), (1, True), (1, True), (1, True), (1, True), (7, False), (8, False)])
+    sequence("hold_off_applies_degraded", "hold off: limited poses are applied as ARKit reported them",
+             [(1, N, False), (2, MOTION, False), (3, RELOC, False), (4, N, False)],
+             [(1, False), (2, False), (3, False), (4, False)])
+    sequence("starts_limited", "no normal pose yet: the camera isn't moved until the first one",
+             [(1, INIT, True), (2, INIT, True), (3, N, True), (4, RELOC, True)],
+             [(None, True), (None, True), (3, False), (3, True)])
+    sequence("enabled_mid_span", "turned on during a limited span: holds the last normal pose, not the last applied one",
+             [(1, N, True), (2, RELOC, False), (3, RELOC, False), (4, RELOC, True), (5, RELOC, False), (6, N, True)],
+             [(1, False), (2, False), (3, False), (1, True), (5, False), (6, False)])
+    sequence("normal_while_off_is_remembered", "normal poses count as good while the option is off",
+             [(1, N, False), (2, N, False), (3, RELOC, True)],
+             [(1, False), (2, False), (2, True)])
+
+    keys = {k["name"]: k for k in motion["keyposes"]}
+    pan, tilt = keys["pan"], keys["tilt"]
+    # Limited from just after the pan keypose until just after the tilt keypose (frame indices,
+    # end exclusive): the camera stays on the pan keypose, the tilt keypose is never shown.
+    first, end = pan["frame"] + 1, tilt["frame"] + 1
+    assert keys["dolly"]["frame"] - 28 > end, "dolly's hold must be after the span"
+    return {
+        "note": "Hold last good pose (BlenderAddOn/core/rig.py PoseHold, core/apply.py). Steps run in order "
+                "in one session. shown_seq null means the camera is not moved; holding is what the "
+                "N-panel shows. tracking_state codes are vcp.md §6.1 (5 = normal).",
+        "tracking_normal": N,
+        "sequences": sequences,
+        "scripted": {
+            "motion": "motion/scripted.bin", "limited_frames": [first, end], "tracking_state": RELOC,
+            "held_keypose": "pan", "hidden_keyposes": ["tilt"], "resumed_keyposes": ["dolly", "crane"],
+            "note": f"fake iPhone --limited {first}-{end}: frames [{first}, {end}) are sent with "
+                    f"tracking_state {RELOC}; with hold on the camera shows the pan keypose throughout",
+        },
+    }
+
+
 def build_coords() -> dict:
     q_c = qaxis((1, 0, 0), 90)
 
@@ -1088,6 +1156,7 @@ def build_all() -> dict[str, bytes]:
         "coords/arkit_to_canonical.json": dumps(build_coords()).encode(),
         "motion/scripted.json": dumps(motion).encode(),
         "rig/rig_cases.json": dumps(build_rig(motion)).encode(),
+        "rig/hold.json": dumps(build_hold(motion)).encode(),
         "motion/scripted.bin": motion_bin,
     }
     files.update({f"vcp/{name}": data for name, data in {**bins, **video_bins}.items()})

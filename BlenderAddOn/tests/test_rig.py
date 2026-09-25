@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Rig math and control merging against the golden vectors (task 1.3.2a; NFR-QA-003)."""
+"""Rig math, control merging and pose hold against the golden vectors (tasks 1.3.2a, 1.3.6; NFR-QA-003)."""
 
 import json
 import sys
@@ -9,10 +9,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.rig import Controls, heading, local_pose, zero_from_pose  # noqa: E402
+from core.rig import TRACKING_NORMAL, Controls, PoseHold, heading, local_pose, zero_from_pose  # noqa: E402
 
 TESTDATA = Path(__file__).resolve().parents[2] / "testdata"
 CASES = json.loads((TESTDATA / "rig" / "rig_cases.json").read_text(encoding="utf-8"))["cases"]
+HOLD = json.loads((TESTDATA / "rig" / "hold.json").read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
@@ -48,3 +49,12 @@ def test_controls_keep_absent_fields_and_ignore_stale_states():
     assert c.update({"state_seq": 2, "motion_scale": 1.0, "lock_flags": 0, "origin_epoch": 5}) == (False, False)
     assert c.update(None) == (False, False)
     assert (c.state_seq, c.motion_scale) == (2, 10.0)
+
+
+@pytest.mark.parametrize("sequence", HOLD["sequences"], ids=[s["name"] for s in HOLD["sequences"]])
+def test_pose_hold_matches_vectors(sequence):
+    assert HOLD["tracking_normal"] == TRACKING_NORMAL
+    hold = PoseHold()
+    for step in sequence["steps"]:
+        shown, holding = hold.select(step["seq"], step["tracking_state"], step["hold"])
+        assert (shown, holding) == (step["shown_seq"], step["holding"]), step
