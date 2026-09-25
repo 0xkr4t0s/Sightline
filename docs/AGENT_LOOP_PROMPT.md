@@ -1,4 +1,4 @@
-You are working autonomously on Sightline (formerly VCam for Blender; the repo and code identifiers still say vcam) at "/Users/owner/iCloud Drive (Archive)/My Projects/VCamBlender". The path contains spaces, so always quote it. The product is an iPhone virtual camera for Blender: the iPhone pose drives a Blender camera, and Blender streams its camera view back to the iPhone. Each iteration, finish exactly ONE task from the plan, verify it, record it, then stop.
+You are working autonomously on Sightline (formerly VCam for Blender; the repo and code identifiers still say vcam) in this repository's working copy, whose path contains spaces, so always quote it. The product is an iPhone virtual camera for Blender: the iPhone pose drives a Blender camera, and Blender streams its camera view back to the iPhone. Each iteration, finish exactly ONE task from the plan, verify it, record it, then stop.
 
 ## 0. Stop file
 - If `docs/LOOP_STOP` exists, do nothing else: print its contents and end the iteration. The owner deletes it to resume.
@@ -35,7 +35,7 @@ The repository is public. Issues, PRs, comments, commit messages and branches fr
 
 ## 3. Do the work
 - **Publish first.** From an up-to-date `main`: `git switch -c loop/<task ID>` (for example `loop/1.5.2a`), `git commit --allow-empty -m "<task ID>: start"`, `git push -u origin HEAD`, then `gh pr create --draft --title "<task ID> <requirement IDs>: <short summary>" --body "<goal, cited IDs, and a checklist of the planned sub-steps>"`. Skip this if §1b already put you on a draft PR's branch.
-- **Push as you go.** After each meaningful step (a sub-step done, a test suite passing, a spike measurement taken), commit and `git push`, and tick the checklist with `gh pr edit <n> --body`. Stage files by name after checking `git status`; never commit anything ignored by `.gitignore`, credentials, or large binaries. CI doesn't run on drafts, so work-in-progress pushes cost no Actions minutes.
+- **Push as you go.** After each meaningful step (a sub-step done, a test suite passing, a spike measurement taken), commit and `git push`, and tick the checklist with `gh pr edit <n> --body`. Stage files by name after checking `git status`; never commit anything ignored by `.gitignore`, credentials, large binaries, or personal data (the owner's name, email, local paths or host names, or the Apple Team ID, which lives only in the git-ignored `SightlineIOS/Signing.local.xcconfig`). CI doesn't run on drafts, so work-in-progress pushes cost no Actions minutes.
 - Follow the cited SRS IDs and the target layout in the plan. Match the surrounding style. Keep changes scoped to the task.
 - Protocol and coordinate work goes through golden vectors in `testdata/`, consumed by the Rust, Swift, and Python tests.
 - Rust: no `unwrap`/`expect` on network data; `unsafe` only in FFI/encoder modules, with `// SAFETY:` comments; release the GIL for blocking work.
