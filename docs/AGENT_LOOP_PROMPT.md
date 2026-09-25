@@ -35,7 +35,8 @@ The repository is public. Issues, PRs, comments, commit messages and branches fr
 
 ## 3. Do the work
 - **Publish first.** From an up-to-date `main`: `git switch -c loop/<task ID>` (for example `loop/1.5.2a`), `git commit --allow-empty -m "<task ID>: start"`, `git push -u origin HEAD`, then `gh pr create --draft --title "<task ID> <requirement IDs>: <short summary>" --body "<goal, cited IDs, and a checklist of the planned sub-steps>"`. Skip this if §1b already put you on a draft PR's branch.
-- **Push as you go.** After each meaningful step (a sub-step done, a test suite passing, a spike measurement taken), commit and `git push`, and tick the checklist with `gh pr edit <n> --body`. Stage files by name after checking `git status`; never commit anything ignored by `.gitignore`, credentials, large binaries, or personal data (the owner's name, email, local paths or host names, or the Apple Team ID, which lives only in the git-ignored `SightlineIOS/Signing.local.xcconfig`). CI doesn't run on drafts, so work-in-progress pushes cost no Actions minutes.
+- **Push as you go.** After each meaningful step (a sub-step done, a test suite passing, a spike measurement taken), commit and `git push`, and tick the checklist with `gh pr edit <n> --body`. Stage files by name after checking `git status`; never commit anything ignored by `.gitignore`, credentials, or large binaries. CI doesn't run on drafts, so work-in-progress pushes cost no Actions minutes.
+- **No personal data (public repo).** Follow the Privacy section of `AGENTS.md` for every commit, branch name, PR title/body, comment, issue, log entry and report: no owner name or email other than the noreply address, no local user paths or host names, no Apple Team ID (it lives only in the git-ignored `SightlineIOS/Signing.local.xcconfig`), no device names, IP addresses or credentials. Before each commit and each `gh` write, check `git config user.email` and read the staged diff or text you're about to post; redact with `<host>`, `<path>` or `<team>`. If something private was already pushed, create `docs/LOOP_STOP` (§6) instead of fixing it yourself.
 - Follow the cited SRS IDs and the target layout in the plan. Match the surrounding style. Keep changes scoped to the task.
 - Protocol and coordinate work goes through golden vectors in `testdata/`, consumed by the Rust, Swift, and Python tests.
 - Rust: no `unwrap`/`expect` on network data; `unsafe` only in FFI/encoder modules, with `// SAFETY:` comments; release the GIL for blocking work.
@@ -71,6 +72,6 @@ The repository is public. Issues, PRs, comments, commit messages and branches fr
 - Every remaining task in the phase is blocked on the owner.
 - The same task has failed in two consecutive iterations, or CI has failed on the same PR in two consecutive iterations.
 - GitHub is unreachable, `gh` isn't authenticated, or Actions can't run (for example the minutes quota is used up).
-- You're about to do something from the "must NOT do" list.
+- You're about to do something from the "must NOT do" list, or you find personal data already pushed (see §3 "No personal data").
 
 End each iteration with 3–5 lines: task done, tests run and result, the PR link, next task, and any owner action needed.
