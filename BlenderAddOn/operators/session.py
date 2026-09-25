@@ -16,7 +16,7 @@ from ..core.status import code_label
 
 
 class VCAM_OT_session_start(bpy.types.Operator):
-    """Start listening for the Sightline iPhone app and advertise this Blender session"""
+    """Start listening for the Sightline app and advertise this Blender session"""
 
     bl_idname = "vcam.session_start"
     bl_label = "Start Sightline Session"
@@ -66,10 +66,10 @@ class VCAM_OT_session_stop(bpy.types.Operator):
 
 
 class VCAM_OT_pairing_start(bpy.types.Operator):
-    """Show a 6-digit code to type on the iPhone (valid for 5 minutes, one pairing)"""
+    """Show a 6-digit code to type on the device (valid for 5 minutes, one pairing)"""
 
     bl_idname = "vcam.pairing_start"
-    bl_label = "Pair iPhone"
+    bl_label = "Pair Device"
     bl_options = {'REGISTER'}
 
     @classmethod
@@ -105,7 +105,7 @@ class VCAM_OT_pairing_cancel(bpy.types.Operator):
 
 
 class VCAM_OT_origin_set(bpy.types.Operator):
-    """Re-zero position and heading at the current pose (same as Set origin on the iPhone)"""
+    """Re-zero position and heading at the current pose (same as Set origin on the device)"""
 
     bl_idname = "vcam.origin_set"
     bl_label = "Set Origin"
