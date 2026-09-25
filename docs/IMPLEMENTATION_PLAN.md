@@ -95,6 +95,7 @@ VCamBlender/
 | 1.3.3 | N-panel: session toggle, pairing code, device, stats, camera picker, origin reset, scale/locks. | FR-BL-004 |
 | 1.3.4 | Robustness: file reload (`load_post` handler), undo, camera deleted. | FR-BL-007 |
 | 1.3.5 | Headless integration test with the fake iPhone: assert on `matrix_world` for each scripted keypose. Runs in CI on 3 OSes. | XP-002 |
+| 1.3.6 | Hold last good pose (owner-scheduled 2026-09-25): an N-panel option, on by default. While `tracking_state` isn't normal (vcp.md §6.1), keep the camera at the last pose that was, instead of applying the degraded one; show "Holding" and the reason in the panel; resume on the next normal pose. Rig vectors in `testdata/rig/` plus a fake-iPhone run that scripts a limited span. | FR-TRK-002 |
 
 ### 1.4 iOS app
 
@@ -123,6 +124,8 @@ VCamBlender/
 ## Phase 2 — T2 Virtual viewfinder
 
 **Goal:** the operator sees Blender's camera view on the iPhone and controls the lens from it.
+
+**Started early (owner, 2026-09-25):** Phase 2 may begin before the T1 gate closes, because the gate's remaining items need the owner (device checklist, device pose-leg p95). Work it in table order once the Phase 1 tasks in "Immediate next steps" are done or blocked. Device-only parts (the 60-minute thermal run in 2.7, on-device M2P numbers in 2.6) stay owner-blocked.
 
 | Workstream | Tasks | SRS |
 |---|---|---|
@@ -161,6 +164,8 @@ VCamBlender/
 - iPad director monitor (a second receiver of the same stream)
 - OSC triggers; multiple iPhones driving multiple cameras
 - Shared Rust `vcam-protocol` on iOS through UniFFI (ARC-007, once S-5 settles the licence)
+- Take repair (owner idea, 2026-09-25): after a take is recorded, fill gaps where poses were lost (Wi-Fi drop-outs) by interpolating across them (slerp for rotation, a spline for position), and find and smooth sudden position jumps (for example ARKit relocalising). Works on the raw take buffer from 3.1, so the raw data is kept; repaired spans are marked and the thresholds are adjustable. Builds on FR-TAKE-001/004/005. FR-TAKE-006
+- Android app (owner, 2026-09-25): an ARCore client speaking the same VCP protocol, so the Blender side is unchanged. Starts only after the repo is public and Android contributors are on board; not a loop task. Keep VCP and `testdata/` platform-neutral so a Kotlin client can reuse the golden vectors.
 
 ---
 
@@ -192,12 +197,14 @@ In the log, owner-only steps are `BLOCKED (needs owner)`. For M.5 and M.6, the l
 
 ## Immediate next steps
 
-1. **0.1.1** Single git repo (back up `VCamIOS/.git` first) and a baseline commit.
-2. **0.1.2** Move `DesktopReceiver/` to `legacy/`.
-3. **0.1.3 → 0.1.4** Rust workspace and a PyO3 module importing inside Blender 5.2 (installed at `/Applications/Blender.app`).
-4. **S-1** Render/readback benchmark. It decides how Phase 2 is built.
-5. **0.1.5** CI on three OSes.
-6. **1.1.1 → 1.1.3** VCP spec, golden vectors, Rust codec.
+Phase 0's steps (0.1.1–0.1.5, S-1) are done. Owner decisions of 2026-09-25 set this order:
+
+1. **1.1.4b** Swift TCP control frames and SRP-6a pairing/session. **`swift-srp` is approved** (`adam-fowler/swift-srp`, pin exactly `2.4.0`, Apache-2.0; it brings `apple/swift-crypto`, Apache-2.0, and `adam-fowler/big-num` `2.0.3`, MIT). Add it with Swift Package Manager to the app and test targets. Check it against `testdata/vcp/pairing.json`, `session.json` and RFC 5054 App. B; this closes O-3's Swift side.
+2. **1.4.2b** iOS session endpoint, then **1.4.3b** host selection, pairing UI and Keychain storage.
+3. **1.3.6** Hold last good pose (FR-TRK-002, Blender side).
+4. **Phase 2**, started early, in table order from 2.1.
+
+Still owner-blocked, don't wait on them: 1.5.1c (real iPhone), S-1 on Windows/Linux, S-2d/e, S-3b/c.
 
 ---
 

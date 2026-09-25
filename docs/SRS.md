@@ -226,6 +226,7 @@ No separate desktop application exists. The Rust module runs inside Blender's pr
 | FR-TAKE-003 | MUST | T3 | Take list in the N-panel and on the iPhone: name, duration, and keep / discard / rename, plus assign to the camera or a new camera. |
 | FR-TAKE-004 | SHOULD | T3 | Save raw take data (JSON Lines) next to the `.blend` for re-baking with different smoothing. |
 | FR-TAKE-005 | SHOULD | T3 | Post-take smoothing and keyframe reduction (optional) that preserve the raw take. |
+| FR-TAKE-006 | SHOULD | T4 | Post-take repair (optional): interpolate across gaps where poses were lost and smooth sudden position jumps, keeping the raw take and marking the repaired spans. Thresholds are user-adjustable. |
 
 ---
 

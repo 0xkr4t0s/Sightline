@@ -164,7 +164,8 @@ Everything travels over **VCP**, Sightline's own small binary protocol ([spec](d
 | **T1: Tracking** | Discovery, pairing, the phone's pose driving a Blender camera, rig controls, smoothing, latency reports | 🚧 In progress: the Blender side is done and tested with a simulated iPhone; the iPhone networking side is being finished |
 | **T2: Viewfinder** | 960×540 @ 30 fps stream to the phone, lens and focus controls, hardware buttons | 📐 Designed and benchmarked |
 | **T3: Production** | Take recording and baking, transport controls, H.264 streaming, false colour and zebras, signed releases, TestFlight | 📋 Planned |
-| **T4: Extras** | FreeD / OpenTrackIO export, AR passthrough, iPad director's monitor, multiple cameras | 💡 Ideas |
+| **T4: Extras** | FreeD / OpenTrackIO export, AR passthrough, iPad director's monitor, multiple cameras, take repair (fill tracking gaps and smooth jumps after recording) | 💡 Ideas |
+| **Android** | An ARCore app that talks to the same Blender extension | 🙋 Looking for Android developers ([help wanted](#-help-wanted)) |
 
 Requirement-level status lives in [`IMPLEMENTATION_PROGRESS.md`](IMPLEMENTATION_PROGRESS.md).
 
@@ -277,6 +278,15 @@ Sightline is built in the open, and contributions are welcome: code, testing on 
 | [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) | Phases, tasks, exit gates and the risk register |
 | [`IMPLEMENTATION_PROGRESS.md`](IMPLEMENTATION_PROGRESS.md) | Status of every requirement, with evidence |
 | [`docs/protocol/vcp.md`](docs/protocol/vcp.md) | The VCP wire protocol: byte layouts, pairing and examples |
+
+### 🙋 Help wanted
+
+These are the places where outside help would make the biggest difference. If one of them is your thing, open an issue and say hi.
+
+- **🤖 Android app.** Sightline is iPhone-only today, and there's no mature open-source virtual camera for Android phones either. The Blender side needs no changes: an ARCore app (Kotlin or anything else) that speaks [VCP](docs/protocol/vcp.md) and passes the golden vectors in [`testdata/`](testdata) will just work. We're looking for Android developers to lead it.
+- **🖥️ Windows and Linux testing.** Rendering and video-encoding benchmarks have only been measured on a Mac so far. Running them on a Windows or Linux machine with a mid-range GPU helps pick the right defaults (results so far in [`docs/SRS.md`](docs/SRS.md) §13.1–13.2; the render benchmark's recipe is in [`tests/bench_render.py`](tests/bench_render.py)).
+- **🎬 Take repair.** After a take is recorded, fill gaps where Wi-Fi dropped poses and smooth sudden jumps in tracking, keeping the raw data. Interpolation and filtering experience welcome (FR-TAKE-006).
+- **📡 Studio pipeline exports.** FreeD and OpenTrackIO output for people who want to feed Sightline into other tools.
 
 ## 📄 License
 

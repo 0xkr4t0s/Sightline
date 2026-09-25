@@ -14,8 +14,8 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 | S-3b Developer ID signing + notarization of the macOS wheel | BLOCKED (needs owner) | Needs an Apple Developer account and credentials. Re-run `tests/s3_macos_loading.sh --gui` with a signed and notarized `.so`. |
 | S-3c Windows SmartScreen / Mark-of-the-Web | BLOCKED (needs owner) | Needs a Windows machine. |
 | Local coverage-guided fuzzing (1.1.3c) | Needs owner OK | Installing a nightly toolchain is outside the loop's allowed installs. CI's `fuzz` job covers it once pushed. |
-| 1.4.2b / 1.4.3b iOS session endpoint, host selection + pairing UI + Keychain | BLOCKED (needs owner) | Needs Swift SRP pairing (1.1.4b), which waits on the owner's `swift-srp` decision. Discovery (1.4.3a) is done. |
-| 1.5.1c Pose leg over Wi-Fi/wired with a real iPhone (NFR-LAT-001, T1 gate) | BLOCKED (needs owner) | Needs a paired device (1.4.2b, `swift-srp`) and O-1. Then: Blender N-panel → Save Latency Report after a take, and commit the JSON to `reports/`. |
+| 1.1.4b / 1.4.2b / 1.4.3b Swift pairing, iOS session endpoint, host selection + pairing UI + Keychain | Unblocked 2026-09-25 | Owner approved `swift-srp` 2.4.0 (plan, "Immediate next steps"). Discovery (1.4.3a) is done. |
+| 1.5.1c Pose leg over Wi-Fi/wired with a real iPhone (NFR-LAT-001, T1 gate) | BLOCKED (needs owner) | Needs a real iPhone paired through 1.4.2b/1.4.3b, and O-1. Then: Blender N-panel → Save Latency Report after a take, and commit the JSON to `reports/`. |
 
 ---
 
@@ -1347,3 +1347,14 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
   - macOS: `cargo fmt --check` clean; `cargo clippy -p vcam-net --all-targets -- -D warnings` clean; `cargo test -p vcam-net`: all pass (`control_server` 17 passed).
   - Windows (owner PC, Rust 1.97 MSVC): `cargo clippy -p vcam-net --all-targets -- -D warnings` clean; the 8 × 6 concurrent `control_server` stress went from most runs failing to `fails=0/6` on all 8 workers; `cargo test -p vcam-net -p vcam-protocol -p vcam-fake-iphone`: all pass. (`vcam-video` doesn't build there: no NASM for turbojpeg-sys.)
 - **Next:** CI on the PR is the 3-OS check. Then PR #3 (Sightline rename) can be rebased on `main`.
+
+## 2026-09-25 — Owner session — decisions to resume the loop
+
+- **Owner decisions:**
+  - **`swift-srp` approved:** `adam-fowler/swift-srp` pinned exactly at `2.4.0` (Apache-2.0, matching the iOS app's Apache-2.0 licence from PR #6). Transitive: `apple/swift-crypto` (Apache-2.0), `adam-fowler/big-num` `2.0.3` (MIT). Unblocks 1.1.4b, then 1.4.2b/1.4.3b.
+  - **Hold last good pose scheduled** as plan task 1.3.6 (FR-TRK-002, Blender side).
+  - **Phase 2 may start early**, before the T1 gate closes (plan, Phase 2 note).
+  - **Future idea recorded:** post-take gap and jump repair, FR-TAKE-006 (T4), plan Phase 4.
+- **Other changes since the loop stopped:** the iOS app moved to `SightlineIOS/` (scheme `SightlineIOS`, bundle ID `kr8t0s.Sightline`) and is licensed Apache-2.0 (PR #6). The Blender extension has `BlenderAddOn/LICENSE` (GPL-3.0). The GitHub repo is now `0xkr4t0s/Sightline`.
+- **Still open for the owner:** `mdns-sd`/`getrandom` reviews; whether the 60 Hz poll needs speeding up (SRS §13.4); licence of the Rust crates and protocol (S-5); device and Windows/Linux items in the blocked table.
+- **Next task:** 1.1.4b (plan, "Immediate next steps" 1).
