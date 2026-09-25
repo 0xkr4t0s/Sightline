@@ -222,7 +222,8 @@ jobs:
           BLENDER_USER_RESOURCES: ${{ runner.temp }}/blender-user
         run: |
           # addon_apply: matrix_world of the driven camera at every scripted keypose.
-          for t in addon_apply addon_panel addon_robust; do
+          # pose_leg_latency: the NFR-LAT-001 report over loopback (task 1.5.1).
+          for t in addon_apply addon_panel addon_robust pose_leg_latency; do
             echo "::group::${t}"
             "${BLENDER}" --background --factory-startup --python-exit-code 1 \
               --python "tests/blender/${t}.py"

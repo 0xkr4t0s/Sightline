@@ -17,11 +17,14 @@ and after either the current pose is re-applied to whatever camera the restored 
 from __future__ import annotations
 
 import os
+import platform
 import socket
+import sys
 import time
 from dataclasses import dataclass
 
 from .apply import Applier, clear_zero, find_origin, target_camera
+from .latency import LatencyLog
 from .status import pose_latency_ms
 
 HOST_ID_FILE = "host_id"
@@ -53,6 +56,9 @@ _package: str | None = None
 _session = None
 state = SessionState()
 _applier = Applier()
+_latency = LatencyLog()
+# The CLOCK estimate behind the newest pose-leg sample, for the report.
+_latency_clock: dict | None = None
 _last_redraw = float("-inf")
 
 
@@ -109,7 +115,7 @@ def current():
 
 def start(port: int = DEFAULT_PORT, bind: str = "0.0.0.0") -> None:
     """Starts listening and advertising. Raises OSError/ValueError on failure, nothing started."""
-    global _session, _applier
+    global _session, _applier, _latency, _latency_clock
     import bpy
     import vcam_native
 
@@ -119,6 +125,7 @@ def start(port: int = DEFAULT_PORT, bind: str = "0.0.0.0") -> None:
     session = vcam_native.Session.start(port, directory, load_or_create_host_id(directory), bind=bind)
     vars(state).update(vars(SessionState()))  # reset in place: importers keep the object
     _applier = Applier()
+    _latency, _latency_clock = LatencyLog(), None
     try:
         session.advertise(socket.gethostname(), bpy.path.basename(bpy.data.filepath))
     except (OSError, ValueError) as e:
@@ -151,6 +158,25 @@ def stop() -> None:
 def applier() -> Applier:
     """The current session's apply state (controls, applied seq), for the N-panel."""
     return _applier
+
+
+def latency_log() -> LatencyLog:
+    """Pose-leg and apply-cost samples of the current device session (task 1.5.1)."""
+    return _latency
+
+
+def latency_report() -> dict:
+    """The NFR-LAT-001 report of the current device session as a JSON-ready dict."""
+    import bpy
+
+    return _latency.report(
+        date=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        platform=f"{sys.platform}-{platform.machine()}",
+        blender=bpy.app.version_string,
+        device_name=state.device_name,
+        poll_interval_s=POLL_INTERVAL,
+        clock=_latency_clock,
+    )
 
 
 def set_origin() -> None:
@@ -189,6 +215,7 @@ def _tag_redraw(now: float) -> None:
 
 def _poll() -> float | None:
     """Timer callback on the main thread: drains events, applies the pose. Never raises."""
+    global _latency_clock
     import bpy
 
     session = _session
@@ -212,13 +239,22 @@ def _poll() -> float | None:
         if error:
             state.last_error = f"DNS-SD: {error}"
         now = time.monotonic()
+        started = time.perf_counter()
         applied = _applier.tick(session, state.session_id, bpy.context.scene, now)
         if applied is not None:
+            # Host clock at the apply, read before anything else so the pose leg ends here.
+            applied_at_ns = session.host_clock_ns()
+            apply_ms = (time.perf_counter() - started) * 1e3
             state.tracking_state = applied["tracking_state"]
             clock = session.stats()["clock"]
+            pose_leg = None
             if clock is not None:
-                state.latency_ms = pose_latency_ms(applied["capture_time_ns"], clock["offset_ns"], session.host_clock_ns())
+                pose_leg = pose_latency_ms(applied["capture_time_ns"], clock["offset_ns"], applied_at_ns)
+                state.latency_ms = pose_leg
                 state.clock_jitter_ms = clock["jitter_ns"] / 1e6
+                _latency_clock = dict(clock)
+            if state.session_id is not None:  # a re-apply after the device left isn't a sample
+                _latency.record(state.session_id, applied["seq"], apply_ms, pose_leg)
         _tag_redraw(now)
     except Exception as e:  # noqa: BLE001 - an exception would silently unregister the timer
         state.last_error = str(e)

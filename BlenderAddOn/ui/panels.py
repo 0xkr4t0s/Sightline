@@ -75,6 +75,9 @@ class VCAM_PT_main_panel(bpy.types.Panel):
                 col.label(text="Latency: waiting for clock sync")
             else:
                 col.label(text=f"Latency: {state.latency_ms:.1f} ms (clock jitter {state.clock_jitter_ms:.2f} ms)")
+        samples = len(session.latency_log().pose_leg_ms)
+        if samples:  # kept after the device leaves, until the next device session
+            box.operator("vcam.latency_report_save", text=f"Save Latency Report ({samples} poses)", icon='EXPORT')
 
         box = layout.box()
         box.label(text="Rig", icon='EMPTY_AXIS')

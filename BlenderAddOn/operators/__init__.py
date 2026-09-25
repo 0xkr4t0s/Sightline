@@ -2,6 +2,7 @@
 
 import bpy
 from .session import (
+    VCAM_OT_latency_report_save,
     VCAM_OT_origin_clear,
     VCAM_OT_origin_set,
     VCAM_OT_pairing_cancel,
@@ -17,6 +18,7 @@ _classes = (
     VCAM_OT_pairing_cancel,
     VCAM_OT_origin_set,
     VCAM_OT_origin_clear,
+    VCAM_OT_latency_report_save,
 )
 
 

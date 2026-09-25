@@ -15,6 +15,7 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 | S-3c Windows SmartScreen / Mark-of-the-Web | BLOCKED (needs owner) | Needs a Windows machine. |
 | Local coverage-guided fuzzing (1.1.3c) | Needs owner OK | Installing a nightly toolchain is outside the loop's allowed installs. CI's `fuzz` job covers it once pushed. |
 | 1.4.2b / 1.4.3b iOS session endpoint, host selection + pairing UI + Keychain | BLOCKED (needs owner) | Needs Swift SRP pairing (1.1.4b), which waits on the owner's `swift-srp` decision. Discovery (1.4.3a) is done. |
+| 1.5.1c Pose leg over Wi-Fi/wired with a real iPhone (NFR-LAT-001, T1 gate) | BLOCKED (needs owner) | Needs a paired device (1.4.2b, `swift-srp`) and O-1. Then: Blender N-panel → Save Latency Report after a take, and commit the JSON to `reports/`. |
 
 ---
 
@@ -1211,3 +1212,33 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none new.
 - **Next task:** 1.5.1 — pose-leg latency: map iPhone capture time through the `CLOCK` offset to Blender time at apply, log histograms, write a report artefact (NFR-LAT-001/002). No second task started.
 - **Owner actions:** push (this commit makes 31 ahead). Hold the app in landscape on an iPhone once: check the rail is thumb-reachable and hides while tracking. **Decide on `swift-srp`**: it blocks 1.4.2b/1.4.3b. Still pending: the `mdns-sd`/`getrandom` reviews, a device run.
+
+## 2026-09-25 — Iteration 44 — 1.5.1a (NFR-LAT-001) — done (host side; device measurement owner-blocked)
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 31 ahead of `origin`. The existing Phase 1 owner waiver applies.
+- **Split of 1.5.1:**
+  - **1.5.1a (this iteration):** host side of the pose leg: map each applied pose's capture time through the `CLOCK` offset to Blender's clock at apply, log histograms, write the report artefact.
+  - **1.5.1b (next):** NFR-LAT-002, the iPhone send leg (`ARFrame` → datagram handed to the OS, p95 ≤ 2 ms, no allocation per pose), measured in `TrackingPipeline`.
+  - **1.5.1c: BLOCKED (needs owner/device):** the real Wi-Fi/wired pose leg. Needs a paired iPhone (1.4.2b, `swift-srp`) and O-1 (which clock `ARFrame.timestamp` uses).
+- **Change:**
+  - `BlenderAddOn/core/latency.py` (new, pure Python): `LatencyLog` per device session (a new `session_id` starts over; a re-apply of the same `seq`, e.g. after Set origin or undo, isn't a sample; seq gaps count as `poses_not_applied`; at most 36,000 samples per leg). `report()` gives count/min/mean/p50/p95/p99/max (nearest rank), 0.5 ms histograms 0–100 ms with underflow/overflow, and `meets` for NFR-LAT-001 (pose leg p95 ≤ 20 ms; every apply ≤ 1 ms).
+  - `core/session.py` `_poll`: times `Applier.tick` (apply cost), reads `host_clock_ns()` right after it, computes the pose leg with the existing `pose_latency_ms`, and records both while a device session is active. `latency_report()` adds date, platform, Blender version, device name, poll interval and the `CLOCK` estimate used. The log resets on `start()`.
+  - `operators/session.py`: `vcam.latency_report_save` (`ExportHelper`, default `latency-<date>.json`); prints the summary line to the console.
+  - `ui/panels.py`: "Save Latency Report (N poses)" button, shown while samples exist, including after the device left. No percentiles in `draw()`, so the 4 Hz redraw doesn't sort 36,000 samples.
+  - `tests/blender/pose_leg_latency.py` (new): fake iPhone at 60 Hz over loopback, the session poll driven at its own 60 Hz, report saved after `SessionEnded`, then checks: device name, clock samples, every frame applied or counted, pose leg min > −1 ms and p50 < 50 ms (a wrong offset shows up as ±2,000,000 ms), histogram totals. Added to the CI `blender-smoke` loop (`.github/workflows/ci.yml:226`).
+- **Results** (SRS §13.4, new dated note; report `reports/latency-2026-09-25-macos-arm64-loopback.json`): loopback pose leg p50/p95/p99 16.06/16.79/17.31 ms, apply p95 0.10 ms. With a 1 ms poll (throwaway probe) the pose leg is 0.81 ms p50, which confirms the clock mapping.
+- **Flagged (SRS §13.4, no requirement changed):**
+  - The 60 Hz `POLL_INTERVAL` adds 0–16.7 ms of slot wait depending on phase (p50 ranged 1.2–16.5 ms across runs). That leaves ≤ 3 ms for Wi-Fi in the worst phase and makes the wired ≤ 8 ms target unreachable. At equal rates some polls apply only the newer of two poses (up to 37 % in the GUI run). Options: faster poll, or a wake-up on pose arrival.
+  - Single applies of 1.17–1.65 ms in 3 of 13 runs (p95 ≈ 0.1 ms), so `meets.apply_max` can be false.
+  - **Flaky test, not caused by this change (no Rust changed):** one `cargo test` run failed `vcam-fake-iphone` `scripted_controls_reach_the_host_in_order` (`fake_iphone.rs:254`: state 1 was never observed, only state 2). At `--rate 2000` Set origin comes 5 ms after the first state, and the latest-sample slot can overwrite state 1 before the test polls. Two re-runs passed. Fix in a later task: have the test wait for state 1 before Set origin, or use a later `--set-origin-at`.
+- **Files changed:** `BlenderAddOn/core/{latency.py (new),session.py}`, `BlenderAddOn/operators/{session.py,__init__.py}`, `BlenderAddOn/ui/panels.py`, `BlenderAddOn/tests/test_latency.py` (new), `tests/blender/pose_leg_latency.py` (new), `.github/workflows/ci.yml`, `reports/latency-2026-09-25-macos-arm64-loopback.json` (new), `docs/SRS.md` (§13.4 only), `IMPLEMENTATION_PROGRESS.md` (NFR-LAT-001 now Partial, NFR-LAT-002 row, FR-BL-004 line and visual check, FR-BL-007 re-anchored, NFR-QA-001), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `.venv.nosync/bin/pytest -q -p no:cacheprovider BlenderAddOn/tests`: `24 passed` (5 new).
+  - Wheel rebuilt with maturin for Blender's Python 3.13 (`Built wheel for CPython 3.13`), extension built and installed into a temporary `BLENDER_USER_RESOURCES`, then headless Blender 5.2.2 with `--python-exit-code 1`, all exit 0: `VCAM_POSE_LEG_OK … poses=346 not_applied=44 pose_leg_p50=16.06 p95=16.79 … meets={'pose_leg_p95': True, 'apply_max': True}`, `VCAM_NATIVE_OK 0.1.0`, `VCAM_ADDON_APPLY_OK keyposes=5 max_err=1.79e-07 …`, `VCAM_ADDON_PANEL_OK latency_ms=2.87 …`, `VCAM_ADDON_ROBUST_OK final_seq=390 …`, `VCAM_ADDON_SESSION_OK …`, `VCAM_SESSION_OK …`.
+  - An earlier run of the new script failed on my own assertion (`>= 300` applied: only 289, because the 60 Hz poll skips superseded poses). I replaced it with the `poses_not_applied` accounting above.
+  - **GUI check** (Blender window, real `bpy.app.timers` poll, throwaway timer script, fake iPhone at 60 Hz; the panel was moved to the open Tool tab for the screenshot because `Region.active_panel_category` is read-only): `GUI_LATENCY_OK {'FINISHED'} … pose_leg_ms n=246 p50=1.18 p95=2.00 …`. Screenshots inspected: streaming shows "Fake iPhone, Tracking: Normal, Poses: 60 Hz, loss 0.0 %, Latency: 1.1 ms, Save Latency Report (156 poses)"; after the device left, "Waiting for the iPhone" with "Save Latency Report (246 poses)". The splash covers the panel's left edge.
+  - **Mutation check** (sequential, one snapshot, restored and `filecmp`-verified identical): re-apply counted (`assert not True`), percentile off by one (`51.0 == 50.0`), negatives binned (histogram test), apply verdict on p95 (`meets` mismatch), gap count off by one (`4 == 2`), offset sign flipped in `_poll` (Blender script: pose leg min −1,999,756 ms). 6/6 caught. Not covered by a test: the "no sample after the device left" guard (needs an undo after disconnect).
+  - `.venv.nosync/bin/actionlint .github/workflows/ci.yml`: no findings. `gen_testdata.py --check`: `testdata/ up to date (21 files)`. `cargo test` (no Rust change): 60 passed, 0 failed on two runs, after the flaky failure above. fmt/clippy not re-run (no Rust change).
+- **Blocked:** 1.5.1c (device pose leg), covered by the existing 1.4.2b row plus O-1.
+- **Next task:** 1.5.1b — NFR-LAT-002 iPhone send leg (`ARFrame` → datagram handed to the OS) in `TrackingPipeline`. No second task started.
+- **Owner actions:** push (this commit makes 32 ahead). Decide whether the 60 Hz poll's 0–16.7 ms slot wait (SRS §13.4) needs a faster poll before T1's latency gate. **Decide on `swift-srp`**: it blocks 1.4.2b/1.4.3b and the device pose-leg run. Still pending: the `mdns-sd`/`getrandom` reviews, a device run.
