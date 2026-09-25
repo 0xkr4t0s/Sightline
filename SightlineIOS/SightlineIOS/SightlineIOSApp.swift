@@ -1,6 +1,6 @@
 //
-//  VCamIOSApp.swift
-//  VCamIOS
+//  SightlineIOSApp.swift
+//  SightlineIOS
 //
 //  Created by 0xKr4t0s on 7/4/2026.
 //
@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct VCamIOSApp: App {
+struct SightlineIOSApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var controller = TrackingSessionController()
 

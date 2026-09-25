@@ -199,7 +199,7 @@ In Blender, open **Edit → Preferences → Get Extensions → Install from Disk
 
 ### 2. Run the iPhone app
 
-Open `VCamIOS/VCamIOS.xcodeproj` in Xcode, select your development team, and run it on a device. ARKit doesn't work in the Simulator.
+Open `SightlineIOS/SightlineIOS.xcodeproj` in Xcode, select your development team, and run it on a device. ARKit doesn't work in the Simulator.
 
 ### 3. Connect
 
@@ -227,7 +227,7 @@ cd native && cargo build --release -p vcam-fake-iphone
 ## 🏗️ Architecture
 
 ```
-├── VCamIOS/             Sightline for iPhone/iPad: Swift 6, ARKit, viewfinder, controls
+├── SightlineIOS/             Sightline for iPhone/iPad: Swift 6, ARKit, viewfinder, controls
 ├── BlenderAddOn/        Sightline for Blender 5.2 (Python 3.13): UI, camera rig, render loop
 ├── native/              Rust workspace, bundled into the extension as `vcam_native`
 │   ├── vcam-protocol/   VCP messages, codec, HMAC, SRP-6a pairing, clock sync (no I/O)
@@ -257,7 +257,7 @@ Internal names still use `vcam` (the project's working title). They stay that wa
 cd native && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 pytest -q BlenderAddOn/tests
 blender --background --factory-startup --python tests/blender/addon_apply.py
-xcodebuild test -project VCamIOS/VCamIOS.xcodeproj -scheme VCamIOS \
+xcodebuild test -project SightlineIOS/SightlineIOS.xcodeproj -scheme SightlineIOS \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 ```
 
@@ -282,8 +282,9 @@ Sightline is built in the open, and contributions are welcome: code, testing on 
 
 Sightline is open source, and every part of it will stay that way.
 
-- **Blender extension** (`BlenderAddOn/` and its bundled native module): **GPL-3.0-or-later**, as Blender requires.
-- **iPhone app, Rust crates and protocol:** permissive licences (planned, being finalised). The iOS app contains no GPL code, so it can ship on the App Store, and a permissive protocol lets anyone build a compatible client.
+- **Blender extension** (`BlenderAddOn/` and its bundled native module): **GPL-3.0-or-later**, as Blender requires. See [`BlenderAddOn/LICENSE`](BlenderAddOn/LICENSE).
+- **iPhone app** (`SightlineIOS/`): **Apache-2.0**. See [`SightlineIOS/LICENSE`](SightlineIOS/LICENSE). It contains no GPL code, so it can ship on the App Store.
+- **Rust crates and protocol:** permissive licences (planned, being finalised), so anyone can build a compatible client.
 
 <div align="center">
 <br>

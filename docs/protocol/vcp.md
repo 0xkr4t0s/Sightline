@@ -5,7 +5,7 @@
 | Status | Draft 1 (2026-09-24). Covers T1: tracking, T1 controls, clock sync, status, pairing, and session setup. |
 | Implements | SRS v3 PR-001..004, PR-006, DM-001..003, NET-002/003, NFR-SEC-001, FR-UX-002, FR-TRK-002/003, FR-CTL-004/009 |
 | Golden vectors | `testdata/vcp/` (task 1.1.2). If this document and the vectors disagree, fix whichever is wrong; neither wins by default. |
-| Implementations | Rust `native/vcam-protocol` (Blender side), Swift `VCamIOS` (iPhone side) |
+| Implementations | Rust `native/vcam-protocol` (Blender side), Swift `SightlineIOS` (iPhone side) |
 
 The keywords MUST, SHOULD, and MAY are used as in RFC 2119.
 

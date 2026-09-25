@@ -27,7 +27,7 @@ VCamBlender/
 │   ├── vcam-fake-iphone/    test binary that behaves like the iOS app
 │   └── fuzz/
 ├── BlenderAddOn/            Blender extension (Python), wheels/ filled by CI
-├── VCamIOS/                 Xcode project (Swift)
+├── SightlineIOS/                 Xcode project (Swift)
 ├── legacy/                  (temporary) DesktopReceiver/ until ported, then deleted
 └── .github/workflows/
 ```
@@ -72,7 +72,7 @@ VCamBlender/
 | 1.1.1 | Write `docs/protocol/vcp.md`: header, `POSE`, `CONTROL_STATE` (T1 subset: scale, locks, origin reset), `CLOCK`, `STATUS`, plus the pairing handshake over TCP and the HMAC trailer. | PR-001..004, PR-006 |
 | 1.1.2 | `testdata/vcp/*.bin` + `*.json` golden vectors; `testdata/coords/*.json` ARKit→canonical vectors. | NFR-QA-003, DM-004 |
 | 1.1.3 | `vcam-protocol`: types, encode/decode, HMAC, conversions. Tests use the golden vectors. Add fuzz targets. | DM-001..003, PR-005 |
-| 1.1.4 | Swift `VCP` module in VCamIOS: encoder/decoder plus the ARKit→canonical conversion. XCTests use the same golden vectors (add `testdata/` as a folder reference to the test bundle). | DM-002, DM-004 |
+| 1.1.4 | Swift `VCP` module in SightlineIOS: encoder/decoder plus the ARKit→canonical conversion. XCTests use the same golden vectors (add `testdata/` as a folder reference to the test bundle). | DM-002, DM-004 |
 
 ### 1.2 Rust networking (`vcam-net`, exposed through `vcam-py`)
 

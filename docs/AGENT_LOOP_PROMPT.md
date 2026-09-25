@@ -53,7 +53,7 @@ Never push to `main`, force-push, rewrite pushed history, merge with `--admin`, 
 - Rust (once `native/` exists): `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` in `native/`.
 - Blender: `"/Applications/Blender.app/Contents/MacOS/Blender" --background --factory-startup --python <test script>` for anything touching the add-on or the native module. Build the wheel with maturin first.
 - Python unit tests: `.venv.nosync/bin/pytest -q -p no:cacheprovider BlenderAddOn/tests`.
-- iOS: `DEVELOPER_DIR=/Applications/Xcode-27.0.0.app/Contents/Developer xcodebuild test -project VCamIOS/VCamIOS.xcodeproj -scheme VCamIOS -destination 'platform=iOS Simulator,name=iPhone 17 Pro'` (iOS 27.0 simulator runtime is installed; the shared scheme includes `VCamIOSTests`). Unit tests only; ARKit can't run in the simulator.
+- iOS: `DEVELOPER_DIR=/Applications/Xcode-27.0.0.app/Contents/Developer xcodebuild test -project SightlineIOS/SightlineIOS.xcodeproj -scheme SightlineIOS -destination 'platform=iOS Simulator,name=iPhone 17 Pro'` (iOS 27.0 simulator runtime is installed; the shared scheme includes `SightlineIOSTests`). Unit tests only; ARKit can't run in the simulator.
 - CI (GitHub Actions: Windows, Linux, macOS, iOS) runs once the PR is marked ready. It covers the other OSes; it doesn't replace the local runs above.
 - Run every suite your change touches, plus every suite that reads `testdata/`. Only report a result you got from a command run in this iteration, and copy the pass/fail line from its output into the log. If something fails and you can't fix it within this iteration, revert your change, log the failure with its output, and stop.
 

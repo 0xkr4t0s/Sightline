@@ -15,9 +15,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "9EE25E0C2F8410E3009FB801"
-               BuildableName = "VCamIOS.app"
-               BlueprintName = "VCamIOS"
-               ReferencedContainer = "container:VCamIOS.xcodeproj">
+               BuildableName = "SightlineIOS.app"
+               BlueprintName = "SightlineIOS"
+               ReferencedContainer = "container:SightlineIOS.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -33,9 +33,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "9E74B7DA2F84AF9400B754DD"
-               BuildableName = "VCamIOSTests.xctest"
-               BlueprintName = "VCamIOSTests"
-               ReferencedContainer = "container:VCamIOS.xcodeproj">
+               BuildableName = "SightlineIOSTests.xctest"
+               BlueprintName = "SightlineIOSTests"
+               ReferencedContainer = "container:SightlineIOS.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -55,9 +55,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "9EE25E0C2F8410E3009FB801"
-            BuildableName = "VCamIOS.app"
-            BlueprintName = "VCamIOS"
-            ReferencedContainer = "container:VCamIOS.xcodeproj">
+            BuildableName = "SightlineIOS.app"
+            BlueprintName = "SightlineIOS"
+            ReferencedContainer = "container:SightlineIOS.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -72,9 +72,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "9EE25E0C2F8410E3009FB801"
-            BuildableName = "VCamIOS.app"
-            BlueprintName = "VCamIOS"
-            ReferencedContainer = "container:VCamIOS.xcodeproj">
+            BuildableName = "SightlineIOS.app"
+            BlueprintName = "SightlineIOS"
+            ReferencedContainer = "container:SightlineIOS.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

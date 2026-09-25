@@ -160,7 +160,7 @@ nonisolated struct SendLegMeter: Sendable {
 /// the per-pose path allocates nothing (NFR-LAT-002). The main actor only receives throttled
 /// snapshots through `publish`.
 actor TrackingPipeline {
-    nonisolated let queue = DispatchSerialQueue(label: "VCamIOS.TrackingPipeline", qos: .userInteractive)
+    nonisolated let queue = DispatchSerialQueue(label: "Sightline.TrackingPipeline", qos: .userInteractive)
 
     nonisolated var unownedExecutor: UnownedSerialExecutor {
         queue.asUnownedSerialExecutor()

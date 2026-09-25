@@ -40,7 +40,7 @@ The iPhone's own camera image is used only for tracking. It is not the product's
 
 In scope:
 
-- **iOS/iPadOS app** (`VCamIOS/`, Swift): tracking, viewfinder display, operator controls.
+- **iOS/iPadOS app** (`SightlineIOS/`, Swift): tracking, viewfinder display, operator controls.
 - **Blender extension** (`BlenderAddOn/`, Python + a bundled **Rust** native module): receives tracking, drives the camera, renders and encodes the viewfinder stream, records takes. It runs wherever Blender runs: **Windows, Linux, macOS**.
 - The network protocol between them.
 
@@ -74,7 +74,7 @@ Out of scope (see §12): a system-wide virtual webcam for Zoom/OBS and so on; iP
 
 ```
 ┌──────────────────────────────┐                       ┌──────────────────────────────────────────┐
-│ VCamIOS (iPhone / iPad)      │  pose + controls  UDP │ Blender (Windows / Linux / macOS)        │
+│ SightlineIOS (iPhone / iPad) │  pose + controls  UDP │ Blender (Windows / Linux / macOS)        │
 │                              │ ────────────────────▶ │  ┌──────────────────────────────────┐    │
 │  ARKit 6DOF tracking         │                       │  │ Rust native module (in extension)│    │
 │  Operator controls           │  viewfinder video     │  │  net threads · protocol · codec  │    │
@@ -117,7 +117,7 @@ No separate desktop application exists. The Rust module runs inside Blender's pr
 
 ### 2.5 Key design constraints
 
-- **C-1 Licensing.** A Blender extension is GPL-3.0-or-later. The bundled Rust module is distributed with it and SHALL use a GPL-compatible licence (GPL-3.0-or-later, or MIT/Apache-2.0). The iOS app is a separate program that talks over the network and MAY stay proprietary. It SHALL NOT include GPL code.
+- **C-1 Licensing.** A Blender extension is GPL-3.0-or-later. The bundled Rust module is distributed with it and SHALL use a GPL-compatible licence (GPL-3.0-or-later, or MIT/Apache-2.0). The iOS app is a separate program that talks over the network and is licensed Apache-2.0 (owner decision, 2026-09-25). It SHALL NOT include GPL code.
 - **C-2 Blender threading.** `bpy`, `gpu`, and scene data may only be touched on Blender's main thread. The Rust module SHALL run all networking and encoding on its own threads, release the GIL while working, and exchange data with Python only through bounded, non-blocking queues.
 - **C-3 One install.** Users SHALL install one Blender extension (with native wheels for their platform) and one iOS app. There is no separate desktop program, driver, or system extension.
 - **C-4 Local-network permission.** iOS requires `NSLocalNetworkUsageDescription` + `NSBonjourServices`. On macOS, the local-network prompt is attributed to Blender. On Windows, the first listening socket triggers a firewall prompt. The UX SHALL explain each of these.
@@ -139,7 +139,7 @@ No separate desktop application exists. The Rust module runs inside Blender's pr
 
 ---
 
-## 4. iOS application (`VCamIOS`)
+## 4. iOS application (`SightlineIOS`)
 
 ### 4.1 Tracking
 
@@ -272,7 +272,7 @@ Both ends belong to this project, so VCP replaces FreeD as the primary protocol.
 | XP-003 | MUST | T1 | The native module SHALL have no runtime dependencies beyond the OS and Blender's Python (static linking, or vendored inside the wheel). |
 | XP-004 | MUST | T1 | macOS wheels SHALL be code-signed (and the extension notarization-compatible) so Gatekeeper doesn't block the `.so`/`.dylib` loading inside Blender. **[SPIKE S-3]** |
 | XP-005 | SHOULD | T1 | Publish to a Blender extensions repository (self-hosted JSON index, or extensions.blender.org if the licence and policy fit), so Blender can auto-update. |
-| XP-006 | MUST | T1 | The iOS app SHALL be distributed through TestFlight and the App Store (proprietary or permissive licence, no GPL code; C-1). |
+| XP-006 | MUST | T1 | The iOS app SHALL be distributed through TestFlight and the App Store (Apache-2.0, no GPL code; C-1). |
 
 ---
 
@@ -583,7 +583,7 @@ Findings (no requirement changed):
 
 ### 13.5 Send-leg note — 2026-09-25 (task 1.5.1b, iOS pipeline, iPhone 17 Pro simulator on Apple M4 Pro)
 
-Setup: `TrackingPipeline` with the golden session, 600 poses at 60 Hz into a loopback UDP socket playing the host. Send leg = the frame reaching `TrackingPipeline.receive` → `send(2)` returned for its POSE. Heap allocations were counted per thread through libmalloc's `malloc_logger` hook (`VCamIOSTests/AllocationCounter.swift`). Tests: `TrackingPipelineTests.testSendLegIsMeasuredForSentPoses`, `testPoseSendPathAllocatesNothing`.
+Setup: `TrackingPipeline` with the golden session, 600 poses at 60 Hz into a loopback UDP socket playing the host. Send leg = the frame reaching `TrackingPipeline.receive` → `send(2)` returned for its POSE. Heap allocations were counted per thread through libmalloc's `malloc_logger` hook (`SightlineIOSTests/AllocationCounter.swift`). Tests: `TrackingPipelineTests.testSendLegIsMeasuredForSentPoses`, `testPoseSendPathAllocatesNothing`.
 
 Heap blocks per call before the change (a throwaway probe; the loop's own block per call subtracted). The `seal` and framework rows ran in a `-Onone` test build (CryptoKit and Network are system binaries, so their counts don't depend on it); the `assumeIsolated` row is from an optimised build:
 
@@ -597,7 +597,7 @@ Heap blocks per call before the change (a throwaway probe; the loop's own block 
 
 Results after the change: 0 blocks over 600 poses in an optimised build. At `-Onone` about 12 blocks per pose remain from unspecialised generics and boxed closures, so the check runs with `-configuration Release` (a CI step). Send leg p50 / p95 / max: 0.01–0.02 / 0.02 / 0.022–0.025 ms optimised, 0.02–0.026 / 0.02–0.026 / 0.020–0.026 ms at `-Onone` (10 µs bins). NFR-LAT-002's 2 ms p95 has about 100× headroom on this host; a device run is still needed.
 
-Flag (no requirement changed): §1.4 lists the Network framework (`NetworkConnection`) as the iOS networking API. To meet NFR-LAT-002's "no allocation per pose", the pose/control UDP socket is now a BSD socket (`VCamIOS/VCamIOS/UDPSender.swift`); discovery stays on `NetworkBrowser`, and the TCP session (1.4.2b) can still use `NetworkConnection`. Two consequences: host names are resolved with `getaddrinfo` off the ARKit queue (addresses connect at once), and IPv4 results come first, because Blender's session binds `0.0.0.0` (`BlenderAddOn/core/session.py:116`), so `localhost` → `::1` or `.local` → `fe80::…` would never reach it.
+Flag (no requirement changed): §1.4 lists the Network framework (`NetworkConnection`) as the iOS networking API. To meet NFR-LAT-002's "no allocation per pose", the pose/control UDP socket is now a BSD socket (`SightlineIOS/SightlineIOS/UDPSender.swift`); discovery stays on `NetworkBrowser`, and the TCP session (1.4.2b) can still use `NetworkConnection`. Two consequences: host names are resolved with `getaddrinfo` off the ARKit queue (addresses connect at once), and IPv4 results come first, because Blender's session binds `0.0.0.0` (`BlenderAddOn/core/session.py:116`), so `localhost` → `::1` or `.local` → `fe80::…` would never reach it.
 
 ---
 
