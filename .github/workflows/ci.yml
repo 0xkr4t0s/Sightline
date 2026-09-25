@@ -260,17 +260,17 @@ jobs:
 
   ios:
     if: github.event.pull_request.draft != true
-    runs-on: macos-26
+    runs-on: xcode-27  # GitHub preview image: macOS 27, Xcode 27.0 default (matches local builds)
     steps:
       - uses: actions/checkout@v7
       - name: xcodebuild test (unit tests; ARKit can't run in the simulator)
         run: |
           xcodebuild test -project SightlineIOS/SightlineIOS.xcodeproj -scheme SightlineIOS \
-            -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath xcresult/debug
+            -destination 'platform=iOS Simulator,name=iPhone 17' -resultBundlePath xcresult/debug
       - name: Pose send path allocates nothing (NFR-LAT-002; needs optimised code)
         run: |
           xcodebuild test -configuration Release -project SightlineIOS/SightlineIOS.xcodeproj -scheme SightlineIOS \
-            -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath xcresult/release \
+            -destination 'platform=iOS Simulator,name=iPhone 17' -resultBundlePath xcresult/release \
             -only-testing:SightlineIOSTests/TrackingPipelineTests/testPoseSendPathAllocatesNothing
       # Crash logs of a test process that died live only in the result bundle.
       - uses: actions/upload-artifact@v7
