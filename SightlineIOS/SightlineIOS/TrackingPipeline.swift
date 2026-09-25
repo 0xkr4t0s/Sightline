@@ -7,7 +7,10 @@ nonisolated struct TrackingSnapshot: Equatable, Sendable {
     var pose: VCPPose?
     var packetsSent: Int
     var sendError: String?
-    /// `state_seq` of the newest `CONTROL_STATE` built this run (0: none yet), and the highest
+    /// Tags asynchronous snapshots so events from a previous session can be ignored.
+    var sessionID: UInt32?
+    var sessionLost = false
+    /// Latest state sent this run (0: none yet), and the highest
     /// `STATUS.control_ack` the host has sent back (vcp.md §6.2).
     var controlSeq: UInt32 = 0
     var controlAck: UInt32 = 0
@@ -175,6 +178,7 @@ actor TrackingPipeline {
     private var controls = DeviceControls()
     private var statusFilter = VCPSeqFilter()
     private var controlTimer: DispatchSourceTimer?
+    private var livenessTimer: DispatchSourceTimer?
     /// Every datagram is sealed into this buffer; its capacity is reserved once.
     private var datagram: [UInt8] = []
     private var sendLeg = SendLegMeter()
@@ -197,19 +201,25 @@ actor TrackingPipeline {
         queue.sync {
             assumeIsolated { pipeline in
                 pipeline.sender.close()
-                pipeline.sender.onReceive = { [weak pipeline] data in
-                    // Received datagrams are delivered on the socket's read queue, which is `queue`.
-                    pipeline?.assumeIsolated { $0.handleIncoming(data) }
-                }
+                pipeline.cancelLivenessTimer()
                 pipeline.run &+= 1
+                let run = pipeline.run
+                pipeline.sender.onReceive = { [weak pipeline] data in
+                    // A queued read from a replaced socket must not affect the new run.
+                    pipeline?.assumeIsolated {
+                        if $0.run == run { $0.handleIncoming(data) }
+                    }
+                }
                 pipeline.destination = destination
                 pipeline.seq = 0
                 pipeline.throttle = UIThrottle()
                 pipeline.snapshot = TrackingSnapshot(pose: nil, packetsSent: 0, sendError: nil)
+                pipeline.snapshot.sessionID = destination.endpoint?.sessionID
                 pipeline.sendLeg = SendLegMeter()
                 pipeline.statusFilter = VCPSeqFilter()
                 pipeline.connect()
                 pipeline.sendNewControlState()
+                pipeline.startLivenessTimer()
             }
         }
     }
@@ -221,6 +231,7 @@ actor TrackingPipeline {
                 pipeline.run &+= 1
                 pipeline.destination = nil
                 pipeline.cancelControlTimer()
+                pipeline.cancelLivenessTimer()
                 pipeline.sender.close()
             }
         }
@@ -363,18 +374,58 @@ actor TrackingPipeline {
         controlTimer = nil
     }
 
-    /// A datagram from the host. Only an authentic, newer `STATUS` counts (§4.3, §6.4); its
-    /// `control_ack` ends the repeats once it reaches the latest `state_seq`.
+    /// Independent of AR frames and control acknowledgements: an idle device must also detect
+    /// a silent host after 3 seconds (§8). A stopped/replaced run cannot expire a newer one.
+    private func startLivenessTimer() {
+        guard destination?.endpoint != nil else { return }
+        let run = run
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + .seconds(3))
+        timer.setEventHandler { [weak self] in
+            self?.assumeIsolated { pipeline in
+                guard pipeline.run == run else { return }
+                pipeline.run &+= 1
+                pipeline.destination = nil
+                pipeline.cancelControlTimer()
+                pipeline.cancelLivenessTimer()
+                pipeline.sender.close()
+                pipeline.snapshot.sessionLost = true
+                pipeline.publish(pipeline.snapshot)
+            }
+        }
+        timer.resume()
+        livenessTimer = timer
+    }
+
+    private func cancelLivenessTimer() {
+        livenessTimer?.cancel()
+        livenessTimer = nil
+    }
+
+    /// Only a valid authenticated host datagram refreshes liveness (§8). STATUS freshness is
+    /// separate: an older status can keep the link alive, but must not acknowledge controls.
     private func handleIncoming(_ data: Data) {
+        let received = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         guard let endpoint = destination?.endpoint,
-              case let .success(.status(status)) = endpoint.open([UInt8](data)),
-              statusFilter.accept(status.statusSeq)
+              case let .success(message) = endpoint.open([UInt8](data))
         else {
             return
         }
-        snapshot.controlAck = max(snapshot.controlAck, status.controlAck)
-        if snapshot.controlAck >= snapshot.controlSeq {
-            cancelControlTimer()
+        livenessTimer?.schedule(deadline: .now() + .seconds(3))
+        switch message {
+        case let .clock(.request(t1)):
+            // Uptime is the candidate ARFrame clock; O-1 still needs a physical-device
+            // comparison before claiming capture-to-host latency accuracy.
+            _ = send(.clock(.reply(t1: t1, t2: received,
+                                  t3: clock_gettime_nsec_np(CLOCK_UPTIME_RAW))))
+        case let .status(status):
+            guard statusFilter.accept(status.statusSeq) else { return }
+            snapshot.controlAck = max(snapshot.controlAck, status.controlAck)
+            if snapshot.controlAck >= snapshot.controlSeq {
+                cancelControlTimer()
+            }
+        default:
+            break  // VCPEndpoint rejects every other host-to-device message in v1.
         }
     }
 }

@@ -458,6 +458,93 @@ final class TrackingPipelineTests: XCTestCase {
         pipeline.stop()
     }
 
+    /// CLOCK and STATUS independently renew the deadline; authentication precedes renewal,
+    /// while STATUS sequence filtering still protects control acknowledgements.
+    func testHostHeartbeatsRenewLivenessButForgedTrafficDoesNot() throws {
+        let (device, blender) = try goldenSession()
+        let host = try LoopbackReceiver()
+        let recorder = Recorder()
+        let lost = expectation(description: "silent host expired")
+        let pipeline = TrackingPipeline(publish: {
+            recorder.add($0)
+            if $0.sessionLost { lost.fulfill() }
+        })
+        pipeline.start(TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device))
+        defer { pipeline.stop() }
+        _ = try XCTUnwrap(next(VCPMessageType.controlState, from: host))
+        let status = VCPStatus(statusSeq: 5, appliedPoseSeq: 0, controlAck: 1, errorCode: 0,
+                               flags: 3, cameraName: "Camera")
+        host.reply(try blender.seal(.status(status)))
+        Thread.sleep(forTimeInterval: 1.6)
+
+        let before = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        host.reply(try blender.seal(.clock(.request(t1: 5_000_000_000))))
+        let reply = try blender.open(XCTUnwrap(next(VCPMessageType.clock, from: host))).get()
+        let after = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        guard case let .clock(.reply(t1, t2, t3)) = reply else { return XCTFail("not a CLOCK reply") }
+        XCTAssertEqual(t1, 5_000_000_000)
+        XCTAssertGreaterThanOrEqual(t2, before)
+        XCTAssertGreaterThanOrEqual(t3, t2)
+        XCTAssertLessThanOrEqual(t3, after)
+        Thread.sleep(forTimeInterval: 1.6)
+        XCTAssertFalse(recorder.snapshots.contains { $0.sessionLost }, "CLOCK must renew the initial deadline")
+
+        var stale = status
+        stale.statusSeq = 4
+        stale.controlAck = 99
+        host.reply(try blender.seal(.status(stale)))
+        let lastValid = Date()
+        Thread.sleep(forTimeInterval: 1.6)
+        feed(pipeline, frames: 0..<1, rate: 60)
+        XCTAssertEqual(recorder.snapshots.last?.controlAck, 1, "stale STATUS cannot acknowledge controls")
+        XCTAssertFalse(recorder.snapshots.contains { $0.sessionLost }, "authenticated STATUS renews liveness")
+        var forged = try blender.seal(.clock(.request(t1: 6_000_000_000)))
+        forged[forged.count - 1] ^= 1
+        host.reply(forged)
+        XCTAssertNil(next(VCPMessageType.clock, from: host, timeout: 0.2), "bad tag must not elicit a reply")
+        wait(for: [lost], timeout: 2)
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(lastValid), 2.9)
+        XCTAssertEqual(recorder.snapshots.last?.sessionID, device.sessionID)
+    }
+
+    func testSilentSessionExpiresWithoutFramesAndStopsSending() throws {
+        let (device, _) = try goldenSession()
+        let host = try LoopbackReceiver()
+        let lost = expectation(description: "no initial heartbeat")
+        let pipeline = TrackingPipeline(publish: { if $0.sessionLost { lost.fulfill() } })
+        pipeline.start(TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device))
+        defer { pipeline.stop() }
+        let began = Date()
+        wait(for: [lost], timeout: 3.6)
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(began), 2.9)
+        while host.receive(timeout: 0.02) != nil {} // drain controls sent before expiry
+        feed(pipeline, frames: 0..<8, rate: 60)
+        pipeline.setControls(DeviceControls(motionScale: 2))
+        XCTAssertNil(host.receive(timeout: 0.6), "neither poses nor control repeats leave an expired session")
+    }
+
+    func testReplacementAndStopCancelTheOldLivenessDeadline() throws {
+        let (device, _) = try goldenSession()
+        let host = try LoopbackReceiver()
+        let recorder = Recorder()
+        let pipeline = TrackingPipeline(publish: recorder.add)
+        let destination = TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device)
+        pipeline.start(destination)
+        Thread.sleep(forTimeInterval: 1.6)
+        pipeline.start(destination)
+        Thread.sleep(forTimeInterval: 1.6)
+        feed(pipeline, frames: 0..<1, rate: 60)
+        XCTAssertEqual(recorder.poses.last?.seq, 1)
+        XCTAssertFalse(recorder.snapshots.contains { $0.sessionLost }, "replaced run's deadline must be cancelled")
+        pipeline.stop()
+        pipeline.start(unpaired)
+        Thread.sleep(forTimeInterval: 3.2)
+        feed(pipeline, frames: 0..<1, rate: 60)
+        pipeline.stop()
+        XCTAssertFalse(recorder.snapshots.contains { $0.sessionLost }, "stopped/unauthenticated runs must not expire")
+        XCTAssertNil(recorder.snapshots.last?.sessionID)
+    }
+
     func testDeviceControlsLocksOriginWrapAndScaleInput() {
         var controls = DeviceControls()
         controls.setLock(DeviceControls.lockHeight, true)

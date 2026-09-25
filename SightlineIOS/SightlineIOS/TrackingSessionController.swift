@@ -298,7 +298,12 @@ final class TrackingSessionController {
     }
 
     private func apply(_ snapshot: TrackingSnapshot) {
-        guard isTracking else {
+        guard isTracking, snapshot.sessionID == sessionEndpoint?.sessionID else {
+            return
+        }
+        if snapshot.sessionLost {
+            lastError = "No authenticated reply from Blender for three seconds."
+            stopTracking(reason: "Blender session lost")
             return
         }
         latestPose = snapshot.pose
