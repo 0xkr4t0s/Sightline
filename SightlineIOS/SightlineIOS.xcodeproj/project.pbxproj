@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		7C0DE5A10000000000000021 /* SRP in Frameworks */ = {isa = PBXBuildFile; productRef = 7C0DE5A10000000000000011 /* SRP */; };
+		7C0DE5A10000000000000022 /* BigNum in Frameworks */ = {isa = PBXBuildFile; productRef = 7C0DE5A10000000000000012 /* BigNum */; };
+		7C0DE5A10000000000000023 /* SRP in Frameworks */ = {isa = PBXBuildFile; productRef = 7C0DE5A10000000000000013 /* SRP */; };
+		7C0DE5A10000000000000024 /* BigNum in Frameworks */ = {isa = PBXBuildFile; productRef = 7C0DE5A10000000000000014 /* BigNum */; };
 		7C0DE7E57DA7A00000000002 /* testdata in Resources */ = {isa = PBXBuildFile; fileRef = 7C0DE7E57DA7A00000000001 /* testdata */; };
 /* End PBXBuildFile section */
 
@@ -35,9 +39,11 @@
 				StatusHUD.swift,
 				TrackingPipeline.swift,
 				UDPSender.swift,
+				VCP/VCPControl.swift,
 				VCP/VCPCoordinates.swift,
 				VCP/VCPEndpoint.swift,
 				VCP/VCPMessages.swift,
+				VCP/VCPPairing.swift,
 				VCP/VCPTrackingState.swift,
 			);
 			target = 9E74B7DA2F84AF9400B754DD /* SightlineIOSTests */;
@@ -73,6 +79,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7C0DE5A10000000000000023 /* SRP in Frameworks */,
+				7C0DE5A10000000000000024 /* BigNum in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -80,6 +88,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7C0DE5A10000000000000021 /* SRP in Frameworks */,
+				7C0DE5A10000000000000022 /* BigNum in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -126,6 +136,8 @@
 			);
 			name = SightlineIOSTests;
 			packageProductDependencies = (
+				7C0DE5A10000000000000013 /* SRP */,
+				7C0DE5A10000000000000014 /* BigNum */,
 			);
 			productName = SightlineIOSTests;
 			productReference = 9E74B7DB2F84AF9400B754DD /* SightlineIOSTests.xctest */;
@@ -148,6 +160,8 @@
 			);
 			name = SightlineIOS;
 			packageProductDependencies = (
+				7C0DE5A10000000000000011 /* SRP */,
+				7C0DE5A10000000000000012 /* BigNum */,
 			);
 			productName = SightlineIOS;
 			productReference = 9EE25E0D2F8410E3009FB801 /* SightlineIOS.app */;
@@ -180,6 +194,10 @@
 			);
 			mainGroup = 9EE25E042F8410E3009FB801;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				7C0DE5A10000000000000001 /* XCRemoteSwiftPackageReference "swift-srp" */,
+				7C0DE5A10000000000000002 /* XCRemoteSwiftPackageReference "big-num" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 9EE25E0E2F8410E3009FB801 /* Products */;
 			projectDirPath = "";
@@ -495,6 +513,48 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		7C0DE5A10000000000000001 /* XCRemoteSwiftPackageReference "swift-srp" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/adam-fowler/swift-srp";
+			requirement = {
+				kind = exactVersion;
+				version = 2.4.0;
+			};
+		};
+		7C0DE5A10000000000000002 /* XCRemoteSwiftPackageReference "big-num" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/adam-fowler/big-num";
+			requirement = {
+				kind = exactVersion;
+				version = 2.0.3;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		7C0DE5A10000000000000011 /* SRP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7C0DE5A10000000000000001 /* XCRemoteSwiftPackageReference "swift-srp" */;
+			productName = SRP;
+		};
+		7C0DE5A10000000000000012 /* BigNum */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7C0DE5A10000000000000002 /* XCRemoteSwiftPackageReference "big-num" */;
+			productName = BigNum;
+		};
+		7C0DE5A10000000000000013 /* SRP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7C0DE5A10000000000000001 /* XCRemoteSwiftPackageReference "swift-srp" */;
+			productName = SRP;
+		};
+		7C0DE5A10000000000000014 /* BigNum */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7C0DE5A10000000000000002 /* XCRemoteSwiftPackageReference "big-num" */;
+			productName = BigNum;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 9EE25E052F8410E3009FB801 /* Project object */;
 }

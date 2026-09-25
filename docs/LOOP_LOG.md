@@ -14,7 +14,7 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 | S-3b Developer ID signing + notarization of the macOS wheel | BLOCKED (needs owner) | Needs an Apple Developer account and credentials. Re-run `tests/s3_macos_loading.sh --gui` with a signed and notarized `.so`. |
 | S-3c Windows SmartScreen / Mark-of-the-Web | BLOCKED (needs owner) | Needs a Windows machine. |
 | Local coverage-guided fuzzing (1.1.3c) | Needs owner OK | Installing a nightly toolchain is outside the loop's allowed installs. CI's `fuzz` job covers it once pushed. |
-| 1.1.4b / 1.4.2b / 1.4.3b Swift pairing, iOS session endpoint, host selection + pairing UI + Keychain | Unblocked 2026-09-25 | Owner approved `swift-srp` 2.4.0 (plan, "Immediate next steps"). Discovery (1.4.3a) is done. |
+| 1.1.4b / 1.4.2b / 1.4.3b Swift pairing, iOS session endpoint, host selection + pairing UI + Keychain | Unblocked 2026-09-25 | Owner approved `swift-srp` 2.4.0 (plan, "Immediate next steps"). Discovery (1.4.3a) is done. 1.1.4b done in iteration 50. |
 | 1.5.1c Pose leg over Wi-Fi/wired with a real iPhone (NFR-LAT-001, T1 gate) | BLOCKED (needs owner) | Needs a real iPhone paired through 1.4.2b/1.4.3b, and O-1. Then: Blender N-panel → Save Latency Report after a take, and commit the JSON to `reports/`. |
 
 ---
@@ -1358,3 +1358,25 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Other changes since the loop stopped:** the iOS app moved to `SightlineIOS/` (scheme `SightlineIOS`, bundle ID `kr8t0s.Sightline`) and is licensed Apache-2.0 (PR #6). The Blender extension has `BlenderAddOn/LICENSE` (GPL-3.0). The GitHub repo is now `0xkr4t0s/Sightline`.
 - **Still open for the owner:** `mdns-sd`/`getrandom` reviews; whether the 60 Hz poll needs speeding up (SRS §13.4); licence of the Rust crates and protocol (S-5); device and Windows/Linux items in the blocked table.
 - **Next task:** 1.1.4b (plan, "Immediate next steps" 1).
+
+## 2026-09-25 — Iteration 50 — 1.1.4b (PR-001..003, PR-006, NFR-SEC-001; O-3) — done
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` = `origin/main` (`9418d08`); no open PR. Task from "Immediate next steps" 1. Branch `loop/1.1.4b`, PR https://github.com/0xkr4t0s/Sightline/pull/9.
+- **Dependencies (owner-approved, pinned exactly in `project.pbxproj` and `Package.resolved`):** `adam-fowler/swift-srp` 2.4.0 (`1345dfe`) and `adam-fowler/big-num` 2.0.3 (`9059dca`, MIT; added as a direct product because the app computes `A = g^a` itself), products `SRP` and `BigNum` on the app and test targets. SPM resolved the transitive `apple/swift-crypto` 4.5.2 and `apple/swift-asn1` 1.7.3 (both Apache-2.0; swift-asn1 wasn't in the owner's list, it comes with swift-crypto 4.x).
+- **API checked before use:** read `swift-srp` 2.4.0's `client.swift`/`keys.swift`/`srp.swift`: `u = H(A.bytes ‖ B.bytes)` over keys padded to `sizeN`, `x = H(s ‖ H("I:P"))`, `S` returned padded, `nullServerKey` for `B mod N = 0` and `u = 0`; its M1/M2 are RFC 2945-style, so only `S` is used and K/M1/M2/PK follow vcp.md. big-num's `power(_:modulus:)` is BoringSSL `BN_mod_exp`, which reduces a negative base first (`exponentiation.c:573`), so `B − k·g^x` is correct.
+- **Change:**
+  - `SightlineIOS/SightlineIOS/VCP/VCPControl.swift` (new): `VCPControlMessage` (HELLO, PAIR_CHALLENGE/PROOF/ACCEPT, SESSION_CHALLENGE/PROOF/ACCEPT, ERROR): `payload()`, `encode()`, `frameLength(header:)` for stream readers (magic, `session_id` 0, `len` ≤ 4096, then version) and `decode` (exact length, longer payloads accepted, strings bounded and UTF-8-checked). Mirrors `native/vcam-protocol/src/control.rs`.
+  - `SightlineIOS/SightlineIOS/VCP/VCPPairing.swift` (new): generic `VCPSRPClient<H>` (`PAD(A)`, `PAD(S)`); `VCPPairing.devicePair` (6-digit check, `T_pair`, `K = H(PAD(S))`, M1) → `VCPPendingPair.finish(m2:)` (constant-time M2 check via CryptoKit `HMAC.isValidAuthenticationCode`, HKDF PK); `VCPSessionHandshake` (`proof_d`, constant-time `proof_h` check, then HKDF `k_d2h ‖ k_h2d` with `session_id` LE) → `VCPSessionKeys.deviceEndpoint`; `randomSecret()` from `SecRandomCopyBytes`.
+  - `project.pbxproj`: package references and products; the two new files added to the test target's membership list.
+  - `SightlineIOSTests/VCPGoldenTests.swift`: +6 tests (`:184` all 10 TCP frames in `messages.json`/`pairing.json`/`session.json` byte-exact; `:216` malformed frames; `:253` RFC 5054 App. B through `VCPSRPClient<Insecure.SHA1>`; `:264` full `pairing.json` transcript incl. `S`, M1, PAIR_PROOF bytes, PK, every M2 bit flip, `wrong_code` M1; `:295` `B = 0`, `B = N`, bad codes; `:317` `session.json` proof_d, keys, first POSE sealed byte-exact, every proof_h flip, other PK).
+  - `docs/protocol/vcp.md`: O-3 closed (§13) and a change-log row; no wire change. `IMPLEMENTATION_PROGRESS.md`: PR-001..003/PR-006, NFR-SEC-001, maturity line, iOS test-run row.
+- **Commands run:**
+  - `xcodebuild test … -destination 'platform=iOS Simulator,name=iPhone 17'` (Debug, full suite): `Executed 41 tests, with 2 tests skipped and 0 failures (0 unexpected)`, `** TEST SUCCEEDED **` (skips: the opt-in live-host discovery test and the Release-only allocation test).
+  - Same, `-configuration Release -only-testing:…/testPoseSendPathAllocatesNothing`: `VCAM_SEND_ALLOCATIONS poses=600 allocations=0`, `** TEST SUCCEEDED **`.
+  - `-only-testing:SightlineIOSTests/VCPGoldenTests`: `Executed 12 tests, with 0 failures`.
+  - **Mutation check** (sequential, one snapshot, restored and `cmp`-verified identical): M1 `T_pair` without `PAD(A)`, M2 `K` = raw `S`, M3 M2 without M1 → `testPairingTranscriptMatchesVector`; M4 key info without `session_id` → `testSessionSetupMatchesVectorAndKeysSealFirstPose`; M5 `str8` without its limit, M6 TCP `session_id` unchecked → `testMalformedControlFramesAreRejected`; M7 5-digit codes accepted → `testPairingRejectsIllegalValuesAndCodes`. 7/7 caught.
+  - No Rust, Python, add-on or `testdata/` change, so cargo, pytest, `gen_testdata --check` and the Blender scripts weren't re-run.
+- **Flag (not a requirement change):** `swift-srp` exponentiates with `BN_mod_exp`, which BoringSSL's header says isn't for secret exponents (`CBigNumBoringSSL_bn.h:889-890`: use `BN_mod_exp_mont_consttime`). On the device the secret exponent is `a + u·x` with a fresh 256-bit `a` per attempt, so one timing trace per code; the Rust host is constant-time. Replacing it would mean patching or forking the library; left for the owner to judge.
+- **Blocked:** none new.
+- **Next task:** 1.4.2b (iOS session endpoint: TCP connection, HELLO → SESSION_* with these types, then UDP with `VCPSessionKeys`), then 1.4.3b. No second task started.
+- **Owner actions:** none for PR #9 (auto-merge). Optional: judge the `BN_mod_exp` timing note above. Still pending: `mdns-sd`/`getrandom` reviews; whether the 60 Hz poll needs speeding up (SRS §13.4).

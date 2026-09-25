@@ -1,4 +1,7 @@
+import BigNum
+import CryptoKit
 import simd
+import SRP
 import XCTest
 
 /// Consumes the golden vectors in testdata/ (NFR-QA-003, DM-004, PR-004), bundled as a folder
@@ -171,5 +174,173 @@ final class VCPGoldenTests: XCTestCase {
                 if case .success = rx.open(m) { XCTFail("\(c["name"]!): flip at \(i) accepted") }
             }
         }
+    }
+
+    // MARK: TCP control channel, pairing and session setup (§9–§11, O-3)
+
+    private func control(_ s: Any?) throws -> VCPControlMessage { try VCPControlMessage.decode(hex(s as! String)) }
+
+    /// Every TCP frame in the vectors decodes and re-encodes byte-exact.
+    func testControlFramesDecodeAndReencodeByteExact() throws {
+        var frames: [(String, String)] = []
+        for case let c as [String: Any] in try load("vcp/messages.json")["cases"] as! [Any] where c["channel"] as? String == "tcp" {
+            frames.append((c["name"] as! String, c["hex"] as! String))
+            switch try control(c["hex"]) {
+            case let .hello(h):
+                let f = c["fields"] as! [String: Any]
+                XCTAssertEqual(h, VCPHello(mode: UInt8(uint(f["mode"])), protoMin: UInt8(uint(f["proto_min"])),
+                                           protoMax: UInt8(uint(f["proto_max"])), deviceID: hex(f["device_id"] as! String),
+                                           nonceD: hex(f["nonce_d"] as! String), deviceName: f["device_name"] as! String))
+            case let .error(e):
+                let f = c["fields"] as! [String: Any]
+                XCTAssertEqual(e, VCPControlErrorMessage(code: UInt16(uint(f["code"])), message: f["message"] as! String))
+            case let other:
+                XCTFail("unexpected \(other)")
+            }
+        }
+        XCTAssertEqual(frames.count, 2)
+        for file in ["vcp/pairing.json", "vcp/session.json"] {
+            for case let (name, value as String) in try load(file)["messages"] as! [String: Any] where name != "first_POSE_udp" {
+                frames.append(("\(file) \(name)", value))
+            }
+        }
+        XCTAssertEqual(frames.count, 10)
+        for (name, value) in frames {
+            let bytes = hex(value)
+            let message = try VCPControlMessage.decode(bytes)
+            XCTAssertEqual(try message.encode(), bytes, "\(name): re-encoding differs")
+            XCTAssertEqual(try VCPControlMessage.frameLength(header: bytes.prefix(12)), bytes.count, name)
+        }
+    }
+
+    func testMalformedControlFramesAreRejected() throws {
+        let hello = hex((try load("vcp/pairing.json")["messages"] as! [String: Any])["HELLO"] as! String)
+        func decode(_ edit: (inout [UInt8]) -> Void) -> VCPControlError? {
+            var b = hello
+            edit(&b)
+            do { _ = try VCPControlMessage.decode(b); return nil } catch { return error }
+        }
+        XCTAssertEqual(decode { $0.removeLast($0.count - 11) }, .frame)
+        XCTAssertEqual(decode { $0.removeLast() }, .frame)
+        XCTAssertEqual(decode { $0.append(0) }, .frame)
+        XCTAssertEqual(decode { $0[0] = UInt8(ascii: "X") }, .frame)
+        XCTAssertEqual(decode { $0[4] = 2 }, .version)
+        XCTAssertEqual(decode { $0[6] = 1 }, .frame, "session_id must be 0 on TCP")
+        XCTAssertEqual(decode { $0[5] = 0x4E }, .unknownType)
+        XCTAssertEqual(decode { $0[10] = 0x01; $0[11] = 0x10 }, .frame, "len 4097")
+        XCTAssertEqual(decode { $0[12 + 36] = 200 }, .payload, "name length past the end")
+        XCTAssertEqual(decode { $0[12 + 36] = 65; $0 += Array(repeating: 0x61, count: 59); $0[10] = UInt8($0.count - 12) },
+                       .payload, "name over 64 bytes")
+        XCTAssertEqual(decode { $0[$0.count - 1] = 0xFF }, .payload, "name not UTF-8")
+        // A longer payload than v1 knows is accepted, the extra ignored (§2).
+        var longer = hello
+        longer.append(0xEE)
+        longer[10] += 1
+        XCTAssertEqual(try VCPControlMessage.decode(longer), try VCPControlMessage.decode(hello))
+        for n in 0..<hello.count { XCTAssertThrowsError(try VCPControlMessage.decode(Array(hello[..<n]))) }
+        for i in hello.indices {
+            var b = hello
+            b[i] ^= 0xFF
+            _ = try? VCPControlMessage.decode(b)
+        }
+        guard case var .hello(h) = try VCPControlMessage.decode(hello) else { return XCTFail("not a HELLO") }
+        h.deviceName = String(repeating: "x", count: 65)
+        XCTAssertThrowsError(try VCPControlMessage.hello(h).encode()) { XCTAssertEqual($0 as? VCPControlError, .field) }
+        XCTAssertThrowsError(try VCPControlMessage.sessionProof([0]).encode()) { XCTAssertEqual($0 as? VCPControlError, .field) }
+    }
+
+    /// RFC 5054 Appendix B (SHA-1, 1024-bit) through the same client code VCP uses.
+    func testSRPClientMatchesRFC5054AppendixB() throws {
+        let v = try load("vcp/srp-rfc5054-appendix-b.json")
+        let x = { (k: String) in self.hex(v[k] as! String) }
+        let client = VCPSRPClient<Insecure.SHA1>(configuration: SRPConfiguration(.N1024))
+        XCTAssertEqual(client.configuration.N.bytes, x("N"))
+        XCTAssertEqual(client.configuration.k.bytes, x("k"))
+        XCTAssertEqual(client.publicKey(a: x("a")), x("A"))
+        XCTAssertEqual(try client.sharedSecret(identity: v["I"] as! String, password: v["P"] as! String, salt: x("s"),
+                                               a: x("a"), bPad: x("B")), x("S"))
+    }
+
+    func testPairingTranscriptMatchesVector() throws {
+        let p = try load("vcp/pairing.json")
+        let (inputs, messages, srp) = (p["inputs"] as! [String: Any], p["messages"] as! [String: Any], p["srp"] as! [String: Any])
+        let code = (p["params"] as! [String: Any])["code"] as! String
+        guard case let .hello(hello) = try control(messages["HELLO"]),
+              case let .pairChallenge(challenge) = try control(messages["PAIR_CHALLENGE"]),
+              case let .pairAccept(m2) = try control(messages["PAIR_ACCEPT"])
+        else { return XCTFail("unexpected message types") }
+        XCTAssertEqual(VCPPairing.client.configuration.N.bytes, hex((p["params"] as! [String: Any])["N"] as! String))
+        let a = hex(inputs["a"] as! String)
+        XCTAssertEqual(try VCPPairing.client.sharedSecret(identity: "vcam", password: code, salt: challenge.salt, a: a,
+                                                          bPad: challenge.bPub), hex(srp["S"] as! String))
+
+        let (proof, pending) = try VCPPairing.devicePair(code: code, hello: hello, challenge: challenge, a: a)
+        XCTAssertEqual(proof.m1, hex(p["M1"] as! String))
+        XCTAssertEqual(try VCPControlMessage.pairProof(proof).encode(), hex(messages["PAIR_PROOF"] as! String))
+        XCTAssertEqual(try pending.finish(m2: m2), hex(p["PK"] as! String))
+        for i in m2.indices {
+            var bad = m2
+            bad[i] ^= 0x01
+            XCTAssertThrowsError(try pending.finish(m2: bad)) { XCTAssertEqual($0 as? VCPPairError, .badProof) }
+        }
+
+        let wrong = p["wrong_code"] as! [String: Any]
+        let (wrongProof, wrongPending) = try VCPPairing.devicePair(code: wrong["code"] as! String, hello: hello,
+                                                                  challenge: challenge, a: a)
+        XCTAssertEqual(wrongProof.m1, hex(wrong["M1"] as! String))
+        XCTAssertThrowsError(try wrongPending.finish(m2: m2)) { XCTAssertEqual($0 as? VCPPairError, .badProof) }
+    }
+
+    /// §9.2: abort on `B mod N = 0`; the code must be 6 ASCII digits.
+    func testPairingRejectsIllegalValuesAndCodes() throws {
+        let p = try load("vcp/pairing.json")
+        let messages = p["messages"] as! [String: Any]
+        guard case let .hello(hello) = try control(messages["HELLO"]),
+              case let .pairChallenge(challenge) = try control(messages["PAIR_CHALLENGE"])
+        else { return XCTFail("unexpected message types") }
+        let a = hex((p["inputs"] as! [String: Any])["a"] as! String)
+        let n = hex((p["params"] as! [String: Any])["N"] as! String)
+        for bPub in [[UInt8](repeating: 0, count: 384), n] {
+            var c = challenge
+            c.bPub = bPub
+            XCTAssertThrowsError(try VCPPairing.devicePair(code: "042917", hello: hello, challenge: c, a: a)) {
+                XCTAssertEqual($0 as? VCPPairError, .illegalValue)
+            }
+        }
+        for code in ["04291", "0429170", "04291a", "٠٤٢٩١٧"] {
+            XCTAssertThrowsError(try VCPPairing.devicePair(code: code, hello: hello, challenge: challenge, a: a), code) {
+                XCTAssertEqual($0 as? VCPPairError, .badCode)
+            }
+        }
+    }
+
+    func testSessionSetupMatchesVectorAndKeysSealFirstPose() throws {
+        let s = try load("vcp/session.json")
+        let messages = s["messages"] as! [String: Any]
+        guard case let .hello(hello) = try control(messages["HELLO"]),
+              case let .sessionChallenge(challenge) = try control(messages["SESSION_CHALLENGE"]),
+              case let .sessionProof(proofD) = try control(messages["SESSION_PROOF"]),
+              case let .sessionAccept(proofH) = try control(messages["SESSION_ACCEPT"])
+        else { return XCTFail("unexpected message types") }
+        XCTAssertEqual(hello.mode, VCPHello.modeSession)
+        let pk = hex(s["PK"] as! String)
+        let handshake = try VCPSessionHandshake(pairingKey: pk, hello: hello, challenge: challenge)
+        XCTAssertEqual(handshake.deviceProof, proofD)
+        let keys = try handshake.accept(hostProof: proofH)
+        XCTAssertEqual(keys, VCPSessionKeys(sessionID: challenge.sessionID, kD2H: hex(s["k_d2h"] as! String),
+                                            kH2D: hex(s["k_h2d"] as! String)))
+        // The derived keys produce the vector's first POSE datagram byte for byte.
+        let pose = hex(messages["first_POSE_udp"] as! String)
+        let host = try XCTUnwrap(VCPEndpoint(role: .host, sessionID: keys.sessionID, kD2H: keys.kD2H, kH2D: keys.kH2D))
+        XCTAssertEqual(try XCTUnwrap(keys.deviceEndpoint).seal(host.open(pose).get()), pose)
+        for i in proofH.indices {
+            var bad = proofH
+            bad[i] ^= 0x80
+            XCTAssertThrowsError(try handshake.accept(hostProof: bad)) { XCTAssertEqual($0 as? VCPPairError, .badProof) }
+        }
+        var otherPK = pk
+        otherPK[0] ^= 1
+        XCTAssertThrowsError(try VCPSessionHandshake(pairingKey: otherPK, hello: hello, challenge: challenge)
+            .accept(hostProof: proofH)) { XCTAssertEqual($0 as? VCPPairError, .badProof) }
     }
 }
