@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""N-panel (task 1.3.3; FR-BL-004): session on/off, pairing code, connected device, pose rate,
-loss, latency, tracking state, camera selection, and origin/scale/lock settings.
+"""N-panel (tasks 1.3.3, 1.3.6; FR-BL-004, FR-TRK-002): session on/off, pairing code, connected
+device, pose rate, loss, latency, tracking state and hold, camera selection, and
+origin/scale/lock settings.
 
 Scale and locks come from the iPhone (`CONTROL_STATE` is the device's idempotent state,
 FR-CTL-009), so they are shown, not edited, here. Set/Clear origin act on the host-side zero.
@@ -13,7 +14,7 @@ import bpy
 
 from ..core import session
 from ..core.apply import camera_status, find_origin
-from ..core.status import code_label, locks_label, scale_label, tracking_label
+from ..core.status import code_label, hold_label, locks_label, scale_label, tracking_label
 
 
 class VCAM_PT_main_panel(bpy.types.Panel):
@@ -42,6 +43,7 @@ class VCAM_PT_main_panel(bpy.types.Panel):
         if warning:
             col.label(text=warning, icon='ERROR')  # FR-BL-007
         col.prop(props, "smoothing")
+        col.prop(props, "hold_last_good")
 
         if live is None:
             op = layout.operator("vcam.session_start", text="Start Session", icon='PLAY')
@@ -70,6 +72,9 @@ class VCAM_PT_main_panel(bpy.types.Panel):
             box.label(text=state.device_name or "iPhone", icon='CAMERA_DATA')
             col = box.column(align=True)
             col.label(text=f"Tracking: {tracking_label(state.tracking_state)}")
+            applier = session.applier()
+            if applier.holding:
+                col.label(text=hold_label(state.tracking_state, applier.hold.good is not None), icon='PAUSE')
             col.label(text=f"Poses: {stats['rate_hz']:.0f} Hz, loss {stats['loss'] * 100:.1f} %")
             if state.latency_ms is None:
                 col.label(text="Latency: waiting for clock sync")
