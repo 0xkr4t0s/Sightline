@@ -11,4 +11,6 @@ workspace = true
 [dependencies]
 getrandom = "=0.4.3"
 mdns-sd = { version = "=0.21.4", default-features = false }
+# Already built for mdns-sd; UDP readiness polling (SO_RCVTIMEO loses datagrams on Windows).
+mio = { version = "=1.2.3", features = ["os-poll", "net"] }
 vcam-protocol.workspace = true

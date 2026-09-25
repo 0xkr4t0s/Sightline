@@ -7,11 +7,14 @@
 
 use std::collections::VecDeque;
 use std::io;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+
+use mio::net::UdpSocket;
+use mio::{Events, Interest, Poll, Token};
 
 use vcam_protocol::{
     Clock, ClockEstimate, ClockEstimator, ControlState, DropReason, Endpoint, MAX_DATAGRAM,
@@ -345,9 +348,12 @@ pub struct UdpReceiver {
 impl UdpReceiver {
     /// Binds `bind` and starts an idle receiver with no session keys.
     pub fn start(bind: SocketAddr) -> io::Result<Self> {
-        let socket = UdpSocket::bind(bind)?;
-        socket.set_read_timeout(Some(POLL))?;
-        socket.set_write_timeout(Some(POLL))?;
+        // Readiness polling, not SO_RCVTIMEO: on Windows a blocking recv that times out while a
+        // datagram arrives can silently lose that datagram (seen as ~2% loss under CPU load).
+        let mut socket = UdpSocket::bind(bind)?;
+        let poll = Poll::new()?;
+        poll.registry()
+            .register(&mut socket, Token(0), Interest::READABLE)?;
         let local_addr = socket.local_addr()?;
         let state = Arc::new(Mutex::new(State::default()));
         let epoch = Instant::now();
@@ -356,7 +362,7 @@ impl UdpReceiver {
             .name("vcam-udp-rx".into())
             .spawn({
                 let (state, stop) = (Arc::clone(&state), Arc::clone(&stop));
-                move || receive_loop(&socket, &state, &stop, epoch)
+                move || receive_loop(&socket, poll, &state, &stop, epoch)
             })?;
         Ok(Self {
             state,
@@ -516,41 +522,49 @@ fn host_clock(epoch: Instant) -> u64 {
     u64::try_from(epoch.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
 
-fn receive_loop(socket: &UdpSocket, state: &Mutex<State>, stop: &AtomicBool, epoch: Instant) {
+fn receive_loop(
+    socket: &UdpSocket,
+    mut poll: Poll,
+    state: &Mutex<State>,
+    stop: &AtomicBool,
+    epoch: Instant,
+) {
     // One byte more than the largest valid datagram, so oversize datagrams are seen as oversize
     // instead of being silently truncated to a valid length.
     let mut buf = [0u8; MAX_DATAGRAM + 1];
     let mut out = Vec::with_capacity(MAX_DATAGRAM);
+    let mut events = Events::with_capacity(4);
     while !stop.load(Ordering::Acquire) {
-        match socket.recv_from(&mut buf) {
-            Ok((n, from)) => {
-                let host_ns = host_clock(epoch);
-                lock(state).handle(
-                    buf.get(..n).unwrap_or_default(),
-                    from,
-                    Instant::now(),
-                    host_ns,
-                );
-            }
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                ) =>
-            {
-                drop(lock(state))
-            } // expire on idle polls too
-            // Windows reports a datagram larger than the buffer as an error (WSAEMSGSIZE)
-            // instead of truncating it like macOS/Linux; it is still an oversize datagram.
-            Err(e) if is_oversize(&e) => lock(state).stats.dropped.size += 1,
-            // Transient errors (for example ICMP port unreachable surfacing on Windows as
-            // ConnectionReset) must not end the thread; back off briefly and keep listening.
-            Err(_) => {
-                std::thread::sleep(POLL);
-                drop(lock(state));
+        // Wakes on readiness or after POLL (stop checks, idle expiry, due sends).
+        if let Err(e) = poll.poll(&mut events, Some(POLL))
+            && e.kind() != io::ErrorKind::Interrupted
+        {
+            std::thread::sleep(POLL);
+        }
+        // Drain until WouldBlock: readiness is edge-triggered on some platforms. Draining after
+        // every wake (not only on events) also retries promptly after a transient error.
+        loop {
+            match socket.recv_from(&mut buf) {
+                Ok((n, from)) => {
+                    let host_ns = host_clock(epoch);
+                    lock(state).handle(
+                        buf.get(..n).unwrap_or_default(),
+                        from,
+                        Instant::now(),
+                        host_ns,
+                    );
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                // Windows reports a datagram larger than the buffer as an error (WSAEMSGSIZE)
+                // instead of truncating it like macOS/Linux; it is still an oversize datagram.
+                Err(e) if is_oversize(&e) => lock(state).stats.dropped.size += 1,
+                // Transient errors (for example ICMP port unreachable surfacing on Windows as
+                // ConnectionReset) must not end the thread; retry on the next wake.
+                Err(_) => break,
             }
         }
         if !stop.load(Ordering::Acquire) {
+            // Also expires an idle session (via `lock`).
             lock(state).send_due(socket, &mut out, epoch);
         }
     }
