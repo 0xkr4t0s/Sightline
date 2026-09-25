@@ -563,6 +563,42 @@ Findings:
 
 Still open for S-3: the same scenarios with a Developer ID–signed and notarized `.so` (owner credentials), an older supported macOS, Blender's drag-and-drop install and online-repository install paths, and Windows SmartScreen / Mark-of-the-Web for the `.pyd`.
 
+### 13.4 Pose-leg measurement note — 2026-09-25 (task 1.5.1, host side, loopback on macOS arm64)
+
+Setup: Blender 5.2.2, Apple M4 Pro, the fake iPhone streaming `testdata/motion/scripted.bin` (390 poses) at 60 Hz over loopback; its capture times come from its own clock (offset 1000 s) and are mapped through the `CLOCK` estimate. Pose leg = host clock right after the apply − mapped capture time; apply = main-thread `Applier.tick`. Script: `tests/blender/pose_leg_latency.py`; report: `reports/latency-2026-09-25-macos-arm64-loopback.json`.
+
+| Run | Poll | Applied / not applied | Pose leg p50 / p95 / p99 / max (ms) | Apply p95 / max (ms) |
+|---|---|---|---|---|
+| Headless, 60 Hz sleep loop (report) | 1/60 s | 346 / 44 | 16.06 / 16.79 / 17.31 / 17.40 | 0.10 / 0.48 |
+| Headless, 60 Hz, earlier run | 1/60 s | 390 / 0 | 14.86 / 15.84 / 16.34 / 16.39 | 0.12 / 1.17 |
+| Headless, 1 ms polling (throwaway probe) | 1 ms | 390 / 0 | 0.81 / 1.12 / 1.29 / 3.85 | 0.08 / 0.51 |
+| GUI, real `bpy.app.timers` poll | 1/60 s | 246 / 144 | 1.18 / 2.00 / 11.60 / 17.75 | 0.11 / 0.26 |
+
+Findings (no requirement changed):
+
+- **The clock mapping is right:** with a 1 ms poll the loopback pose leg is 0.8 ms at p50, and flipping the offset's sign moves every sample by −2,000,000 ms (the script catches it).
+- **The 60 Hz poll dominates the host side.** A pose waits in the latest-sample slot until the next poll, 0–16.7 ms depending on the phase between the device's frames and Blender's timer; the p50 moved between 1.2 and 16.5 ms across runs of the same setup. On Wi-Fi this leaves ≤ 3 ms of NFR-LAT-001's 20 ms p95 for the network in the worst phase, and the wired ≤ 8 ms target can't be met reliably with `POLL_INTERVAL = 1/60`. With poll and device at the same rate, some polls also find two new poses and apply only the newer (NET-002), up to 37 % of poses in the GUI run. Options for a later task: poll faster (applying only when `seq` changes), or wake the main thread when a pose arrives.
+- **Apply cost:** p95 ≈ 0.1 ms, but single applies reached 1.17, 1.34 and 1.65 ms in 3 of 13 runs (where checked, mid-stream, not the first, rig-creating apply). The report judges NFR-LAT-001's "≤ 1 ms" on every apply (`meets.apply_max`), so it flags these.
+- The Wi-Fi pose leg needs a real iPhone (owner): its capture clock is still open item O-1.
+
+### 13.5 Send-leg note — 2026-09-25 (task 1.5.1b, iOS pipeline, iPhone 17 Pro simulator on Apple M4 Pro)
+
+Setup: `TrackingPipeline` with the golden session, 600 poses at 60 Hz into a loopback UDP socket playing the host. Send leg = the frame reaching `TrackingPipeline.receive` → `send(2)` returned for its POSE. Heap allocations were counted per thread through libmalloc's `malloc_logger` hook (`VCamIOSTests/AllocationCounter.swift`). Tests: `TrackingPipelineTests.testSendLegIsMeasuredForSentPoses`, `testPoseSendPathAllocatesNothing`.
+
+Heap blocks per call before the change (a throwaway probe; the loop's own block per call subtracted). The `seal` and framework rows ran in a `-Onone` test build (CryptoKit and Network are system binaries, so their counts don't depend on it); the `assumeIsolated` row is from an optimised build:
+
+| Step | Blocks per call |
+|---|---|
+| `VCPEndpoint.seal` (growing arrays, CryptoKit `HMAC<SHA256>`) | 105 |
+| CryptoKit HMAC alone (one-shot / prepared state copied) | 8 / 4 |
+| `NWConnection.send` (new `Data`, `.contentProcessed` / reused `Data`, `.idempotent`) | 9 / 5 |
+| `Actor.assumeIsolated` (closure contexts from `withoutActuallyEscaping` + bit-cast) | 2 |
+| CommonCrypto `CCHmac` one-shot; BSD `send(2)` on a connected socket | 0 |
+
+Results after the change: 0 blocks over 600 poses in an optimised build. At `-Onone` about 12 blocks per pose remain from unspecialised generics and boxed closures, so the check runs with `-configuration Release` (a CI step). Send leg p50 / p95 / max: 0.01–0.02 / 0.02 / 0.022–0.025 ms optimised, 0.02–0.026 / 0.02–0.026 / 0.020–0.026 ms at `-Onone` (10 µs bins). NFR-LAT-002's 2 ms p95 has about 100× headroom on this host; a device run is still needed.
+
+Flag (no requirement changed): §1.4 lists the Network framework (`NetworkConnection`) as the iOS networking API. To meet NFR-LAT-002's "no allocation per pose", the pose/control UDP socket is now a BSD socket (`VCamIOS/VCamIOS/UDPSender.swift`); discovery stays on `NetworkBrowser`, and the TCP session (1.4.2b) can still use `NetworkConnection`. Two consequences: host names are resolved with `getaddrinfo` off the ARKit queue (addresses connect at once), and IPv4 results come first, because Blender's session binds `0.0.0.0` (`BlenderAddOn/core/session.py:116`), so `localhost` → `::1` or `.local` → `fe80::…` would never reach it.
+
 ---
 
 ## Appendix A — What changed

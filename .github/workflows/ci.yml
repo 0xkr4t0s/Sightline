@@ -1,6 +1,6 @@
-# CI for VCam Blender (IMPLEMENTATION_PLAN.md task 0.1.5; SRS XP-001/002, NFR-QA-002).
+# CI for VCam Blender (IMPLEMENTATION_PLAN.md tasks 0.1.5, 1.3.5; SRS XP-001/002, NFR-QA-002).
 # Rust checks -> vcam_native wheels per OS -> Blender extension (split per platform)
-# -> headless Blender smoke test per OS. Plus Python unit tests and iOS unit tests.
+# -> headless Blender smoke + fake-iPhone integration tests per OS. Plus Python and iOS unit tests.
 name: CI
 
 on:
@@ -48,6 +48,48 @@ jobs:
       - name: cargo test
         working-directory: native
         run: cargo test
+
+  fuzz:
+    # PR-005 / NFR-QA-002: time-boxed cargo-fuzz run per target, seeded from testdata/.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install nightly and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Seed corpora from testdata/
+        working-directory: native/fuzz
+        run: |
+          mkdir -p corpus/udp_open corpus/control_decode corpus/pairing_inputs
+          for f in ../../testdata/vcp/*.bin; do
+            case "$(basename "$f")" in
+              hello_pair.bin|error_not_paired.bin) cp "$f" corpus/control_decode/ ;;
+              *) cp "$f" corpus/udp_open/ ;;
+            esac
+          done
+          python3 - <<'EOF'
+          import json
+          for name, keys in (("session", ["HELLO", "SESSION_CHALLENGE", "SESSION_PROOF", "SESSION_ACCEPT"]),
+                             ("pairing", ["HELLO", "PAIR_CHALLENGE", "PAIR_PROOF", "PAIR_ACCEPT"])):
+              msgs = json.load(open(f"../../testdata/vcp/{name}.json"))["messages"]
+              for key in keys:
+                  open(f"corpus/control_decode/{name}_{key}.bin", "wb").write(bytes.fromhex(msgs[key]))
+          pairing = json.load(open("../../testdata/vcp/pairing.json"))["messages"]
+          open("corpus/pairing_inputs/proof.bin", "wb").write(b"\x00" + bytes.fromhex(pairing["PAIR_PROOF"])[12:])
+          open("corpus/pairing_inputs/challenge.bin", "wb").write(b"\x01" + bytes.fromhex(pairing["PAIR_CHALLENGE"])[12:] + bytes(32))
+          EOF
+      - name: cargo fuzz run (60 s per target)
+        working-directory: native
+        run: |
+          for target in udp_open control_decode pairing_inputs; do
+            cargo +nightly fuzz run "$target" -- -max_total_time=60 -rss_limit_mb=2048
+          done
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: fuzz-artifacts
+          path: native/fuzz/artifacts/
 
   wheels:
     strategy:
@@ -128,6 +170,15 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native -> target.nosync
+      - name: Build the fake iPhone (task 1.2.7) for the integration tests
+        working-directory: native
+        run: |
+          cargo build --release --locked -p vcam-fake-iphone
+          exe=""; [ "${RUNNER_OS}" = "Windows" ] && exe=".exe"
+          echo "FAKE_IPHONE=${GITHUB_WORKSPACE}/native/target.nosync/release/vcam-fake-iphone${exe}" >> "${GITHUB_ENV}"
       - uses: actions/download-artifact@v8
         with:
           name: extension
@@ -154,7 +205,7 @@ jobs:
               echo "BLENDER=/Volumes/Blender/Blender.app/Contents/MacOS/Blender" >> "${GITHUB_ENV}"
               ;;
           esac
-      - name: Install the extension and import vcam_native
+      - name: Install the extension, import vcam_native, exercise Session
         env:
           BLENDER_USER_RESOURCES: ${{ runner.temp }}/blender-user
         run: |
@@ -162,6 +213,22 @@ jobs:
           "${BLENDER}" --command extension install-file -r user_default -e "${zip}"
           "${BLENDER}" --background --factory-startup --python-exit-code 1 \
             --python tests/blender/smoke_native.py
+          "${BLENDER}" --background --factory-startup --python-exit-code 1 \
+            --python tests/blender/session_native.py
+          "${BLENDER}" --background --factory-startup --python-exit-code 1 \
+            --python tests/blender/addon_session.py
+      - name: Integration tests with the fake iPhone (XP-002, task 1.3.5)
+        env:
+          BLENDER_USER_RESOURCES: ${{ runner.temp }}/blender-user
+        run: |
+          # addon_apply: matrix_world of the driven camera at every scripted keypose.
+          # pose_leg_latency: the NFR-LAT-001 report over loopback (task 1.5.1).
+          for t in addon_apply addon_panel addon_robust pose_leg_latency; do
+            echo "::group::${t}"
+            "${BLENDER}" --background --factory-startup --python-exit-code 1 \
+              --python "tests/blender/${t}.py"
+            echo "::endgroup::"
+          done
 
   python:
     runs-on: ubuntu-latest
@@ -172,6 +239,8 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: python -m pip install pytest==9.1.1
       - run: python -m pytest -q -p no:cacheprovider BlenderAddOn/tests
+      - name: Golden vectors are up to date (testdata/ matches tools/gen_testdata.py)
+        run: python tools/gen_testdata.py --check
 
   ios:
     runs-on: macos-26
@@ -181,3 +250,8 @@ jobs:
         run: |
           xcodebuild test -project VCamIOS/VCamIOS.xcodeproj -scheme VCamIOS \
             -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+      - name: Pose send path allocates nothing (NFR-LAT-002; needs optimised code)
+        run: |
+          xcodebuild test -configuration Release -project VCamIOS/VCamIOS.xcodeproj -scheme VCamIOS \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+            -only-testing:VCamIOSTests/TrackingPipelineTests/testPoseSendPathAllocatesNothing

@@ -1,0 +1,423 @@
+{
+  "cases": [
+    {
+      "expected_orientation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "expected_position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "lock_flags": 0,
+      "motion_scale": 1.0,
+      "name": "identity",
+      "note": "no zero, no locks: local = device pose",
+      "orientation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "zero_pose": null,
+      "zero_yaw": 0.0
+    },
+    {
+      "expected_orientation": [
+        0.707106781,
+        0.0,
+        0.0,
+        0.707106782
+      ],
+      "expected_position": [
+        5.0,
+        -12.5,
+        16.0
+      ],
+      "lock_flags": 0,
+      "motion_scale": 10.0,
+      "name": "scale_10",
+      "note": "1:10 motion scale; rotation unscaled",
+      "orientation": [
+        0.707106781,
+        0.0,
+        0.0,
+        0.707106781
+      ],
+      "position": [
+        0.5,
+        -1.25,
+        1.6
+      ],
+      "zero_pose": null,
+      "zero_yaw": 0.0
+    },
+    {
+      "expected_orientation": [
+        0.554032293,
+        0.148452505,
+        0.21201215,
+        0.791240116
+      ],
+      "expected_position": [
+        1.0,
+        2.0,
+        1.7
+      ],
+      "lock_flags": 2,
+      "motion_scale": 1.0,
+      "name": "lock_roll",
+      "note": "yaw 30, pitch -20, roll 15 -> roll removed, heading and pitch kept",
+      "orientation": [
+        0.56866941,
+        0.074866748,
+        0.313475916,
+        0.756797808
+      ],
+      "position": [
+        1.0,
+        2.0,
+        1.7
+      ],
+      "zero_pose": null,
+      "zero_yaw": 0.0
+    },
+    {
+      "expected_orientation": [
+        0.56866941,
+        0.074866748,
+        0.313475916,
+        0.756797808
+      ],
+      "expected_position": [
+        1.0,
+        2.0,
+        0.0
+      ],
+      "lock_flags": 1,
+      "motion_scale": 1.0,
+      "name": "lock_height",
+      "note": "local z = 0",
+      "orientation": [
+        0.56866941,
+        0.074866748,
+        0.313475916,
+        0.756797808
+      ],
+      "position": [
+        1.0,
+        2.0,
+        1.7
+      ],
+      "zero_pose": null,
+      "zero_yaw": 0.0
+    },
+    {
+      "expected_orientation": [
+        0.56866941,
+        0.074866748,
+        0.313475916,
+        0.756797808
+      ],
+      "expected_position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "lock_flags": 4,
+      "motion_scale": 1.0,
+      "name": "pan_only",
+      "note": "position locked at the origin",
+      "orientation": [
+        0.56866941,
+        0.074866748,
+        0.313475916,
+        0.756797808
+      ],
+      "position": [
+        1.0,
+        2.0,
+        1.7
+      ],
+      "zero_pose": null,
+      "zero_yaw": 0.0
+    },
+    {
+      "expected_orientation": [
+        0.673019383,
+        0.058881566,
+        0.064257954,
+        0.734471774
+      ],
+      "expected_position": [
+        -0.5,
+        2.0,
+        -0.4
+      ],
+      "lock_flags": 0,
+      "motion_scale": 1.0,
+      "name": "set_origin_then_walk",
+      "note": "zero at a camera facing -X; 2 m along -X and 0.5 m to its left -> local (-0.5, 2, -0.4) (forward +Y, right +X), yaw +10",
+      "orientation": [
+        0.434261015,
+        0.517532124,
+        0.564787207,
+        0.473912737
+      ],
+      "position": [
+        -1.0,
+        0.5,
+        1.2
+      ],
+      "zero_pose": {
+        "orientation": [
+          0.5,
+          0.5,
+          0.5,
+          0.5
+        ],
+        "position": [
+          1.0,
+          1.0,
+          1.6
+        ]
+      },
+      "zero_yaw": 1.570796326795
+    },
+    {
+      "expected_orientation": [
+        0.673019383,
+        0.058881566,
+        0.064257954,
+        0.734471774
+      ],
+      "expected_position": [
+        -1.0,
+        4.0,
+        0.0
+      ],
+      "lock_flags": 3,
+      "motion_scale": 2.0,
+      "name": "combined",
+      "note": "zero + scale 2 + lock height + lock roll",
+      "orientation": [
+        0.469304393,
+        0.485978925,
+        0.596469895,
+        0.433360745
+      ],
+      "position": [
+        -1.0,
+        0.5,
+        1.2
+      ],
+      "zero_pose": {
+        "orientation": [
+          0.5,
+          0.5,
+          0.5,
+          0.5
+        ],
+        "position": [
+          1.0,
+          1.0,
+          1.6
+        ]
+      },
+      "zero_yaw": 1.570796326795
+    },
+    {
+      "expected_orientation": [
+        0.0,
+        0.0,
+        -0.382683432,
+        0.923879533
+      ],
+      "expected_position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "lock_flags": 2,
+      "motion_scale": 1.0,
+      "name": "straight_down_lock_roll",
+      "note": "looking straight down: heading from the up vector; roll undefined, so the rotation is kept",
+      "orientation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "position": [
+        0.0,
+        0.0,
+        2.0
+      ],
+      "zero_pose": {
+        "orientation": [
+          0.0,
+          0.0,
+          0.382683432,
+          0.923879533
+        ],
+        "position": [
+          0.0,
+          0.0,
+          2.0
+        ]
+      },
+      "zero_yaw": 0.78539816279
+    },
+    {
+      "expected_orientation": [
+        0.499999992,
+        0.0,
+        2.7e-08,
+        0.866025408
+      ],
+      "expected_position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "lock_flags": 1,
+      "motion_scale": 2.0,
+      "name": "scripted_tilt",
+      "note": "fake iPhone --scale 2 --locks 1 --set-origin-at 105: tilt keypose",
+      "orientation": [
+        0.353553385,
+        0.353553385,
+        0.612372458,
+        0.612372458
+      ],
+      "position": [
+        0.0,
+        0.0,
+        1.600000024
+      ],
+      "zero_pose": {
+        "orientation": [
+          0.5,
+          0.5,
+          0.5,
+          0.5
+        ],
+        "position": [
+          0.0,
+          0.0,
+          1.600000024
+        ]
+      },
+      "zero_yaw": 1.570796326795
+    },
+    {
+      "expected_orientation": [
+        0.499999992,
+        0.0,
+        2.7e-08,
+        0.866025408
+      ],
+      "expected_position": [
+        0.0,
+        4.0,
+        0.0
+      ],
+      "lock_flags": 1,
+      "motion_scale": 2.0,
+      "name": "scripted_dolly",
+      "note": "fake iPhone --scale 2 --locks 1 --set-origin-at 105: dolly keypose",
+      "orientation": [
+        0.353553385,
+        0.353553385,
+        0.612372458,
+        0.612372458
+      ],
+      "position": [
+        -2.0,
+        0.0,
+        1.600000024
+      ],
+      "zero_pose": {
+        "orientation": [
+          0.5,
+          0.5,
+          0.5,
+          0.5
+        ],
+        "position": [
+          0.0,
+          0.0,
+          1.600000024
+        ]
+      },
+      "zero_yaw": 1.570796326795
+    },
+    {
+      "expected_orientation": [
+        0.499999992,
+        0.0,
+        2.7e-08,
+        0.866025408
+      ],
+      "expected_position": [
+        0.0,
+        4.0,
+        0.0
+      ],
+      "lock_flags": 1,
+      "motion_scale": 2.0,
+      "name": "scripted_crane",
+      "note": "fake iPhone --scale 2 --locks 1 --set-origin-at 105: crane keypose",
+      "orientation": [
+        0.353553385,
+        0.353553385,
+        0.612372458,
+        0.612372458
+      ],
+      "position": [
+        -2.0,
+        0.0,
+        3.099999905
+      ],
+      "zero_pose": {
+        "orientation": [
+          0.5,
+          0.5,
+          0.5,
+          0.5
+        ],
+        "position": [
+          0.0,
+          0.0,
+          1.600000024
+        ]
+      },
+      "zero_yaw": 1.570796326795
+    }
+  ],
+  "lock_flags": {
+    "lock_height": 1,
+    "lock_roll": 2,
+    "pan_only": 4
+  },
+  "note": "Camera local pose under VCam_Origin (BlenderAddOn/core/rig.py). Quaternions are x, y, z, w with w >= 0; compare positions and orientations to 1e-9 (q and -q are equal). zero_pose null means no Set origin yet (identity zero).",
+  "scripted": {
+    "cases": [
+      "scripted_tilt",
+      "scripted_dolly",
+      "scripted_crane"
+    ],
+    "lock_flags": 1,
+    "motion": "motion/scripted.bin",
+    "motion_scale": 2.0,
+    "set_origin_at": 105
+  }
+}

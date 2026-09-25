@@ -1,15 +1,25 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""N-panel UI for VCam tracking controls."""
+"""N-panel (task 1.3.3; FR-BL-004): session on/off, pairing code, connected device, pose rate,
+loss, latency, tracking state, camera selection, and origin/scale/lock settings.
+
+Scale and locks come from the iPhone (`CONTROL_STATE` is the device's idempotent state,
+FR-CTL-009), so they are shown, not edited, here. Set/Clear origin act on the host-side zero.
+Values refresh from the session poll (`core/session.py`, 4 Hz redraw).
+"""
 
 from __future__ import annotations
 
 import bpy
 
+from ..core import session
+from ..core.apply import camera_status, find_origin
+from ..core.status import code_label, locks_label, scale_label, tracking_label
+
 
 class VCAM_PT_main_panel(bpy.types.Panel):
-    """VCam tracking connection and settings."""
+    """VCam session, device and rig."""
 
-    bl_label = "VCam Tracking"
+    bl_label = "VCam"
     bl_idname = "VCAM_PT_main_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
@@ -18,81 +28,69 @@ class VCAM_PT_main_panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         props = context.scene.vcam_props
+        live = session.current()
 
-        # Connection section
         box = layout.box()
         box.label(text="Connection", icon='URL')
-
         col = box.column(align=True)
         row = col.row(align=True)
-        row.prop(props, "host", text="Host")
+        row.prop(props, "bind_address", text="Bind")
         row.prop(props, "port", text="Port")
-        row.enabled = not props.is_tracking
-
-        # Target camera
+        row.enabled = live is None
         col.prop(props, "target_camera", text="Camera", icon='CAMERA_DATA')
+        camera, warning = camera_status(context.scene)
+        if warning:
+            col.label(text=warning, icon='ERROR')  # FR-BL-007
+        col.prop(props, "smoothing")
 
-        # Connect / Disconnect button
-        layout.separator()
-        if props.is_tracking:
-            layout.operator("vcam.stop_tracking", text="Disconnect", icon='CANCEL')
-        else:
-            layout.operator("vcam.start_tracking", text="Connect", icon='PLAY')
-
-        # Transform settings
-        box = layout.box()
-        box.label(text="Transform", icon='ORIENTATION_GIMBAL')
-        box.prop(props, "euler_order")
-
-        # Lens mapping
-        box = layout.box()
-        box.label(text="Lens Mapping", icon='CAMERA_DATA')
-        col = box.column(align=True)
-        col.prop(props, "zoom_min_focal")
-        col.prop(props, "zoom_max_focal")
-        col.separator()
-        col.prop(props, "focus_min_distance")
-        col.prop(props, "focus_max_distance")
-
-
-class VCAM_PT_status_panel(bpy.types.Panel):
-    """Live tracking data readback for debugging."""
-
-    bl_label = "Status"
-    bl_idname = "VCAM_PT_status_panel"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = "VCam"
-    bl_parent_id = "VCAM_PT_main_panel"
-    bl_options = {'DEFAULT_CLOSED'}
-
-    def draw(self, context):
-        layout = self.layout
-        props = context.scene.vcam_props
-
-        if not props.is_tracking:
-            layout.label(text="Not connected", icon='INFO')
+        if live is None:
+            op = layout.operator("vcam.session_start", text="Start Session", icon='PLAY')
+            op.port = props.port
+            op.bind = props.bind_address
             return
+        layout.operator("vcam.session_stop", text="Stop Session", icon='CANCEL')
 
-        # Position
+        state = session.state
         box = layout.box()
-        box.label(text="Position (m)", icon='EMPTY_ARROWS')
-        row = box.row()
-        row.prop(props, "last_pos_x", text="X")
-        row.prop(props, "last_pos_y", text="Y")
-        row.prop(props, "last_pos_z", text="Z")
+        box.label(text=f"Listening on TCP {live.port()}", icon='WORLD_DATA')
+        code = live.pairing_code()
+        if code is not None:
+            row = box.row()
+            row.scale_y = 1.6
+            row.label(text=f"Pairing code  {code_label(code)}", icon='LOCKED')
+            box.operator("vcam.pairing_cancel", icon='X')
+        else:
+            box.operator("vcam.pairing_start", icon='LINKED')
 
-        # Rotation
         box = layout.box()
-        box.label(text="Rotation (deg)", icon='DRIVER_ROTATIONAL_DIFFERENCE')
-        row = box.row()
-        row.prop(props, "last_pitch", text="P")
-        row.prop(props, "last_yaw", text="Y")
-        row.prop(props, "last_roll", text="R")
+        if state.session_id is None:
+            box.label(text="Waiting for the iPhone", icon='INFO')
+        else:
+            stats = live.stats()
+            box.label(text=state.device_name or "iPhone", icon='CAMERA_DATA')
+            col = box.column(align=True)
+            col.label(text=f"Tracking: {tracking_label(state.tracking_state)}")
+            col.label(text=f"Poses: {stats['rate_hz']:.0f} Hz, loss {stats['loss'] * 100:.1f} %")
+            if state.latency_ms is None:
+                col.label(text="Latency: waiting for clock sync")
+            else:
+                col.label(text=f"Latency: {state.latency_ms:.1f} ms (clock jitter {state.clock_jitter_ms:.2f} ms)")
+        samples = len(session.latency_log().pose_leg_ms)
+        if samples:  # kept after the device leaves, until the next device session
+            box.operator("vcam.latency_report_save", text=f"Save Latency Report ({samples} poses)", icon='EXPORT')
 
-        # Stats
         box = layout.box()
-        box.label(text="Network", icon='WORLD_DATA')
+        box.label(text="Rig", icon='EMPTY_AXIS')
+        controls = session.applier().controls
         col = box.column(align=True)
-        col.label(text=f"Received: {props.packets_received}")
-        col.label(text=f"Dropped: {props.packets_dropped}")
+        col.label(text=f"Motion scale: {scale_label(controls.motion_scale)}")
+        col.label(text=f"Locks: {locks_label(controls.lock_flags)}")
+        origin = find_origin(camera)
+        if origin is not None:
+            col.label(text=f"Origin object: {origin.name}")
+        row = box.row(align=True)
+        row.operator("vcam.origin_set", icon='PIVOT_CURSOR')
+        row.operator("vcam.origin_clear", icon='LOOP_BACK')
+
+        if state.last_error:
+            layout.label(text=state.last_error, icon='ERROR')

@@ -1,0 +1,379 @@
+{
+  "events": [
+    {
+      "op": "request",
+      "t1": 10000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 5000001,
+        "jitter_ns": 0,
+        "offset_ns": -1234067890,
+        "samples": 1
+      },
+      "op": "reply",
+      "result": "accepted",
+      "t1": 10000000000,
+      "t2": 8768432110,
+      "t3": 8768472110,
+      "t4": 10005040001
+    },
+    {
+      "op": "request",
+      "t1": 11000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 1700001,
+        "jitter_ns": 318198,
+        "offset_ns": -1234517891,
+        "samples": 2
+      },
+      "op": "reply",
+      "result": "accepted",
+      "t1": 11000000000,
+      "t2": 9766332109,
+      "t3": 9766382109,
+      "t4": 11001750001
+    },
+    {
+      "op": "request",
+      "t1": 12000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 1700001,
+        "jitter_ns": 1722885,
+        "offset_ns": -1234517891,
+        "samples": 3
+      },
+      "op": "reply",
+      "result": "accepted",
+      "t1": 12000000000,
+      "t2": 10772432109,
+      "t3": 10772462109,
+      "t4": 12008030000
+    },
+    {
+      "op": "request",
+      "t1": 13000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 1700001,
+        "jitter_ns": 1495409,
+        "offset_ns": -1234517891,
+        "samples": 4
+      },
+      "op": "reply",
+      "result": "accepted",
+      "t1": 13000000000,
+      "t2": 11766632109,
+      "t3": 11766692109,
+      "t4": 13002760000
+    },
+    {
+      "op": "request",
+      "t1": 14000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 1700001,
+        "jitter_ns": 1338282,
+        "offset_ns": -1234517891,
+        "samples": 5
+      },
+      "op": "reply",
+      "result": "accepted",
+      "t1": 14000000000,
+      "t2": 12767932109,
+      "t3": 12767977109,
+      "t4": 14005145003
+    },
+    {
+      "estimate": {
+        "delay_ns": 1700001,
+        "jitter_ns": 1338282,
+        "offset_ns": -1234517891,
+        "samples": 5
+      },
+      "note": "duplicate reply to an answered request",
+      "op": "reply",
+      "result": "unmatched",
+      "t1": 14000000000,
+      "t2": 12767932109,
+      "t3": 12767977109,
+      "t4": 14006145003
+    },
+    {
+      "estimate": {
+        "delay_ns": 1700001,
+        "jitter_ns": 1338282,
+        "offset_ns": -1234517891,
+        "samples": 5
+      },
+      "note": "t1 never requested",
+      "op": "reply",
+      "result": "unmatched",
+      "t1": 15000000123,
+      "t2": 1,
+      "t3": 2,
+      "t4": 15000000500
+    },
+    {
+      "op": "request",
+      "t1": 15000000000
+    },
+    {
+      "op": "request",
+      "t1": 16000000000
+    },
+    {
+      "op": "request",
+      "t1": 17000000000
+    },
+    {
+      "op": "request",
+      "t1": 18000000000
+    },
+    {
+      "op": "request",
+      "t1": 19000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 1700001,
+        "jitter_ns": 1338282,
+        "offset_ns": -1234517891,
+        "samples": 5
+      },
+      "note": "request evicted by four newer ones",
+      "op": "reply",
+      "result": "unmatched",
+      "t1": 15000000000,
+      "t2": 13765432109,
+      "t3": 13765432110,
+      "t4": 19500000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 1700001,
+        "jitter_ns": 1338282,
+        "offset_ns": -1234517891,
+        "samples": 5
+      },
+      "note": "arrived exactly 2 s after the request",
+      "op": "reply",
+      "result": "expired",
+      "t1": 19000000000,
+      "t2": 17766432109,
+      "t3": 17766482109,
+      "t4": 21000000000
+    },
+    {
+      "op": "request",
+      "t1": 20000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 1700001,
+        "jitter_ns": 1338282,
+        "offset_ns": -1234517891,
+        "samples": 5
+      },
+      "note": "t3 before t2",
+      "op": "reply",
+      "result": "invalid",
+      "t1": 20000000000,
+      "t2": 18765437109,
+      "t3": 18765436109,
+      "t4": 20000020000
+    },
+    {
+      "op": "request",
+      "t1": 21000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 1700001,
+        "jitter_ns": 1338282,
+        "offset_ns": -1234517891,
+        "samples": 5
+      },
+      "note": "negative round trip (device processing longer than the round trip)",
+      "op": "reply",
+      "result": "invalid",
+      "t1": 21000000000,
+      "t2": 19765432209,
+      "t3": 19767432209,
+      "t4": 21001000000
+    },
+    {
+      "op": "request",
+      "t1": 22000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 1700001,
+        "jitter_ns": 407841871,
+        "offset_ns": -1234517891,
+        "samples": 6
+      },
+      "note": "just inside the 2 s limit",
+      "op": "reply",
+      "result": "accepted",
+      "t1": 22000000000,
+      "t2": 22764432109,
+      "t3": 22764442109,
+      "t4": 23999910000
+    },
+    {
+      "op": "request",
+      "t1": 23000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 1700001,
+        "jitter_ns": 377589848,
+        "offset_ns": -1234517891,
+        "samples": 7
+      },
+      "op": "reply",
+      "result": "accepted",
+      "t1": 23000000000,
+      "t2": 21772432109,
+      "t3": 21772462109,
+      "t4": 23008030000
+    },
+    {
+      "op": "request",
+      "t1": 24000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 1700001,
+        "jitter_ns": 353202968,
+        "offset_ns": -1234517891,
+        "samples": 8
+      },
+      "op": "reply",
+      "result": "accepted",
+      "t1": 24000000000,
+      "t2": 22766632109,
+      "t3": 22766692109,
+      "t4": 24002760000
+    },
+    {
+      "op": "request",
+      "t1": 25000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 1700001,
+        "jitter_ns": 353202934,
+        "offset_ns": -1234517891,
+        "samples": 8
+      },
+      "op": "reply",
+      "result": "accepted",
+      "t1": 25000000000,
+      "t2": 23767932109,
+      "t3": 23767977109,
+      "t4": 25005145003
+    },
+    {
+      "op": "request",
+      "t1": 26000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 2700000,
+        "jitter_ns": 353275817,
+        "offset_ns": -1234717891,
+        "samples": 8
+      },
+      "op": "reply",
+      "result": "accepted",
+      "t1": 26000000000,
+      "t2": 24772432109,
+      "t3": 24772462109,
+      "t4": 26008030000
+    },
+    {
+      "op": "request",
+      "t1": 27000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 2700000,
+        "jitter_ns": 353274062,
+        "offset_ns": -1234717891,
+        "samples": 8
+      },
+      "op": "reply",
+      "result": "accepted",
+      "t1": 27000000000,
+      "t2": 25766632109,
+      "t3": 25766692109,
+      "t4": 27002760000
+    },
+    {
+      "op": "request",
+      "t1": 28000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 2700000,
+        "jitter_ns": 353274064,
+        "offset_ns": -1234717891,
+        "samples": 8
+      },
+      "op": "reply",
+      "result": "accepted",
+      "t1": 28000000000,
+      "t2": 26767932109,
+      "t3": 26767977109,
+      "t4": 28005145003
+    },
+    {
+      "op": "request",
+      "t1": 29000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 2100000,
+        "jitter_ns": 353238487,
+        "offset_ns": -1234617891,
+        "samples": 8
+      },
+      "op": "reply",
+      "result": "accepted",
+      "t1": 29000000000,
+      "t2": 27766432109,
+      "t3": 27766452109,
+      "t4": 29002120000
+    },
+    {
+      "op": "request",
+      "t1": 30000000000
+    },
+    {
+      "estimate": {
+        "delay_ns": 2100000,
+        "jitter_ns": 1479653,
+        "offset_ns": -1234517891,
+        "samples": 8
+      },
+      "op": "reply",
+      "result": "accepted",
+      "t1": 30000000000,
+      "t2": 28766532109,
+      "t3": 28766552109,
+      "t4": 30002120000
+    }
+  ],
+  "note": "vcp.md §6.3 host side. Feed events in order into one estimator; 'request' records t1 as sent; for 'reply', t4 is the host clock on receipt. 'estimate' is the state after the reply (null before the first accepted sample).",
+  "outstanding": 4,
+  "reply_timeout_ns": 2000000000,
+  "window": 8
+}

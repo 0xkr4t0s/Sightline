@@ -393,7 +393,7 @@ mod vt {
             d[split..].copy_from_slice(&s[..row - split]);
             d[..split].copy_from_slice(&s[row - split..]);
             if bgra {
-                for px in d.chunks_exact_mut(4) {
+                for px in d.as_chunks_mut::<4>().0 {
                     px.swap(0, 2);
                 }
             }

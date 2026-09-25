@@ -8,6 +8,9 @@ build/
 # Rust (target dir is set in .cargo/config.toml)
 native/target.nosync/
 target/
+native/fuzz/corpus/
+native/fuzz/artifacts/
+native/fuzz/coverage/
 
 # Python
 __pycache__/
@@ -29,3 +32,4 @@ docs/LOOP_STOP
 # Agent harness state (local only)
 .omx/
 .claude/settings.local.json
+.omp/

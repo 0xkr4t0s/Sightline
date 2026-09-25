@@ -9,4 +9,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+getrandom = "=0.4.3"
+mdns-sd = { version = "=0.21.4", default-features = false }
 vcam-protocol.workspace = true
