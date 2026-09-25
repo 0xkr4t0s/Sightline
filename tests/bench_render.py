@@ -3,7 +3,7 @@
 
 For each shading mode and resolution: draw the scene camera into a `GPUOffScreen` with
 `draw_view3d`, read the colour texture back, and hand the buffer to `vcam_native`
-without copying. The camera moves slightly every frame, like a live VCam, so EEVEE's
+(`FrameSlot.submit`, the one-copy hand-off of task 2.1a). The camera moves slightly every frame, like a live VCam, so EEVEE's
 viewport sample accumulation can't make repeat frames artificially cheap.
 
 Headless (no visible 3D view; `gpu.init()` provides the GPU context):
@@ -16,7 +16,7 @@ In the UI (a window opens; the script drives itself from `bpy.app.timers` and qu
     blender --factory-startup --python tests/bench_render.py -- --json out.json
 
 `vcam_native` is used if the built extension is installed (see tests/blender/smoke_native.py);
-otherwise the zero-copy column is skipped.
+otherwise the hand-off column is skipped.
 """
 
 import argparse
@@ -102,7 +102,7 @@ def load_vcam_native():
         addon_utils.enable(ADDON, default_set=True, handle_error=None)
         import vcam_native
 
-        return vcam_native if hasattr(vcam_native, "_frame_probe") else None
+        return vcam_native if hasattr(vcam_native, "FrameSlot") else None
     except Exception:
         return None
 
@@ -144,12 +144,12 @@ def bench(mode, width, height, args, ctx, out):
     def draw(target, i):
         target.draw_view3d(scene, view_layer, space, region, move_camera(i), proj, do_color_management=True)
 
-    keys = ("draw", "read", "draw_read", "probe", "copy", "read_deferred", "pipelined", "pipelined_read", "pipelined_draw", "tick_gap")
+    keys = ("draw", "read", "draw_read", "handoff", "copy", "read_deferred", "pipelined", "pipelined_read", "pipelined_draw", "tick_gap")
     rows = {k: [] for k in keys}
     first_ms = None
     pixels = None
-    checksum = None
     last_tick = None
+    slot = native.FrameSlot() if native is not None else None
     for i in range(args.warmup + args.frames):
         t0 = time.perf_counter()
         if last_tick is not None and i > args.warmup:
@@ -159,9 +159,8 @@ def bench(mode, width, height, args, ctx, out):
         t1 = time.perf_counter()
         buf = offscreen.texture_color.read()  # blocks until the GPU has finished the frame
         t2 = time.perf_counter()
-        if native is not None:
-            nbytes, checksum = native._frame_probe(buf)  # zero-copy, reads every byte
-            assert nbytes == width * height * 4, nbytes
+        if slot is not None:
+            slot.submit(buf, i, 0)  # the production hand-off: one copy into Rust's buffer
         t3 = time.perf_counter()
         pixels = np.asarray(buf)  # zero-copy view
         copied = pixels.copy()  # reference: one full memcpy of the frame
@@ -173,8 +172,8 @@ def bench(mode, width, height, args, ctx, out):
             rows["draw"].append((t1 - t0) * 1000)
             rows["read"].append((t2 - t1) * 1000)
             rows["draw_read"].append((t2 - t0) * 1000)
-            if native is not None:
-                rows["probe"].append((t3 - t2) * 1000)
+            if slot is not None:
+                rows["handoff"].append((t3 - t2) * 1000)
             rows["copy"].append((t4 - t3) * 1000)
         yield args.interval
 
@@ -216,7 +215,6 @@ def bench(mode, width, height, args, ctx, out):
         "height": height,
         "first_frame_ms": round(first_ms, 2),
         "sampled_colours": colours,
-        "zero_copy_checksum": checksum,
     }
     for key, vals in rows.items():
         if vals:

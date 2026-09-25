@@ -56,18 +56,75 @@ mod vcam_native {
         super::VERSION
     }
 
-    /// Spike S-1 probe (private; replaced by the encoder hand-off in task 2.1).
+    /// Latest-frame hand-off from the stream renderer to the encoder (task 2.1a, FR-REN-003).
     ///
-    /// Reads every byte of a C-contiguous `uint8` frame (e.g. the `gpu.types.Buffer`
-    /// from `GPUOffScreen.texture_color.read()`) through the buffer protocol, without
-    /// copying it. Returns `(byte_count, byte_sum)`.
-    #[pyfunction]
-    fn _frame_probe(py: Python<'_>, frame: pyo3::buffer::PyBuffer<u8>) -> PyResult<(usize, u64)> {
-        let Some(bytes) = frame.as_slice(py) else {
-            return Err(PyValueError::new_err("frame buffer must be C-contiguous"));
-        };
-        let sum = bytes.iter().map(|b| u64::from(b.get())).sum();
-        Ok((bytes.len(), sum))
+    /// `submit` copies a read-back frame once into a buffer Rust owns; the encoder (task 2.2)
+    /// takes the newest frame on its own thread, and a frame nobody took is replaced.
+    #[pyclass(module = "vcam_native", frozen)]
+    struct FrameSlot {
+        slot: vcam_video::FrameSlot,
+    }
+
+    #[pymethods]
+    impl FrameSlot {
+        #[new]
+        fn new() -> Self {
+            Self {
+                slot: vcam_video::FrameSlot::new(),
+            }
+        }
+
+        /// Copies `frame` into the slot and returns its `frame_id` (1, 2, …).
+        ///
+        /// `frame` is a buffer-protocol `uint8` array shaped `(height, width, 4)`, such as the
+        /// `gpu.types.Buffer` from `GPUOffScreen.texture_color.read()` (RGBA8, rows
+        /// bottom-up). `pose_seq` is the pose on the camera when it was drawn and
+        /// `render_time_ns` the host clock then. Raises `ValueError` for any other shape.
+        fn submit(
+            &self,
+            py: Python<'_>,
+            frame: pyo3::buffer::PyBuffer<u8>,
+            pose_seq: u32,
+            render_time_ns: u64,
+        ) -> PyResult<u64> {
+            guard(|| {
+                let &[height, width, 4] = frame.shape() else {
+                    return Err(PyValueError::new_err(format!(
+                        "frame must be shaped (height, width, 4), not {:?}",
+                        frame.shape()
+                    )));
+                };
+                let dim = |n: usize| {
+                    u32::try_from(n).map_err(|_| PyValueError::new_err("frame is too large"))
+                };
+                let meta =
+                    vcam_video::FrameMeta::new(dim(width)?, dim(height)?, pose_seq, render_time_ns)
+                        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                self.slot.submit(meta, |dst| frame.copy_to_slice(py, dst))
+            })
+        }
+
+        /// Frames replaced before the encoder took them.
+        fn replaced(&self) -> u64 {
+            self.slot.replaced()
+        }
+
+        /// Test hook: takes the newest frame as a dict (`frame_id`, `width`, `height`,
+        /// `pose_seq`, `render_time_ns`, `pixels` as `bytes`), or None.
+        fn _take<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+            let Some(frame) = self.slot.take() else {
+                return Ok(None);
+            };
+            let d = PyDict::new(py);
+            d.set_item("frame_id", frame.frame_id)?;
+            d.set_item("width", frame.meta.width())?;
+            d.set_item("height", frame.meta.height())?;
+            d.set_item("pose_seq", frame.meta.pose_seq)?;
+            d.set_item("render_time_ns", frame.meta.render_time_ns)?;
+            d.set_item("pixels", pyo3::types::PyBytes::new(py, &frame.pixels))?;
+            self.slot.recycle(frame.pixels);
+            Ok(Some(d))
+        }
     }
 
     /// Test hook for the FFI panic boundary (NFR-REL-001): always raises `NativeError`.
