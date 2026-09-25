@@ -31,7 +31,7 @@ struct SettingsView: View {
                         }
                     }
                     if browser.hosts.isEmpty {
-                        Text("Searching… Start a VCam session in Blender's sidebar.")
+                        Text("Searching… Start a Sightline session in Blender's sidebar.")
                             .foregroundStyle(.secondary)
                     }
                     if let problem = browser.problem {
@@ -121,7 +121,7 @@ struct SettingsView: View {
                         .foregroundStyle(controller.lastError == nil ? Color.secondary : Color.red)
                 }
             }
-            .navigationTitle("VCamIOS")
+            .navigationTitle("Sightline")
             .toolbar {
                 Button("Done") { dismiss() }
             }

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="Placeholder: Hero GIF">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b1f2a"/><stop offset="1" stop-color="#2a1d14"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="640" rx="18" fill="url(#bg)"/>
+  <rect x="14" y="14" width="1252" height="612" rx="12" fill="none" stroke="#e87d0d" stroke-opacity=".55" stroke-width="2" stroke-dasharray="10 8"/>
+  <g transform="translate(640.0 262.0)" fill="none" stroke="#e87d0d" stroke-width="3" stroke-linejoin="round">
+    <rect x="-34" y="-20" width="50" height="40" rx="6"/><path d="M16 -8 L36 -18 V18 L16 8 Z"/>
+  </g>
+  <text x="640.0" y="332.0" text-anchor="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="30" font-weight="700" fill="#f5f5f7">Hero GIF</text>
+  <text x="640.0" y="366.0" text-anchor="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="17" fill="#b8bcc8">iPhone moves → Blender camera follows → viewfinder on the phone</text>
+  <text x="640.0" y="604" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="14" fill="#e87d0d" fill-opacity=".85">PLACEHOLDER · hero.gif · task M.5</text>
+</svg>

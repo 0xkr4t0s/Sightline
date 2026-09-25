@@ -16,10 +16,10 @@ from ..core.status import code_label
 
 
 class VCAM_OT_session_start(bpy.types.Operator):
-    """Start listening for the VCam iPhone app and advertise this Blender session"""
+    """Start listening for the Sightline iPhone app and advertise this Blender session"""
 
     bl_idname = "vcam.session_start"
-    bl_label = "Start VCam Session"
+    bl_label = "Start Sightline Session"
     bl_options = {'REGISTER'}
 
     port: bpy.props.IntProperty(
@@ -43,17 +43,17 @@ class VCAM_OT_session_start(bpy.types.Operator):
         try:
             session.start(self.port, self.bind)
         except (OSError, ValueError, RuntimeError) as e:
-            self.report({'ERROR'}, f"VCam session not started: {e}")
+            self.report({'ERROR'}, f"Sightline session not started: {e}")
             return {'CANCELLED'}
-        self.report({'INFO'}, f"VCam session listening on TCP port {session.current().port()}")
+        self.report({'INFO'}, f"Sightline session listening on TCP port {session.current().port()}")
         return {'FINISHED'}
 
 
 class VCAM_OT_session_stop(bpy.types.Operator):
-    """Stop the VCam session and close its network ports"""
+    """Stop the Sightline session and close its network ports"""
 
     bl_idname = "vcam.session_stop"
-    bl_label = "Stop VCam Session"
+    bl_label = "Stop Sightline Session"
     bl_options = {'REGISTER'}
 
     @classmethod
@@ -163,6 +163,6 @@ class VCAM_OT_latency_report_save(bpy.types.Operator, ExportHelper):
         except OSError as e:
             self.report({'ERROR'}, f"Could not save the latency report: {e}")
             return {'CANCELLED'}
-        print(f"VCam latency: {session.latency_log().summary_line()}")
+        print(f"Sightline latency: {session.latency_log().summary_line()}")
         self.report({'INFO'}, f"Saved {self.filepath}")
         return {'FINISHED'}

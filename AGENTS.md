@@ -4,6 +4,8 @@
 
 An iPhone/iPad **virtual camera for Blender**. The iPhone's ARKit pose drives a Blender camera. Blender renders that camera's view and **streams the video back to the iPhone**, which acts as the viewfinder and control surface (lens, focus, record). Video flows Blender → iPhone only. There is **no** system virtual webcam (no CMIO extension, no Zoom/OBS output), and the iPhone camera image is only a tracking sensor.
 
+The product is called **Sightline** (renamed from "VCam for Blender" on 2026-09-25) and is fully open source. Use "Sightline" in anything users see: UI text, the manifest, App Store strings and docs. Keep the internal identifiers: the repo name, the extension `id` `vcam_blender`, `vcam_native`, the `vcam-*` crates, `VCam_Origin`, `_vcam-ctl._tcp`, VCP and the bundle ID. Changing those would break installs, pairings or saved files.
+
 ## Startup Checklist
 
 - Read `IMPLEMENTATION_PROGRESS.md` (status by requirement ID), then the relevant part of `docs/SRS.md` (v3.0) and `docs/IMPLEMENTATION_PLAN.md` (v3.0).

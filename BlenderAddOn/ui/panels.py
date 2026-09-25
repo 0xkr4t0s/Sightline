@@ -19,11 +19,11 @@ from ..core.status import code_label, locks_label, scale_label, tracking_label
 class VCAM_PT_main_panel(bpy.types.Panel):
     """VCam session, device and rig."""
 
-    bl_label = "VCam"
+    bl_label = "Sightline"
     bl_idname = "VCAM_PT_main_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "VCam"
+    bl_category = "Sightline"
 
     def draw(self, context):
         layout = self.layout

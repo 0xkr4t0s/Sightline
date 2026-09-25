@@ -97,10 +97,10 @@ def config_dir() -> str:
     import bpy
 
     if _package is None:
-        raise RuntimeError("VCam add-on is not registered")
+        raise RuntimeError("Sightline add-on is not registered")
     path = bpy.utils.extension_path_user(_package, create=True)
     if not path:
-        raise OSError("could not create the VCam user directory")
+        raise OSError("could not create the Sightline user directory")
     return path
 
 
@@ -152,7 +152,7 @@ def stop() -> None:
         session.stop()  # sockets are closed and threads joined even if this raises
     except Exception as e:  # noqa: BLE001 - unregister must always complete
         state.last_error = f"stop: {e}"
-        print(f"VCam: {state.last_error}")
+        print(f"Sightline: {state.last_error}")
 
 
 def applier() -> Applier:

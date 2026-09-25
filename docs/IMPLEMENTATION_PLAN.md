@@ -164,6 +164,32 @@ VCamBlender/
 
 ---
 
+## README media (runs alongside the phases)
+
+`README.md` shows placeholder SVGs in `docs/media/`. Each task below replaces one placeholder with the real asset and updates the `<img src>` next to its `TODO(M.x)` comment. When the last reference to a placeholder SVG is gone, delete it. A media task starts only once the feature it shows works. It never counts towards an exit gate and never delays gate work.
+
+**Rules for every asset:**
+- Store it in `docs/media/`. GIFs are at most 960 px wide, 12–15 fps and 3 MB (8 MB for `hero.gif`), and loop seamlessly. PNGs are 2× captures, optimised, at most 1 MB. Keep each clip at 10 s or less.
+- Make GIFs with `ffmpeg` in two passes (`palettegen`, then `paletteuse` with dither `sierra2_4a`). `ffmpeg` is already installed; don't install other tools. Put the capture scripts in `tools/media/`, so every asset can be made again.
+- Use the demo scene `tools/media/demo_scene.py` (from M.0): a lit, textured set with a clear subject and the factory theme. No personal file paths, machine names or network details in a frame. Set the host name to `Sightline Demo`.
+- Commit only the final assets. Raw captures stay out of git.
+
+| # | Asset | What it shows | How it's made | Needs | After |
+|---|---|---|---|---|---|
+| M.0 | `tools/media/demo_scene.py` | A scripted demo `.blend`: a small set, a subject and a Sightline rig | Headless Blender script | Loop | 1.3.2 ✅ |
+| M.1 | `tracking.gif` | The Blender viewport with the Sightline camera and its view following the scripted motion | Fake iPhone streams `testdata/motion/scripted.bin` into a GUI Blender run. A timer script saves viewport frames (`bpy.ops.screen.screenshot_area` or an offscreen draw), then `ffmpeg` joins them | Loop | M.0 |
+| M.2 | `pairing.png`, `blender-panel.png` | The N-panel showing the pairing code, then streaming (device, rate, latency, rig) | The same GUI run as M.1, with area screenshots at the pairing and streaming stages | Loop | M.0 |
+| M.3 | `ios-app.png` | The landscape status screen with the control rail and Settings host list | `xcrun simctl io booted screenshot` on the iPhone 17 Pro simulator, driven by a UI test that opens each screen | Loop | 1.4.5 ✅ |
+| M.4 | `viewfinder.gif` | Blender's render on the phone, following the camera | Simulator first (fake pose + real stream); a device recording replaces it later | Loop (simulator), owner (device) | 2.3 |
+| M.5 | `hero.gif` | Split screen: a hand moving the iPhone, the Blender window following, and the phone's viewfinder | Owner films the phone and records the screen at the same time. The loop syncs, crops and joins the clips with `ffmpeg` (`hstack`) using `tools/media/make_hero.sh` | **Owner** (filming) | T1 device check for a tracking-only version; redo after 2.3 |
+| M.6 | `lens-controls.gif` | Pinch zoom, tap-to-focus and a focus pull | Device screen recording (Control Centre) | **Owner** | 2.4 |
+| M.7 | `takes.gif` | Record a take, then scrub the baked action in the Dope Sheet | GUI Blender with the fake iPhone, captured as in M.1 | Loop | 3.1 |
+| M.8 | `logo.svg` | Project logo for the README header and the extension | Owner chooses; the loop can offer SVG drafts | **Owner** (decision) | — |
+
+In the log, owner-only steps are `BLOCKED (needs owner)`. For M.5 and M.6, the loop writes a shot list in the PR (clip length, framing, what to do on screen), so the owner only has to film.
+
+---
+
 ## Immediate next steps
 
 1. **0.1.1** Single git repo (back up `VCamIOS/.git` first) and a baseline commit.

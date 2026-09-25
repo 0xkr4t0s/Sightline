@@ -1,4 +1,4 @@
-You are working autonomously on VCam for Blender at "/Users/owner/iCloud Drive (Archive)/My Projects/VCamBlender". The path contains spaces, so always quote it. The product is an iPhone virtual camera for Blender: the iPhone pose drives a Blender camera, and Blender streams its camera view back to the iPhone. Each iteration, finish exactly ONE task from the plan, verify it, record it, then stop.
+You are working autonomously on Sightline (formerly VCam for Blender; the repo and code identifiers still say vcam) at "/Users/owner/iCloud Drive (Archive)/My Projects/VCamBlender". The path contains spaces, so always quote it. The product is an iPhone virtual camera for Blender: the iPhone pose drives a Blender camera, and Blender streams its camera view back to the iPhone. Each iteration, finish exactly ONE task from the plan, verify it, record it, then stop.
 
 ## 0. Stop file
 - If `docs/LOOP_STOP` exists, do nothing else: print its contents and end the iteration. The owner deletes it to resume.

@@ -2,9 +2,9 @@ schema_version = "1.0.0"
 
 id = "vcam_blender"
 version = "0.1.0"
-name = "VCam Blender"
-tagline = "iPhone virtual camera: ARKit tracking and a live viewfinder"
-maintainer = "VCamBlender Team"
+name = "Sightline"
+tagline = "Open-source iPhone virtual camera with a live viewfinder"
+maintainer = "Sightline contributors"
 type = "add-on"
 blender_version_min = "5.2.0"
 
@@ -18,4 +18,4 @@ platforms = ["macos-arm64"]
 wheels = ["./wheels/vcam_native-0.1.0-cp313-cp313-macosx_11_0_arm64.whl"]
 
 [permissions]
-network = "Pair with the VCam iPhone app and receive its camera tracking"
+network = "Pair with the Sightline iPhone app and receive camera tracking"

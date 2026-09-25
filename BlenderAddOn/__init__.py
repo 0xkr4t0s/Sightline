@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# VCam Blender - Real-time virtual camera tracking receiver
+# Sightline - open-source iPhone virtual camera for Blender
 
 # Submodules import bpy, so load them lazily; this lets pytest import the
 # package outside Blender.

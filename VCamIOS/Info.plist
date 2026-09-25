@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>VCamIOS finds Blender on your local network, sends it your camera movement, and shows Blender's camera view.</string>
+	<string>Sightline finds Blender on your local network, sends it your camera movement, and shows Blender's camera view.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_vcam-ctl._tcp</string>

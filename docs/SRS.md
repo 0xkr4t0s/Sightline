@@ -1,4 +1,4 @@
-# Software Requirements Specification — VCam for Blender
+# Software Requirements Specification — Sightline (formerly VCam for Blender)
 
 | Field | Value |
 |---|---|
@@ -27,7 +27,7 @@ Items marked **[SPIKE]** depend on behaviour that hasn't been proven yet. They m
 
 ### 1.1 Purpose
 
-**VCam for Blender** turns an iPhone or iPad into a handheld **virtual camera** for Blender:
+**Sightline** (formerly VCam for Blender) turns an iPhone or iPad into a handheld **virtual camera** for Blender:
 
 1. The operator holds the iPhone like a camera. ARKit tracks its 6DOF pose.
 2. The pose drives a camera in the Blender scene in real time.
