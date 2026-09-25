@@ -15,8 +15,10 @@ final class TrackingSessionController {
     private(set) var packetsSent = 0
     /// The newest pose as sent (canonical axes, vcp.md §7), or nil before the first frame.
     private(set) var latestPose: VCPPose?
-    /// The authenticated session poses are sealed with. It comes from pairing and session setup
-    /// over TCP (tasks 1.1.4b/1.4.3), which don't exist yet; until then poses are shown, not sent.
+    /// The Blender install this iPhone is paired with (vcp.md §9). It comes from the pairing UI
+    /// and the Keychain (task 1.4.3b); without it poses are shown, not sent.
+    private(set) var pairing: VCPHostPairing?
+    /// The authenticated session poses are sealed with, while one is open (vcp.md §10).
     private(set) var sessionEndpoint: VCPEndpoint?
     private(set) var sessionStatus = "Idle"
     private(set) var lastError: String?
@@ -43,6 +45,11 @@ final class TrackingSessionController {
     @ObservationIgnored private var receiver: ARFrameReceiver?
     @ObservationIgnored private var rateMeter = PoseRateMeter()
     @ObservationIgnored private var thermalObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private let device = DeviceIdentityStore.load()
+    /// The session of the current run; its TCP connection stays open until the run stops.
+    @ObservationIgnored private var liveSession: VCPLiveSession?
+    /// True while a start waits for camera permission or Blender's handshake.
+    @ObservationIgnored private var isStarting = false
 
     init() {
         let settings = TrackingSettings.load()
@@ -76,7 +83,7 @@ final class TrackingSessionController {
     }
 
     func startTracking() async {
-        guard !isTracking else {
+        guard !isTracking, !isStarting else {
             return
         }
 
@@ -86,6 +93,8 @@ final class TrackingSessionController {
             return
         }
 
+        isStarting = true
+        defer { isStarting = false }
         do {
             let destination = try validatedDestination()
             let granted = await requestCameraAccessIfNeeded()
@@ -97,7 +106,27 @@ final class TrackingSessionController {
 
             TrackingSettings(host: destination.host, port: Int(destination.port)).save()
             host = destination.host
-            pipeline.start(TrackingDestination(host: destination.host, port: destination.port, endpoint: sessionEndpoint))
+            var link: VCPLiveSession?
+            if let pairing {
+                sessionStatus = "Connecting to Blender"
+                do throws(VCPLinkError) {
+                    link = try await VCPSessionClient.connect(host: destination.host, port: destination.port,
+                                                              device: device, pairing: pairing)
+                } catch {
+                    sessionStatus = "Not connected"
+                    lastError = error.message
+                    return
+                }
+            }
+            // A new session per run: the run's seq and state_seq restart at 1, as a new session's
+            // must (vcp.md §8).
+            liveSession = link
+            sessionEndpoint = link?.endpoint
+            pipeline.start(link?.destination
+                ?? TrackingDestination(host: destination.host, port: destination.port, endpoint: nil))
+            if let link {
+                watch(link)
+            }
 
             let understanding = SceneUnderstanding.forThisDevice()
             let configuration = understanding.makeConfiguration()
@@ -120,9 +149,25 @@ final class TrackingSessionController {
         }
     }
 
+    /// Stops the run when Blender ends the session: the TCP connection closed or the host sent
+    /// `ERROR` (vcp.md §8). Poses stop leaving the device at once.
+    private func watch(_ link: VCPLiveSession) {
+        Task { [weak self] in
+            let reason = await link.ended()
+            guard let self, self.liveSession === link else {
+                return
+            }
+            self.lastError = reason.message
+            self.stopTracking(reason: "Blender session ended")
+        }
+    }
+
     func stopTracking(reason: String? = nil) {
         session.pause()
         pipeline.stop()
+        liveSession?.close()
+        liveSession = nil
+        sessionEndpoint = nil
         isTracking = false
         sceneUnderstanding = nil
         poseRate = nil

@@ -44,6 +44,7 @@
 				VCP/VCPEndpoint.swift,
 				VCP/VCPMessages.swift,
 				VCP/VCPPairing.swift,
+				VCP/VCPSessionClient.swift,
 				VCP/VCPTrackingState.swift,
 			);
 			target = 9E74B7DA2F84AF9400B754DD /* SightlineIOSTests */;

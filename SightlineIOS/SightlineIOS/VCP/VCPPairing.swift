@@ -61,7 +61,12 @@ nonisolated enum VCPPairing {
 
     /// 32 bytes from the system CSPRNG, for `a` (≥ 256 bits, §9.2).
     static func randomSecret() -> [UInt8] {
-        var bytes = [UInt8](repeating: 0, count: 32)
+        randomBytes(32)
+    }
+
+    /// `count` bytes from the system CSPRNG (secrets, `nonce_d`, `device_id`).
+    static func randomBytes(_ count: Int) -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: count)
         let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         precondition(status == errSecSuccess, "SecRandomCopyBytes failed: \(status)")
         return bytes

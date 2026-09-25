@@ -132,13 +132,13 @@ struct ContentView: View {
     }
 
     private var connection: String {
-        if controller.sessionEndpoint == nil {
+        if controller.pairing == nil {
             return "Not paired"
         }
         if controller.sessionStatus == "Send error" {
             return "Send error"
         }
-        return controller.isTracking ? "Sending to Blender" : "Paired"
+        return controller.sessionEndpoint != nil ? "Sending to Blender" : "Paired"
     }
 }
 

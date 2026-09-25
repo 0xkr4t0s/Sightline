@@ -40,12 +40,12 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("Destination") {
-                    TextField("Desktop receiver host", text: $controller.host)
+                Section("Blender") {
+                    TextField("Address or name of the Mac/PC running Blender", text: $controller.host)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
 
-                    TextField("7000", text: $controller.portText)
+                    TextField("Control port (\(TrackingSettings.defaultPort))", text: $controller.portText)
                         .keyboardType(.numberPad)
                 }
 
@@ -70,7 +70,7 @@ struct SettingsView: View {
                     if let understanding = controller.sceneUnderstanding {
                         LabeledContent("Scene understanding", value: understanding.summary)
                     }
-                    if controller.sessionEndpoint == nil {
+                    if controller.pairing == nil {
                         Text("Not paired with Blender: poses are shown here but not sent.")
                             .foregroundStyle(.secondary)
                     }
@@ -150,7 +150,7 @@ struct SettingsView: View {
 
     /// Whether Blender has applied the latest controls (`STATUS.control_ack`, vcp.md §6.2).
     private var controlStatus: String {
-        if controller.sessionEndpoint == nil {
+        if controller.pairing == nil {
             return "Not sent (not paired)"
         }
         if !controller.isTracking {
