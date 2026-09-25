@@ -30,11 +30,17 @@ final class TrackingSessionController {
     /// `state_seq` of the newest control state this run, and the host's highest acknowledgement.
     private(set) var controlSeq: UInt32 = 0
     private(set) var controlAck: UInt32 = 0
+    /// Poses per second over the last second of capture time (status screen), nil until known.
+    private(set) var poseRate: Double?
+    /// The device's thermal state, kept current from `ProcessInfo` notifications (FR-UX-004).
+    private(set) var thermal = ThermalStatus(state: ProcessInfo.processInfo.thermalState)
 
     @ObservationIgnored private let session = ARSession()
     @ObservationIgnored private let pipeline: TrackingPipeline
     // ARSession.delegate is weak: this keeps the receiver alive.
     @ObservationIgnored private var receiver: ARFrameReceiver?
+    @ObservationIgnored private var rateMeter = PoseRateMeter()
+    @ObservationIgnored private var thermalObserver: (any NSObjectProtocol)?
 
     init() {
         let settings = TrackingSettings.load()
@@ -56,6 +62,13 @@ final class TrackingSessionController {
                     return
                 }
                 self.apply(snapshot)
+            }
+        }
+        thermalObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.thermal = ThermalStatus(state: ProcessInfo.processInfo.thermalState)
             }
         }
     }
@@ -92,6 +105,8 @@ final class TrackingSessionController {
             controlSeq = 0
             controlAck = 0
             latestPose = nil
+            rateMeter = PoseRateMeter()
+            poseRate = nil
             sceneUnderstanding = understanding
             isTracking = true
             sessionStatus = "Starting"
@@ -107,6 +122,7 @@ final class TrackingSessionController {
         pipeline.stop()
         isTracking = false
         sceneUnderstanding = nil
+        poseRate = nil
         if let reason {
             sessionStatus = reason
         } else if lastError == nil {
@@ -142,6 +158,10 @@ final class TrackingSessionController {
             return
         }
         latestPose = snapshot.pose
+        if let pose = snapshot.pose {
+            rateMeter.add(seq: pose.seq, captureTimeNs: pose.captureTimeNs)
+            poseRate = rateMeter.rate
+        }
         packetsSent = snapshot.packetsSent
         controlSeq = snapshot.controlSeq
         controlAck = snapshot.controlAck

@@ -7,143 +7,138 @@
 
 import SwiftUI
 
+/// The landscape status screen (task 1.4.5; FR-UX-003/004). The black frame area is where the
+/// viewfinder video goes once Blender streams it (Phase 2). Status runs along the top edge, the
+/// controls sit in a rail under the right thumb and hide after a few seconds while tracking;
+/// `HUDLayout` keeps both out of the centre of the frame.
 struct ContentView: View {
     @Bindable var controller: TrackingSessionController
-    @State private var browser = HostBrowser()
-    @State private var customScale = ""
-
-    /// FR-CTL-004's examples: 1:1, 1:2, 1:10, plus 1:5; anything else via Custom.
-    private static let scalePresets: [Float] = [1, 2, 5, 10]
+    @State private var chrome = ChromeVisibility(now: .now)
+    @State private var now = ContinuousClock.now
+    @State private var showsSettings = false
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section("Blender on this network") {
-                    ForEach(browser.hosts) { host in
-                        VStack(alignment: .leading) {
-                            Text(host.machine)
-                            Text(host.isCompatible ? host.fileLabel : "\(host.fileLabel) · unsupported VCP version")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
+        GeometryReader { proxy in
+            let layout = HUDLayout(size: proxy.size)
+            let controlsShown = chrome.isShown(at: now, tracking: controller.isTracking)
+            ZStack(alignment: .topLeading) {
+                Color.black
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        now = .now
+                        chrome.tapFrame(at: now, tracking: controller.isTracking)
                     }
-                    if browser.hosts.isEmpty {
-                        Text("Searching… Start a VCam session in Blender's sidebar.")
-                            .foregroundStyle(.secondary)
-                    }
-                    if let problem = browser.problem {
-                        Text(problem)
-                            .foregroundStyle(.red)
-                    }
-                }
-
-                Section("Destination") {
-                    TextField("Desktop receiver host", text: $controller.host)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-
-                    TextField("7000", text: $controller.portText)
-                        .keyboardType(.numberPad)
-                }
-
-                Section("Tracking") {
-                    Button(controller.isTracking ? "Stop Tracking" : "Start Tracking") {
-                        if controller.isTracking {
-                            controller.stopTracking()
-                        } else {
-                            Task {
-                                await controller.startTracking()
-                            }
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    LabeledContent("Packets Sent", value: "\(controller.packetsSent)")
-                    LabeledContent("Session", value: controller.sessionStatus)
-                    if let understanding = controller.sceneUnderstanding {
-                        LabeledContent("Scene understanding", value: understanding.summary)
-                    }
-                    if controller.sessionEndpoint == nil {
-                        Text("Not paired with Blender: poses are shown here but not sent.")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Section("Rig") {
-                    Button("Set Origin") {
-                        controller.controls.setOrigin()
-                    }
-                    .disabled(!controller.isTracking)
-
-                    Picker("Motion scale", selection: $controller.controls.motionScale) {
-                        ForEach(Self.scalePresets, id: \.self) { scale in
-                            Text("1:\(Self.format(scale))").tag(scale)
-                        }
-                        if !Self.scalePresets.contains(controller.controls.motionScale) {
-                            Text("1:\(Self.format(controller.controls.motionScale))")
-                                .tag(controller.controls.motionScale)
-                        }
-                    }
-                    HStack {
-                        Text("Custom 1:")
-                        TextField("25", text: $customScale)
-                            .keyboardType(.decimalPad)
-                        Button("Apply") {
-                            if let scale = DeviceControls.parseScale(customScale) {
-                                controller.controls.motionScale = scale
-                            }
-                        }
-                        .disabled(DeviceControls.parseScale(customScale) == nil)
-                    }
-
-                    Toggle("Lock height", isOn: lock(DeviceControls.lockHeight))
-                    Toggle("Lock roll", isOn: lock(DeviceControls.lockRoll))
-                    Toggle("Pan only (lock position)", isOn: lock(DeviceControls.panOnly))
-                    LabeledContent("Blender", value: controlStatus)
-                }
-
-                Section("Pose (Blender axes)") {
-                    let pose = controller.latestPose
-                    LabeledContent("Seq", value: pose.map { "\($0.seq)" } ?? "–")
-                    LabeledContent("Position (m)", value: pose.map { formatted($0.position) } ?? "–")
-                    LabeledContent("Orientation (x y z w)", value: pose.map { formatted($0.orientation) } ?? "–")
-                }
-
-                Section("Status") {
-                    Text(controller.lastError ?? "No errors")
-                        .foregroundStyle(controller.lastError == nil ? Color.secondary : Color.red)
+                statusStrip
+                    .frame(width: layout.statusStrip.width, height: layout.statusStrip.height)
+                    .offset(x: layout.statusStrip.minX, y: layout.statusStrip.minY)
+                if controlsShown {
+                    controlRail
+                        .frame(width: layout.controlRail.width, height: layout.controlRail.height)
+                        .offset(x: layout.controlRail.minX, y: layout.controlRail.minY)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
-            .navigationTitle("VCamIOS")
-            .task { await browser.run() }
+            .animation(.easeInOut(duration: 0.25), value: controlsShown)
+        }
+        .background(Color.black.ignoresSafeArea())
+        .preferredColorScheme(.dark)
+        // Re-check visibility once the hide delay has passed since the last change.
+        .task(id: chrome) {
+            try? await Task.sleep(for: ChromeVisibility.hideAfter)
+            now = .now
+        }
+        .onChange(of: controller.isTracking) {
+            interact()
+        }
+        .sheet(isPresented: $showsSettings, onDismiss: interact) {
+            SettingsView(controller: controller)
         }
     }
 
-    private func formatted<V: SIMD>(_ v: V) -> String where V.Scalar == Float {
-        v.indices.map { String(format: "%.3f", v[$0]) }.joined(separator: " ")
+    private var statusStrip: some View {
+        HStack(spacing: 16) {
+            Label {
+                Text(controller.sessionStatus)
+            } icon: {
+                Circle()
+                    .fill(trackingColor)
+                    .frame(width: 10, height: 10)
+            }
+            Text(controller.poseRate.map { "\(Int($0.rounded())) Hz" } ?? "– Hz")
+            Text(connection)
+            Label("Thermal: \(controller.thermal.label)", systemImage: "thermometer.medium")
+                .foregroundStyle(controller.thermal.isWarning ? Color.orange : Color.white)
+            if let error = controller.lastError {
+                Text(error)
+                    .foregroundStyle(.red)
+            }
+            Spacer(minLength: 0)
+        }
+        .lineLimit(1)
+        .font(.footnote.monospacedDigit())
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
     }
 
-    private static func format(_ scale: Float) -> String {
-        String(format: "%g", scale)
+    private var controlRail: some View {
+        VStack(spacing: 20) {
+            railButton(controller.isTracking ? "Stop" : "Start",
+                       systemImage: controller.isTracking ? "stop.fill" : "play.fill") {
+                if controller.isTracking {
+                    controller.stopTracking()
+                } else {
+                    Task { await controller.startTracking() }
+                }
+            }
+            railButton("Origin", systemImage: "scope") {
+                controller.controls.setOrigin()
+            }
+            .disabled(!controller.isTracking)
+            railButton("Settings", systemImage: "gearshape") {
+                showsSettings = true
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.ultraThinMaterial)
     }
 
-    private func lock(_ flag: UInt8) -> Binding<Bool> {
-        Binding(get: { controller.controls.isLocked(flag) },
-                set: { controller.controls.setLock(flag, $0) })
+    private func railButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button {
+            interact()
+            action()
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.title2)
+                Text(title)
+                    .font(.caption)
+            }
+            .frame(minWidth: 64, minHeight: 56)
+        }
+        .tint(.white)
     }
 
-    /// Whether Blender has applied the latest controls (`STATUS.control_ack`, vcp.md §6.2).
-    private var controlStatus: String {
+    private func interact() {
+        now = .now
+        chrome.interact(at: now)
+    }
+
+    /// Green when ARKit tracks normally, yellow when limited, grey when not tracking.
+    private var trackingColor: Color {
+        guard controller.isTracking else {
+            return .gray
+        }
+        return controller.latestPose?.trackingState == VCPPose.trackingNormal ? .green : .yellow
+    }
+
+    private var connection: String {
         if controller.sessionEndpoint == nil {
-            return "Not sent (not paired)"
+            return "Not paired"
         }
-        if !controller.isTracking {
-            return "Sent when tracking starts"
+        if controller.sessionStatus == "Send error" {
+            return "Send error"
         }
-        if controller.controlSeq > 0, controller.controlAck >= controller.controlSeq {
-            return "Applied (#\(controller.controlSeq))"
-        }
-        return "Waiting for Blender (#\(controller.controlSeq))"
+        return controller.isTracking ? "Sending to Blender" : "Paired"
     }
 }
 

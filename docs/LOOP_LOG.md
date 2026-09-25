@@ -1186,3 +1186,28 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none new.
 - **Next task:** 1.4.5 — landscape status screen (no video yet): tracking state, rate, connection, thermal (FR-UX-003/004). No second task started.
 - **Owner actions:** push (this commit makes 30 ahead). Try a LiDAR iPhone once and check the "Scene understanding" row says "LiDAR mesh + planes". **Decide on `swift-srp`**: it blocks 1.4.2b/1.4.3b. Still pending: the `mdns-sd`/`getrandom` reviews, a device run.
+
+## 2026-09-25 — Iteration 43 — 1.4.5 (FR-UX-003/004) — done (FR-UX-004 stream reduction waits for Phase 2 video)
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 30 ahead of `origin`. The existing Phase 1 owner waiver applies.
+- **Change:**
+  - `VCamIOS/VCamIOS/StatusHUD.swift` (new, pure logic, in the test target):
+    - `PoseRateMeter`: poses per second from `seq` steps over ARKit capture time, recomputed after each ≥ 1 s window. Frames the ≤ 15 Hz UI throttle skipped still count. A seq restart (new run) or a capture-clock jump starts over.
+    - `ThermalStatus`: label per `ProcessInfo.ThermalState`; `isWarning` from `.serious`.
+    - `ChromeVisibility`: while tracking, the controls hide 4 s after the last use, and a tap on the frame toggles them. While idle they stay up, so Start is always reachable.
+    - `HUDLayout`: a 44 pt status strip on the top edge and a 96 pt control rail on the trailing edge, each capped at 20 % of the frame. Neither enters `centre`, the middle half of the frame in each direction (it holds the rule-of-thirds points).
+  - `ContentView.swift` is now the landscape status screen: a black frame area (future viewfinder), the status strip (tracking state dot + text, pose rate in Hz, connection, thermal with an orange warning, last error), and the rail (Start/Stop, Origin, Settings), placed at the `HUDLayout` rects.
+  - The former portrait `Form` moved (`git mv`) to `SettingsView.swift` unchanged apart from the name, a Done button, and being shown as a sheet. Discovery now browses while the sheet is open.
+  - `TrackingSessionController`: `poseRate` (reset per run and on stop) and `thermal`, kept current from `ProcessInfo.thermalStateDidChangeNotification` (main-queue observer, `MainActor.assumeIsolated`).
+  - `project.pbxproj`: iPhone orientations are landscape left/right only (iPad keeps all four, which iPad multitasking needs); `StatusHUD.swift` added to the test target's membership.
+- **FR-UX-004 scope:** the thermal state is shown and warns from `.serious`. The automatic stream resolution/fps reduction needs the video stream, which doesn't exist until Phase 2, so FR-UX-004 stays Partial. Not an owner block; it belongs with the stream tasks.
+- **Files changed:** `VCamIOS/VCamIOS/{ContentView.swift (rewritten),SettingsView.swift (moved from ContentView.swift),StatusHUD.swift (new),TrackingSessionController.swift}`, `VCamIOS/VCamIOSTests/StatusHUDTests.swift` (new), `VCamIOS/VCamIOS.xcodeproj/project.pbxproj`, `IMPLEMENTATION_PROGRESS.md` (FR-UX-003/004 now Partial, iOS test row, FR-TRK-003/004, FR-CTL-004 and FR-UX-001 lines re-anchored to `SettingsView.swift`), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `xcodebuild test` (iPhone 17 Pro sim, Swift 6): `Executed 30 tests, with 1 test skipped and 0 failures (0 unexpected)`, `** TEST SUCCEEDED **`, no Swift errors or warnings. New (6): rate at 60 Hz with only every 4th pose seen, then 30 Hz; rate restart on a new run and on a clock jump; thermal labels and warning; auto-hide boundary (3.999 s shown, 4 s hidden), restart on use, pinned while idle; tap toggles; strip/rail never intersect the centre at 5 sizes (iPhone 17 Pro, iPhone SE, iPad landscape/portrait, 320×180) and sit on their edges.
+  - **Mutation check** (sequential, one backup, restored and `filecmp`-verified identical): no reset on a new run (`XCTAssertNil failed: "1431655712.3333333"`), warning only at `.critical` (`FR-UX-004 acts from .serious on: Serious`), not pinned while idle (`Start stays reachable while not tracking`), tap hides while idle (`XCTAssertTrue failed`), hide boundary `<=` (`hidden after the delay`), rail width unclamped (`rail at (320.0, 180.0)`). 6/6 caught.
+  - **Simulator smoke:** `** BUILD SUCCEEDED **`, installed, launched (`kr8t0s.VCamIOS: 81399`). The screenshot is landscape: top strip "Idle · – Hz · Not paired · Thermal: Normal", right rail Start / Origin (greyed) / Settings, empty centre. Built `Info.plist`: `UISupportedInterfaceOrientations~iphone` = LandscapeLeft, LandscapeRight. The settings sheet, auto-hide and tap toggle weren't exercised on screen (no UI automation in the simulator; the logic is covered by the tests).
+  - `pytest BlenderAddOn/tests`: `19 passed in 0.04s`. `gen_testdata.py --check`: `testdata/ up to date (21 files)`. `cargo test` (no Rust change): 60 passed, 0 failed. No add-on or Rust change, so the Blender scripts, fmt and clippy weren't re-run.
+- **Not verified (BLOCKED, needs owner/device):** one-handed use and legibility on a real iPhone, thermal notifications under real heat, and O-2 (ARKit camera-local axes now that the UI is landscape-only).
+- **Blocked:** none new.
+- **Next task:** 1.5.1 — pose-leg latency: map iPhone capture time through the `CLOCK` offset to Blender time at apply, log histograms, write a report artefact (NFR-LAT-001/002). No second task started.
+- **Owner actions:** push (this commit makes 31 ahead). Hold the app in landscape on an iPhone once: check the rail is thumb-reachable and hides while tracking. **Decide on `swift-srp`**: it blocks 1.4.2b/1.4.3b. Still pending: the `mdns-sd`/`getrandom` reviews, a device run.
