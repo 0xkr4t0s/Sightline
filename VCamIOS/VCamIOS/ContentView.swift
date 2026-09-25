@@ -60,6 +60,9 @@ struct ContentView: View {
 
                     LabeledContent("Packets Sent", value: "\(controller.packetsSent)")
                     LabeledContent("Session", value: controller.sessionStatus)
+                    if let understanding = controller.sceneUnderstanding {
+                        LabeledContent("Scene understanding", value: understanding.summary)
+                    }
                     if controller.sessionEndpoint == nil {
                         Text("Not paired with Blender: poses are shown here but not sent.")
                             .foregroundStyle(.secondary)

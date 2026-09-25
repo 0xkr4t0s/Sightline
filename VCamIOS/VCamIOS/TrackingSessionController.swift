@@ -20,6 +20,8 @@ final class TrackingSessionController {
     private(set) var sessionEndpoint: VCPEndpoint?
     private(set) var sessionStatus = "Idle"
     private(set) var lastError: String?
+    /// Plane detection and LiDAR mesh in the running session (FR-TRK-004), nil when not tracking.
+    private(set) var sceneUnderstanding: SceneUnderstanding?
     /// Motion scale, axis locks and the Set origin counter (FR-CTL-004, FR-TRK-003). Every change
     /// goes to the pipeline, which sends it to Blender as `CONTROL_STATE` during a run.
     var controls = DeviceControls() {
@@ -82,14 +84,15 @@ final class TrackingSessionController {
             host = destination.host
             pipeline.start(TrackingDestination(host: destination.host, port: destination.port, endpoint: sessionEndpoint))
 
-            let configuration = ARWorldTrackingConfiguration()
-            configuration.worldAlignment = .gravity
+            let understanding = SceneUnderstanding.forThisDevice()
+            let configuration = understanding.makeConfiguration()
 
             lastError = nil
             packetsSent = 0
             controlSeq = 0
             controlAck = 0
             latestPose = nil
+            sceneUnderstanding = understanding
             isTracking = true
             sessionStatus = "Starting"
             session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
@@ -103,6 +106,7 @@ final class TrackingSessionController {
         session.pause()
         pipeline.stop()
         isTracking = false
+        sceneUnderstanding = nil
         if let reason {
             sessionStatus = reason
         } else if lastError == nil {

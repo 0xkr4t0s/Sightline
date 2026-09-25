@@ -31,6 +31,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				HostDiscovery.swift,
+				SceneUnderstanding.swift,
 				TrackingPipeline.swift,
 				UDPSender.swift,
 				VCP/VCPCoordinates.swift,

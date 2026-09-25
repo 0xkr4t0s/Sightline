@@ -1165,3 +1165,24 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none new (sending for real is covered by the existing 1.4.2b row).
 - **Next task:** 1.4.4b — LiDAR scene reconstruction and plane detection when supported (FR-TRK-004). No second task started.
 - **Owner actions:** push (this commit makes 29 ahead). **Decide on `swift-srp`**: it blocks 1.4.2b/1.4.3b and therefore the iPhone actually sending poses and controls. Still pending: the `mdns-sd`/`getrandom` reviews, a device run.
+
+## 2026-09-25 — Iteration 42 — 1.4.4b (FR-TRK-004) — done (device run owner-blocked)
+
+- **Orientation:** no LOOP_STOP; clean tree; `main` 29 ahead of `origin`. The existing Phase 1 owner waiver applies.
+- **API checked in the iOS 27 SDK** (`ARKit.framework/Headers/ARConfiguration.h`): `+supportsSceneReconstruction:` (`:398`), `sceneReconstruction` (`:408`, default none; mesh output arrives as `ARMeshAnchor`s), `ARConfiguration.SceneReconstruction.mesh` (`:119-128`), `planeDetection` (`:286`, default none), and `ARWorldTrackingConfiguration.PlaneDetection` `.horizontal`/`.vertical` (`ARPlaneDetectionTypes.h:22-26`).
+- **Change:**
+  - `VCamIOS/VCamIOS/SceneUnderstanding.swift` (new): `SceneUnderstanding.best(meshSupported:)` always turns on horizontal + vertical plane detection and asks for `.mesh` only when it is supported. `forThisDevice()` asks ARKit. `makeConfiguration()` builds the gravity-aligned `ARWorldTrackingConfiguration` with both aids, and `summary` gives the UI label ("LiDAR mesh + planes" / "Planes").
+  - `TrackingSessionController.startTracking` uses it instead of the bare configuration, and exposes `sceneUnderstanding` while tracking (nil after stop).
+  - `ContentView`: a "Scene understanding" row in the Tracking section while tracking.
+  - `project.pbxproj`: `SceneUnderstanding.swift` added to the test target's membership.
+  - POSE is unchanged: anchors aren't read or sent; ARKit uses them internally.
+- **Files changed:** `VCamIOS/VCamIOS/{SceneUnderstanding.swift (new),TrackingSessionController.swift,ContentView.swift}`, `VCamIOS/VCamIOSTests/SceneUnderstandingTests.swift` (new), `VCamIOS/VCamIOS.xcodeproj/project.pbxproj`, `IMPLEMENTATION_PROGRESS.md` (FR-TRK-004 now Partial, iOS test row, FR-TRK-003/FR-CTL-004 `ContentView` lines re-anchored), `docs/LOOP_LOG.md`.
+- **Commands run:**
+  - `xcodebuild test` (iPhone 17 Pro sim): `Executed 24 tests, with 1 test skipped and 0 failures (0 unexpected)`, `** TEST SUCCEEDED **`, no Swift errors or warnings. New: mesh only when supported and planes always; `forThisDevice` follows ARKit's query (false in the simulator); the configuration carries the aids and stays `.gravity`.
+  - **Mutation check** (sequential, one backup, restored and `cmp`-verified): mesh unconditional (`XCTAssertEqual failed` at `:13`, `:15`), mesh never (`:8`, `:10`), planes not set on the configuration (`:30`), alignment `.gravityAndHeading` (`ARWorldAlignment(rawValue: 1) is not equal to (rawValue: 0)`). 4/4 caught. Deleting the `worldAlignment` line survives, because `.gravity` is ARKit's default (equivalent mutant).
+  - **Simulator smoke:** built (`** BUILD SUCCEEDED **`), installed, launched (`kr8t0s.VCamIOS: 80003`); `launchctl` lists it. The new row only shows while tracking, and ARKit doesn't run in the simulator, so it wasn't seen on screen.
+  - `pytest BlenderAddOn/tests`: `19 passed in 0.04s`. `gen_testdata.py --check`: `testdata/ up to date (21 files)`. `cargo test` (no Rust change): 60 passed, 0 failed. No add-on or Rust change, so the Blender scripts, fmt and clippy weren't re-run.
+- **Not verified (BLOCKED, needs owner/device):** that a LiDAR iPhone starts the session with `.mesh` and tracks at least as steadily, and the thermal/CPU cost of the mesh over a long take (NFR thermal runs are device work). If the mesh costs too much, a later task can add a toggle.
+- **Blocked:** none new.
+- **Next task:** 1.4.5 — landscape status screen (no video yet): tracking state, rate, connection, thermal (FR-UX-003/004). No second task started.
+- **Owner actions:** push (this commit makes 30 ahead). Try a LiDAR iPhone once and check the "Scene understanding" row says "LiDAR mesh + planes". **Decide on `swift-srp`**: it blocks 1.4.2b/1.4.3b. Still pending: the `mdns-sd`/`getrandom` reviews, a device run.
