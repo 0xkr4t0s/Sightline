@@ -114,6 +114,6 @@ Help is particularly useful in a few areas:
 
 ## License
 
-- Blender extension and bundled native module: **GPL-3.0-or-later** ([license](BlenderAddOn/LICENSE)).
+- Blender extension (`BlenderAddOn/`): **GPL-3.0-or-later** ([license](BlenderAddOn/LICENSE)). The native module it bundles is built from the Apache-2.0 Rust crates below, which are GPL-compatible.
 - iOS app: **Apache-2.0** ([license](SightlineIOS/LICENSE)); it contains no GPL code and can ship on the App Store.
-- Rust crates and protocol: permissive licenses are planned and being finalised.
+- Rust crates (`native/`), the VCP protocol spec and golden vectors (`docs/protocol/`, `testdata/`), tools and tests: **Apache-2.0** ([license](LICENSE)).

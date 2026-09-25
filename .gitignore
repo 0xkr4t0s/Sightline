@@ -33,3 +33,6 @@ docs/LOOP_STOP
 .omx/
 .claude/settings.local.json
 .omp/
+
+# Personal Apple signing team (see SightlineIOS/Signing.xcconfig)
+SightlineIOS/Signing.local.xcconfig

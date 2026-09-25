@@ -25,6 +25,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		7C0DE5160000000000000001 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		7C0DE7E57DA7A00000000001 /* testdata */ = {isa = PBXFileReference; lastKnownFileType = folder; name = testdata; path = ../testdata; sourceTree = "<group>"; };
 		9E74B7DB2F84AF9400B754DD /* SightlineIOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SightlineIOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9EE25E0D2F8410E3009FB801 /* SightlineIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SightlineIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -104,6 +105,7 @@
 				9EE25E452F841844009FB801 /* SightlineIOS */,
 				9E74B7DC2F84AF9400B754DD /* SightlineIOSTests */,
 				7C0DE7E57DA7A00000000001 /* testdata */,
+				7C0DE5160000000000000001 /* Signing.xcconfig */,
 				9EE25E0E2F8410E3009FB801 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -261,7 +263,6 @@
                 CODE_SIGN_ENTITLEMENTS = Keychain.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = kr8t0s.SightlineTests;
@@ -283,7 +284,6 @@
                 CODE_SIGN_ENTITLEMENTS = Keychain.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = kr8t0s.SightlineTests;
@@ -301,6 +301,7 @@
 		};
 		9EE25E162F8410E5009FB801 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7C0DE5160000000000000001 /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -334,7 +335,6 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = "";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -365,6 +365,7 @@
 		};
 		9EE25E172F8410E5009FB801 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7C0DE5160000000000000001 /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -398,7 +399,6 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -428,7 +428,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
                 CODE_SIGN_ENTITLEMENTS = Keychain.entitlements;
-				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
@@ -464,7 +463,6 @@
 				CODE_SIGN_STYLE = Automatic;
                 CODE_SIGN_ENTITLEMENTS = Keychain.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
