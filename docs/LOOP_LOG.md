@@ -8,7 +8,7 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 |---|---|---|
 | S-1 on Windows and Linux (mid-range GPU) | BLOCKED (needs owner) | SRS §8.2 wants every OS. CI runners have no GPU, so this needs the owner's Windows/Linux machines: run `tests/bench_render.py` headless (recipe in its docstring) and commit the JSON to `reports/`. |
 | S-1 EEVEE vs. FR-REN-004/NFR-PERF-002 | Resolved 2026-09-24 | EEVEE exempt with a warning; SRS updated. |
-| 0.1.5 CI green on GitHub (P0 exit gate) | In PR #2 | Run `36093150776` (main): rust ×3 and iOS failed, fixed in iteration 46. PR #2 run `36094854974`: 16/17 green; `rust (windows-latest)` failed on a Windows-invalid test path, fixed in iteration 47. PR #2 run `36095300417`: `rust (windows-latest)` got a RST after `ERROR` in `vcam-net`, fixed in iteration 48. Green once PR #2's `ci-ok` passes. |
+| 0.1.5 CI green on GitHub (P0 exit gate) | Resolved 2026-09-25 | PR #2 run `36096344645`: 15 of 15 jobs green; PR #2 merged as `bdc338e`. |
 | S-2d Media Foundation H.264 and S-2e JPEG on Windows/Linux x86-64 | BLOCKED (needs owner) | Needs Windows/Linux machines or a CI remote. Run `cargo run --release -p vcam-video --example s2_jpeg -- <frames>` there (x86-64 needs `nasm`). |
 | S-2 H.264 software-fallback licensing | Resolved 2026-09-24 | Option A: hardware H.264, JPEG fallback; NET-VID-003 updated. |
 | S-3b Developer ID signing + notarization of the macOS wheel | BLOCKED (needs owner) | Needs an Apple Developer account and credentials. Re-run `tests/s3_macos_loading.sh --gui` with a signed and notarized `.so`. |
@@ -1322,3 +1322,17 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none new.
 - **Next task:** the next iteration checks PR #2's CI (§1b). Merged: 0.1.5 is met, and every remaining Phase 1 task is owner-blocked (1.1.4b/1.4.2b/1.4.3b on `swift-srp`, 1.5.1c on a device), so expect a §6 stop. Failed again: create `docs/LOOP_STOP` (§6). No second task started.
 - **Owner actions:** none for PR #2 (auto-merge). Still pending: **decide on `swift-srp`**, the `mdns-sd`/`getrandom` reviews, and whether the 60 Hz poll needs speeding up (SRS §13.4).
+
+## 2026-09-25 — Iteration 49 — 0.1.5 close-out (XP-002, NFR-QA-002) — PR #2 green and merged; loop stops (§6)
+
+- **Orientation:** no LOOP_STOP; clean tree on `loop/ci-fix-2026-09-25`. Open PRs: #2 (loop, ready) and #3 (`docs/readme`, draft, not opened by the loop, left alone).
+- **PR #2 run `36096344645`** (head `01299b8`): `gh pr checks 2 --watch` finished in about 11 min with every check `pass`: rust-fmt, rust (ubuntu, macos, windows 5m44s), fuzz, wheels ×3, python, ios, extension, blender-smoke ×3, ci-ok; `gh run view`: `conclusion: success`, 15 of 15 jobs. Iteration 48's lingering close fixed the Windows `ConnectionReset`. The logs show all seven Blender scripts' `VCAM_*_OK` lines in each of the 3 `blender-smoke` jobs. Auto-merge fired: PR #2 `MERGED` as `bdc338e`; `main` fast-forwarded, local branch deleted.
+- **Record:** 0.1.5 is done and the P0 CI gate is met. `IMPLEMENTATION_PROGRESS.md`: Repo/CI row and XP-002, NFR-QA-002 now Done; maturity line and NFR-QA-001 evidence moved to run `36096344645` (NFR-QA-001 stays Partial: no single `blender --background … tests` runner). Blocked-items row for 0.1.5 resolved.
+- **Files changed:** `IMPLEMENTATION_PROGRESS.md`, `docs/LOOP_LOG.md`. No code change, so no local suite was re-run; the CI run above is the evidence.
+- **Stop (§6):** 
+  - P0 exit gate met apart from owner items (S-1 Windows/Linux, S-2d/e, S-3b/c).
+  - Every remaining Phase 1 plan task is owner-blocked: 1.1.4b/1.4.2b/1.4.3b on the `swift-srp` decision, 1.5.1c on a real iPhone (plus O-1). The T1 gate items the loop can reach are met: the fake-iPhone headless test passes on 3 OSes and the CI fuzz job ran clean (60 s per target, coverage-guided on nightly); the device checklist and device pose-leg p95 need the owner.
+  - `docs/LOOP_STOP` created (not committed) and posted as a GitHub issue.
+- **Unplanned Phase 1 gap the owner may want to schedule:** FR-TRK-002's Blender side, "hold the last good pose while tracking is limited", isn't in any plan row (noted in the 1.3.3 entry). It's unblocked host work.
+- **Next task:** none until the owner resumes. Once `swift-srp` is decided: 1.1.4b (Swift SRP pairing), then 1.4.2b/1.4.3b. Otherwise, authorise Phase 2 early (2.x viewfinder stream).
+- **Owner actions:** **decide on `swift-srp`** (Apache-2.0; blocks 1.1.4b/1.4.2b/1.4.3b); run the device checklist once pairing exists; the `mdns-sd`/`getrandom` reviews; whether the 60 Hz poll needs speeding up (SRS §13.4); optionally authorise Phase 2 or the FR-TRK-002 hold option; then delete `docs/LOOP_STOP`.
