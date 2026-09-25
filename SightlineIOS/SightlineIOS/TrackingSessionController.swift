@@ -11,12 +11,13 @@ import SwiftUI
 final class TrackingSessionController {
     var host: String
     var portText: String
+    private(set) var selectedServiceName: String? = SelectedServiceStore.load()
+    private(set) var isPairing = false
     private(set) var isTracking = false
     private(set) var packetsSent = 0
     /// The newest pose as sent (canonical axes, vcp.md §7), or nil before the first frame.
     private(set) var latestPose: VCPPose?
-    /// The Blender install this iPhone is paired with (vcp.md §9). It comes from the pairing UI
-    /// and the Keychain (task 1.4.3b); without it poses are shown, not sent.
+    /// The selected Blender install's authenticated host ID and pairing key, loaded from Keychain.
     private(set) var pairing: VCPHostPairing?
     /// The authenticated session poses are sealed with, while one is open (vcp.md §10).
     private(set) var sessionEndpoint: VCPEndpoint?
@@ -49,7 +50,7 @@ final class TrackingSessionController {
     /// The session of the current run; its TCP connection stays open until the run stops.
     @ObservationIgnored private var liveSession: VCPLiveSession?
     /// True while a start waits for camera permission or Blender's handshake.
-    @ObservationIgnored private var isStarting = false
+    private(set) var isStarting = false
 
     init() {
         let settings = TrackingSettings.load()
@@ -65,6 +66,7 @@ final class TrackingSessionController {
         self.receiver = receiver
         session.delegate = receiver
         session.delegateQueue = pipeline.queue
+        reloadPairing()
         Task { [weak self] in
             for await snapshot in snapshots {
                 guard let self else {
@@ -82,8 +84,90 @@ final class TrackingSessionController {
         }
     }
 
+    private var pairingAccount: String? {
+        if let selectedServiceName { return "bonjour:\(selectedServiceName)" }
+        let address = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !address.isEmpty, let port = UInt16(portText), port > 0 else { return nil }
+        return "manual:\(address):\(port)"
+    }
+
+    func select(_ discovered: DiscoveredHost) {
+        guard discovered.isCompatible, !isTracking, !isPairing else { return }
+        selectedServiceName = discovered.id
+        SelectedServiceStore.save(discovered.id)
+        reloadPairing()
+    }
+
+    func selectManual() {
+        guard !isTracking, !isPairing else { return }
+        selectedServiceName = nil
+        SelectedServiceStore.save(nil)
+        reloadPairing()
+    }
+
+    func manualAddressChanged() {
+        guard selectedServiceName == nil else { return }
+        reloadPairing()
+    }
+
+    private func reloadPairing() {
+        pairing = nil
+        guard let account = pairingAccount else { return }
+        do { pairing = try PairingStore.load(account) }
+        catch { lastError = error.localizedDescription }
+    }
+
+    func pair(code: String) async {
+        guard !isTracking, !isStarting, !isPairing else { return }
+        guard code.utf8.count == 6, code.utf8.allSatisfy({ (48...57).contains($0) }) else {
+            lastError = "Enter the six-digit code shown in Blender."
+            return
+        }
+        guard let account = pairingAccount else {
+            lastError = "Select a Blender host or enter its address and control port."
+            return
+        }
+        isPairing = true
+        sessionStatus = "Pairing with Blender"
+        defer { isPairing = false }
+        var channel: VCPControlChannel?
+        do {
+            if let selectedServiceName {
+                channel = VCPControlChannel(serviceName: selectedServiceName)
+            } else {
+                let destination = try validatedDestination()
+                channel = try VCPControlChannel(host: destination.host, port: destination.port)
+                TrackingSettings(host: destination.host, port: Int(destination.port)).save()
+            }
+            guard let channel else { return }
+            defer { channel.close() }
+            let newPairing = try await channel.withDeadline(VCPSessionClient.handshakeTimeout) {
+                () async throws(VCPLinkError) -> VCPHostPairing in
+                try await channel.open()
+                return try await VCPSessionClient.pair(on: channel, device: device, code: code)
+            }
+            try PairingStore.save(newPairing, for: account)
+            pairing = newPairing
+            let link = try await channel.withDeadline(VCPSessionClient.handshakeTimeout) {
+                () async throws(VCPLinkError) -> VCPLiveSession in
+                try await VCPSessionClient.startSession(on: channel, device: device) {
+                    $0 == newPairing.hostID ? newPairing.pairingKey : nil
+                }
+            }
+            link.close()
+            sessionStatus = "Paired"
+            lastError = nil
+        } catch let error as VCPLinkError {
+            sessionStatus = pairing == nil ? "Not paired" : "Paired"
+            lastError = error.message
+        } catch {
+            sessionStatus = pairing == nil ? "Not paired" : "Paired"
+            lastError = error.localizedDescription
+        }
+    }
+
     func startTracking() async {
-        guard !isTracking, !isStarting else {
+        guard !isTracking, !isStarting, !isPairing else {
             return
         }
 
@@ -96,7 +180,12 @@ final class TrackingSessionController {
         isStarting = true
         defer { isStarting = false }
         do {
-            let destination = try validatedDestination()
+            // An unpaired discovered host can still show local AR poses; it has no UDP destination.
+            let destination: (host: String, port: UInt16) = if selectedServiceName == nil {
+                try validatedDestination()
+            } else {
+                ("", 0)
+            }
             let granted = await requestCameraAccessIfNeeded()
             guard granted else {
                 sessionStatus = "Permission denied"
@@ -104,14 +193,21 @@ final class TrackingSessionController {
                 return
             }
 
-            TrackingSettings(host: destination.host, port: Int(destination.port)).save()
-            host = destination.host
+            if selectedServiceName == nil {
+                TrackingSettings(host: destination.host, port: Int(destination.port)).save()
+                host = destination.host
+            }
             var link: VCPLiveSession?
             if let pairing {
                 sessionStatus = "Connecting to Blender"
                 do throws(VCPLinkError) {
-                    link = try await VCPSessionClient.connect(host: destination.host, port: destination.port,
-                                                              device: device, pairing: pairing)
+                    if let selectedServiceName {
+                        link = try await VCPSessionClient.connect(serviceName: selectedServiceName,
+                                                                  device: device, pairing: pairing)
+                    } else {
+                        link = try await VCPSessionClient.connect(host: destination.host, port: destination.port,
+                                                                  device: device, pairing: pairing)
+                    }
                 } catch {
                     sessionStatus = "Not connected"
                     lastError = error.message

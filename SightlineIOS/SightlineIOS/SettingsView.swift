@@ -14,6 +14,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var browser = HostBrowser()
     @State private var customScale = ""
+    @State private var pairingCode = ""
 
     /// FR-CTL-004's examples: 1:1, 1:2, 1:10, plus 1:5; anything else via Custom.
     private static let scalePresets: [Float] = [1, 2, 5, 10]
@@ -23,12 +24,23 @@ struct SettingsView: View {
             Form {
                 Section("Blender on this network") {
                     ForEach(browser.hosts) { host in
-                        VStack(alignment: .leading) {
-                            Text(host.machine)
-                            Text(host.isCompatible ? host.fileLabel : "\(host.fileLabel) · unsupported VCP version")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                        Button {
+                            controller.select(host)
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(host.machine)
+                                    Text(host.isCompatible ? host.fileLabel : "\(host.fileLabel) · unsupported VCP version")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if controller.selectedServiceName == host.id {
+                                    Image(systemName: "checkmark").accessibilityLabel("Selected")
+                                }
+                            }
                         }
+                        .disabled(!host.isCompatible || controller.isTracking || controller.isPairing)
                     }
                     if browser.hosts.isEmpty {
                         Text("Searching… Start a Sightline session in Blender's sidebar.")
@@ -41,12 +53,39 @@ struct SettingsView: View {
                 }
 
                 Section("Blender") {
+                    Button("Use manual address") { controller.selectManual() }
+                        .disabled(controller.selectedServiceName == nil || controller.isTracking || controller.isPairing)
                     TextField("Address or name of the Mac/PC running Blender", text: $controller.host)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .disabled(controller.selectedServiceName != nil || controller.isTracking || controller.isPairing || controller.isStarting)
+                        .onChange(of: controller.host) { controller.manualAddressChanged() }
 
                     TextField("Control port (\(TrackingSettings.defaultPort))", text: $controller.portText)
                         .keyboardType(.numberPad)
+                        .onChange(of: controller.portText) { controller.manualAddressChanged() }
+                        .disabled(controller.selectedServiceName != nil || controller.isTracking || controller.isPairing || controller.isStarting)
+                    if let selected = controller.selectedServiceName {
+                        Text("Selected network host: \(browser.hosts.first { $0.id == selected }?.machine ?? selected)")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Pair with Blender") {
+                    Text("In Blender, enable pairing in the Sightline sidebar and enter its six-digit code. Keep both devices on the same network. Allow Local Network access for Sightline on iOS and Blender on macOS; on Windows, allow Blender through the firewall prompt.")
+                        .font(.footnote)
+                    TextField("Six-digit code", text: $pairingCode)
+                        .keyboardType(.numberPad)
+                        .textContentType(.oneTimeCode)
+                    Button(controller.isPairing ? "Pairing…" : "Pair") {
+                        Task {
+                            await controller.pair(code: pairingCode)
+                            if controller.pairing != nil { pairingCode = "" }
+                        }
+                    }
+                    .disabled(controller.isPairing || controller.isTracking)
+                    Text(controller.pairing == nil ? "Not paired" : "Paired with selected Blender host")
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Tracking") {
@@ -126,6 +165,7 @@ struct SettingsView: View {
                 Button("Done") { dismiss() }
             }
             .task { await browser.run() }
+            .disabled(controller.isStarting)
         }
     }
 

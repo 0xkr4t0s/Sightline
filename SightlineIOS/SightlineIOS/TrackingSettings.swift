@@ -27,6 +27,14 @@ struct TrackingSettings {
     }
 }
 
+/// The last chosen Bonjour service (not a credential). Nil selects the manual address fields.
+enum SelectedServiceStore {
+    private static let key = "tracking.destination.service"
+
+    static func load() -> String? { UserDefaults.standard.string(forKey: key) }
+    static func save(_ name: String?) { UserDefaults.standard.set(name, forKey: key) }
+}
+
 /// This install's VCP identity (vcp.md §9.3): `device_id` is 16 random bytes made on first use and
 /// kept for the life of the install; the name is the device's, cut to `VCPHello.maxName` bytes.
 enum DeviceIdentityStore {

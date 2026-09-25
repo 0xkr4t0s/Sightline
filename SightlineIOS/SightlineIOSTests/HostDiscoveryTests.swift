@@ -116,6 +116,33 @@ final class HostDiscoveryTests: XCTestCase {
         XCTAssertTrue(browser.hosts.isEmpty, "a stopped browser keeps no stale hosts")
     }
 
+    @MainActor
+    func testSelectedBonjourServiceConnectsAndResolvesUDPPeer() async throws {
+        let name = "vcam-connect-\(UUID().uuidString)"
+        let listener = try NWListener(using: .tcp, on: .any)
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: DispatchQueue(label: "BonjourSelectionTest"))
+        }
+        listener.service = NWListener.Service(name: name, type: DiscoveredHost.serviceType, domain: "local.",
+                                              txtRecord: NWTXTRecord(["vcp": "1", "host": "Test Blender"]))
+        listener.start(queue: DispatchQueue(label: "BonjourSelectionListener"))
+        defer { listener.cancel() }
+
+        let browser = HostBrowser()
+        let browsing = Task { await browser.run() }
+        defer { browsing.cancel() }
+        let found = await eventually(10) { browser.hosts.contains { $0.id == name } }
+        XCTAssertTrue(found)
+        let selected = try XCTUnwrap(browser.hosts.first { $0.id == name })
+        XCTAssertTrue(selected.isCompatible)
+        let channel = VCPControlChannel(serviceName: selected.id)
+        defer { channel.close() }
+        try await channel.withDeadline(10) { () async throws(VCPLinkError) -> Void in
+            try await channel.open()
+        }
+        XCTAssertNotNil(channel.peerAddress, "UDP must target the resolved TCP peer, not the service name")
+    }
+
     /// Interop with the real Rust advertiser (`mdns-sd`). Opt-in: run a host session that calls
     /// `Session.advertise(<machine>, <blend>)`, then pass the same values as
     /// `TEST_RUNNER_VCAM_INTEROP_HOST` / `TEST_RUNNER_VCAM_INTEROP_BLEND` to `xcodebuild test`.

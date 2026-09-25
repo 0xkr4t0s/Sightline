@@ -77,6 +77,10 @@ nonisolated final class VCPControlChannel: Sendable {
         }
         connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: .tcp)
     }
+    init(serviceName: String) {
+        connection = NWConnection(to: .service(name: serviceName, type: DiscoveredHost.serviceType,
+                                                domain: "local.", interface: nil), using: .tcp)
+    }
 
     /// Connects. Fails at once, instead of waiting for the network to change, when the host
     /// refuses or can't be routed to: the caller decides when to retry.
@@ -326,6 +330,17 @@ nonisolated enum VCPSessionClient {
     static func connect(host: String, port: UInt16, device: VCPDeviceIdentity, pairing: VCPHostPairing,
                         timeout: Double = handshakeTimeout) async throws(VCPLinkError) -> VCPLiveSession {
         let channel = try VCPControlChannel(host: host, port: port)
+        return try await connect(on: channel, device: device, pairing: pairing, timeout: timeout)
+    }
+
+    static func connect(serviceName: String, device: VCPDeviceIdentity, pairing: VCPHostPairing,
+                        timeout: Double = handshakeTimeout) async throws(VCPLinkError) -> VCPLiveSession {
+        try await connect(on: VCPControlChannel(serviceName: serviceName), device: device,
+                          pairing: pairing, timeout: timeout)
+    }
+
+    private static func connect(on channel: VCPControlChannel, device: VCPDeviceIdentity,
+                                pairing: VCPHostPairing, timeout: Double) async throws(VCPLinkError) -> VCPLiveSession {
         do {
             return try await channel.withDeadline(timeout) { () async throws(VCPLinkError) -> VCPLiveSession in
                 try await channel.open()
