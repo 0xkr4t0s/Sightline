@@ -247,8 +247,10 @@ impl State {
                     self.stats.clock_rejected += 1;
                 }
             }
-            // The endpoint drops device requests (§4.3.7); a host never receives STATUS.
-            Message::Clock(Clock::Request { .. }) | Message::Status(_) => {}
+            // The endpoint drops device requests (§4.3.7); a host never receives STATUS or video.
+            Message::Clock(Clock::Request { .. })
+            | Message::Status(_)
+            | Message::VideoFragment(_) => {}
         }
     }
 

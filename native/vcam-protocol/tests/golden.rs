@@ -111,6 +111,7 @@ fn check_fields(msg: &Message, f: &Value, name: &str) {
             assert_eq!(u64::from(s.flags), uint(&f["flags"]), "{name}");
             assert_eq!(s.camera_name, f["camera_name"].as_str().unwrap(), "{name}");
         }
+        Message::VideoFragment(_) => panic!("{name}: video vectors live in video.json"),
     }
 }
 

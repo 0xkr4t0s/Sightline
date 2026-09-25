@@ -75,7 +75,7 @@ jobs:
       - name: Seed corpora from testdata/
         working-directory: native/fuzz
         run: |
-          mkdir -p corpus/udp_open corpus/control_decode corpus/pairing_inputs
+          mkdir -p corpus/udp_open corpus/control_decode corpus/pairing_inputs corpus/video_reassembly
           for f in ../../testdata/vcp/*.bin; do
             case "$(basename "$f")" in
               hello_pair.bin|error_not_paired.bin) cp "$f" corpus/control_decode/ ;;
@@ -96,7 +96,7 @@ jobs:
       - name: cargo fuzz run (60 s per target)
         working-directory: native
         run: |
-          for target in udp_open control_decode pairing_inputs; do
+          for target in udp_open control_decode pairing_inputs video_reassembly; do
             cargo +nightly fuzz run "$target" -- -max_total_time=60 -rss_limit_mb=2048
           done
       - uses: actions/upload-artifact@v7

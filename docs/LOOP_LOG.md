@@ -1435,3 +1435,16 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Not verified:** physical-device clock alignment, Wi-Fi roaming/sleep, or the session-lost screen on device (simulator cannot run AR world tracking). No Blender/native-module code changed, so no Blender build/smoke was run. PR #12 CI is deferred until ready and will be checked next iteration.
 - **Next task:** 1.4.2c2, then 1.3.6. No second task started. Owner actions: O-1 device clock check plus the existing physical-device/Windows/Linux checklist and dependency reviews.
 
+
+## 2026-09-25 — Parallel session (not a loop iteration) — 2.2a (NET-VID-001, NET-VID-004, PR-004, PR-005) — done
+
+- **Why:** the owner asked for work in parallel with the loop, on tasks it hasn't reached. Branch `claude/parallel-branch-workflow-oftdqe`, not a `loop/*` PR. The loop's own order (1.4.2c2, 1.3.6, 2.1) is unchanged.
+- **Split of 2.2:** **2.2a (done here)** is the `VIDEO_FRAGMENT` wire format, golden vectors, host fragmentation and the reference reassembler, all in `vcam-protocol`. **2.2b (open)** is the JPEG encode worker in `vcam-video`, the host send path in `vcam-net`/`vcam-py`, and adaptive quality (NET-VID-005). It needs 2.1's frames to be useful. The Swift reassembler belongs to 2.3 and should consume `testdata/vcp/video.json`.
+- **Change:** vcp.md Draft 2, §6.5 (layout, validation, reassembly steps, example hex); O-4 narrowed to `ACK_KEYFRAME_REQ` and the T2/T3 `CONTROL_STATE` fields. `tools/gen_testdata.py` `build_video` writes `testdata/vcp/video.json` and `video_fragment_first.bin`; the spec self-check now expects 7 example blocks. Rust: `native/vcam-protocol/src/video.rs` (new), `Message::VideoFragment`, `Endpoint::seal_frame` (`endpoint.rs:119`), and a shared `frame` helper for header and tag. `vcam-net` ignores video on the host. New fuzz target `video_reassembly`, added to the CI fuzz job. Existing `messages.json`/`receive.json` are unchanged, so the Swift golden tests are unaffected.
+- **Commands run (Linux x86-64 container, rustc 1.98.1, NASM installed for turbojpeg-sys):**
+  - `cargo fmt --check` OK; `cargo clippy --all-targets -- -D warnings` exit 0; `cargo test`: 66 passed, 0 failed (15 suites; 6 new in `vcam-protocol/tests/video.rs`).
+  - `python3 tools/gen_testdata.py --check`: `testdata/ up to date (23 files)`. `pytest -q BlenderAddOn/tests`: `24 passed`.
+  - `cargo +nightly fuzz run video_reassembly -- -max_total_time=60`: `Done 2314554 runs in 61 second(s)`, no crash. `udp_open` seeded with testdata plus every video datagram: `Done 13536173 runs in 61 second(s)`, no crash.
+  - Mutation check on `video.rs` (restored and `cmp`-verified): M2 `frame_id` 0 accepted, M3 duplicates missed, M5 wrong last-fragment length, and M6 no fragment cap were caught. M4 (`chunk_len` change not compared) survived at first, so the vector `chunk_len_change_drops_frame` was added; it's caught now. M1 (floor not raised on abandon) is equivalent: the newer frame in progress already rejects older IDs, and whatever ends it raises the floor.
+- **Not run here:** Xcode (no Swift change) and headless Blender (no add-on or `vcam-py` change).
+- **Next for the loop:** unchanged. When 2.2 comes up, start at 2.2b.

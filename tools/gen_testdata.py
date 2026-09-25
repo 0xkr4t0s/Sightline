@@ -26,6 +26,9 @@ testdata/vcp/freshness.json  stateful sequences: the seq/state_seq values fed in
                              which ones the receiver applies.
 testdata/vcp/clock_sync.json  host CLOCK estimation (vcp.md §6.3): requests and replies (with t4)
                              in order; each reply's verdict and the estimate after it.
+testdata/vcp/video.json      VIDEO_FRAGMENT (vcp.md §6.5): frames split into sealed datagrams, invalid
+                             fragments with the rule that rejects each, and reassembly scenarios (payloads
+                             fed in order; each step's outcome and every completed frame).
 testdata/vcp/pairing.json    one full SRP-6a pairing (vcp.md §9) with fixed secrets: every
                              intermediate value and every TCP message.
 testdata/vcp/session.json    one session setup (vcp.md §10) from the pairing key above.
@@ -342,6 +345,183 @@ def build_receive() -> dict:
     return {"receiver": {"session_id": SID, "k_d2h": hx(K_D2H), "k_h2d": hx(K_H2D),
                          "role": "host for direction d2h, device for h2d"},
             "cases": cases}
+
+
+VIDEO_HEADER_LEN = 28
+VIDEO_MAX_CHUNK = 1200 - 12 - 8 - VIDEO_HEADER_LEN  # 1152: a full fragment fills a 1200-byte datagram
+VIDEO_MAX_FRAME = 4 * 1024 * 1024
+VIDEO_MAX_FRAGMENTS = 65536
+
+
+def video_payload(frame_id, render_ns, pose_seq, frame_len, chunk_len, index, data, codec=0, flags=1) -> bytes:
+    return struct.pack("<IQIIHHBBH", frame_id, render_ns, pose_seq, frame_len, index, chunk_len, codec,
+                       flags, 0) + data
+
+
+def video_check(payload: bytes) -> str | None:
+    """vcp.md §6.5 validation. Returns the violated rule, or None if the fragment is valid."""
+    if len(payload) < VIDEO_HEADER_LEN + 1:
+        return "§4.3 step 8 (payload shorter than 29 bytes)"
+    frame_id, _, _, frame_len, index, chunk_len, _, _, _ = struct.unpack_from("<IQIIHHBBH", payload)
+    data_len = len(payload) - VIDEO_HEADER_LEN
+    if frame_id == 0:
+        return "§6.5 (frame_id is 0)"
+    if not 1 <= frame_len <= VIDEO_MAX_FRAME:
+        return "§6.5 (frame_len outside 1..4194304)"
+    if not 1 <= chunk_len <= VIDEO_MAX_CHUNK:
+        return "§6.5 (chunk_len outside 1..1152)"
+    count = -(-frame_len // chunk_len)
+    if count > VIDEO_MAX_FRAGMENTS:
+        return "§6.5 (more than 65536 fragments)"
+    if index >= count:
+        return "§6.5 (frag_index >= fragment count)"
+    want = chunk_len if index < count - 1 else frame_len - (count - 1) * chunk_len
+    if data_len != want:
+        return "§6.5 (data length does not match chunk_len/frame_len)"
+    return None
+
+
+def video_fragments(frame_id, render_ns, pose_seq, data, chunk_len, codec=0, flags=1) -> list[bytes]:
+    """Split one encoded frame into VIDEO_FRAGMENT payloads, in index order (vcp.md §6.5)."""
+    count = -(-len(data) // chunk_len)
+    out = [video_payload(frame_id, render_ns, pose_seq, len(data), chunk_len, i,
+                         data[i * chunk_len:(i + 1) * chunk_len], codec, flags) for i in range(count)]
+    assert all(video_check(p) is None for p in out)
+    return out
+
+
+def pattern(n: int, seed: int) -> bytes:
+    """Deterministic filler bytes (a 32-bit LCG), standing in for encoded JPEG data."""
+    out, x = bytearray(), seed
+    for _ in range(n):
+        x = (1103515245 * x + 12345) & 0xFFFFFFFF
+        out.append(x >> 24)
+    return bytes(out)
+
+
+class Reassembler:
+    """Reference receiver for vcp.md §6.5 (one per session). feed() returns the outcome name."""
+
+    def __init__(self):
+        self.floor = 0          # fragments with frame_id <= floor are stale
+        self.cur = None         # frame in progress: dict(key, parts)
+        self.abandoned = 0
+        self.inconsistent = 0
+
+    def feed(self, payload: bytes):
+        assert video_check(payload) is None
+        frame_id, render_ns, pose_seq, frame_len, index, chunk_len, codec, flags, _ = struct.unpack_from(
+            "<IQIIHHBBH", payload)
+        key = (render_ns, pose_seq, frame_len, chunk_len, codec, flags)
+        if frame_id <= self.floor or (self.cur and frame_id < self.cur["id"]):
+            return "stale", None
+        if self.cur and frame_id > self.cur["id"]:
+            self.abandoned += 1
+            self.floor = self.cur["id"]
+            self.cur = None
+        if self.cur is None:
+            count = -(-frame_len // chunk_len)
+            self.cur = {"id": frame_id, "key": key, "parts": [None] * count}
+        elif key != self.cur["key"]:
+            self.inconsistent += 1
+            self.floor = frame_id
+            self.cur = None
+            return "inconsistent", None
+        parts = self.cur["parts"]
+        if parts[index] is not None:
+            return "duplicate", None
+        parts[index] = payload[VIDEO_HEADER_LEN:]
+        if any(p is None for p in parts):
+            return "pending", None
+        frame = {"frame_id": frame_id, "render_time_ns": render_ns, "pose_seq": pose_seq, "codec": codec,
+                 "flags": flags, "data": hx(b"".join(parts))}
+        self.floor = frame_id
+        self.cur = None
+        return "complete", frame
+
+
+def build_video() -> tuple[dict, dict[str, bytes]]:
+    """VIDEO_FRAGMENT vectors (vcp.md §6.5): fragmentation, validation, and reassembly."""
+    example_frame = bytes.fromhex("ffd8ffe000104a46ffd9")  # 10 bytes; not a decodable JPEG
+    frames = {
+        "tiny_chunk4": (1, 5_000_000_000, 1, example_frame, 4),
+        "one_byte": (2, 5_033_333_333, 2, b"\xab", VIDEO_MAX_CHUNK),
+        "exact_two_chunks": (3, 5_066_666_667, 4, pattern(2 * VIDEO_MAX_CHUNK, 3), VIDEO_MAX_CHUNK),
+        "three_chunks_short_tail": (4, 5_100_000_000, 5, pattern(2500, 4), VIDEO_MAX_CHUNK),
+    }
+    fragmentation = []
+    for name, (fid, render_ns, pose_seq, data, chunk) in frames.items():
+        payloads = video_fragments(fid, render_ns, pose_seq, data, chunk)
+        fragmentation.append({
+            "name": name, "frame_id": fid, "render_time_ns": render_ns, "pose_seq": pose_seq, "codec": 0,
+            "flags": 1, "chunk_len": chunk, "frame": hx(data),
+            "datagrams": [hx(udp(0x05, SID, p, K_H2D)) for p in payloads],
+        })
+    example = udp(0x05, SID, video_fragments(1, 5_000_000_000, 1, example_frame, 4)[0], K_H2D)
+    files = {"video_fragment_first.bin": example}
+
+    invalid = []
+
+    def bad(name, payload, rule=None, key=K_H2D, direction="h2d"):
+        rule = rule or video_check(payload)
+        assert rule is not None, name
+        invalid.append({"name": name, "direction": direction, "hex": hx(udp(0x05, SID, payload, key)),
+                        "rule": rule})
+
+    good = video_payload(7, 1, 1, 10, 4, 0, b"\x00" * 4)
+    bad("payload_28_bytes", good[:VIDEO_HEADER_LEN])
+    bad("frame_id_zero", video_payload(0, 1, 1, 10, 4, 0, b"\x00" * 4))
+    bad("frame_len_zero", video_payload(7, 1, 1, 0, 4, 0, b"\x00"))
+    bad("frame_len_over_4mib", video_payload(7, 1, 1, VIDEO_MAX_FRAME + 1, VIDEO_MAX_CHUNK, 0,
+                                            b"\x00" * VIDEO_MAX_CHUNK))
+    bad("chunk_len_zero", video_payload(7, 1, 1, 10, 0, 0, b"\x00" * 4))
+    bad("chunk_len_1153", video_payload(7, 1, 1, 2000, VIDEO_MAX_CHUNK + 1, 0, b"\x00" * 4))
+    bad("too_many_fragments", video_payload(7, 1, 1, VIDEO_MAX_FRAME, 1, 0, b"\x00"))
+    bad("index_past_end", video_payload(7, 1, 1, 10, 4, 3, b"\x00" * 2))
+    bad("middle_chunk_short", video_payload(7, 1, 1, 10, 4, 1, b"\x00" * 3))
+    bad("middle_chunk_long", video_payload(7, 1, 1, 10, 4, 0, b"\x00" * 5))
+    bad("last_chunk_wrong_len", video_payload(7, 1, 1, 10, 4, 2, b"\x00" * 4))
+    bad("from_device", good, "§4.3 step 7 (VIDEO_FRAGMENT is host → device only)", K_D2H, "d2h")
+
+    def frag(fid, index, data=None, chunk=4, render_ns=None, pose_seq=None, frame_len=10):
+        render_ns = 1_000_000 * fid if render_ns is None else render_ns
+        pose_seq = fid if pose_seq is None else pose_seq
+        body = data if data is not None else bytes([fid * 16 + index] * min(chunk, frame_len - index * chunk))
+        return video_payload(fid, render_ns, pose_seq, frame_len, chunk, index, body)
+
+    scenarios_in = {
+        "in_order": [frag(1, 0), frag(1, 1), frag(1, 2)],
+        "reordered_with_duplicate": [frag(1, 2), frag(1, 0), frag(1, 2), frag(1, 1), frag(1, 1)],
+        "newer_frame_abandons_incomplete": [frag(1, 0), frag(1, 1), frag(2, 0), frag(1, 2), frag(2, 2), frag(2, 1)],
+        "stale_after_complete_and_gap": [frag(1, 0), frag(1, 1), frag(1, 2), frag(1, 0), frag(3, 1), frag(2, 0),
+                                         frag(3, 0), frag(3, 2)],
+        "inconsistent_fragment_drops_frame": [frag(1, 0), frag(1, 1, pose_seq=9), frag(1, 2), frag(2, 0),
+                                              frag(2, 1), frag(2, 2)],
+        "chunk_len_change_drops_frame": [frag(1, 0), frag(1, 1, chunk=5), frag(1, 2), frag(2, 0), frag(2, 1),
+                                         frag(2, 2)],
+        "single_fragment_frames": [frag(1, 0, chunk=VIDEO_MAX_CHUNK), frag(2, 0, chunk=VIDEO_MAX_CHUNK)],
+    }
+    scenarios = []
+    for name, steps_in in scenarios_in.items():
+        r, steps = Reassembler(), []
+        for p in steps_in:
+            outcome, frame = r.feed(p)
+            step = {"payload": hx(p), "outcome": outcome}
+            if frame:
+                step["frame"] = frame
+            steps.append(step)
+        scenarios.append({"name": name, "steps": steps, "abandoned": r.abandoned, "inconsistent": r.inconsistent})
+
+    return {
+        "note": "VIDEO_FRAGMENT (vcp.md §6.5). Datagrams are sealed with the §11 example session "
+                "(receive.json 'receiver'); 'payload' hex is the message payload without header or tag.",
+        "limits": {"header_len": VIDEO_HEADER_LEN, "max_chunk_len": VIDEO_MAX_CHUNK,
+                   "max_frame_len": VIDEO_MAX_FRAME, "max_fragments": VIDEO_MAX_FRAGMENTS},
+        "example": {"hex": hx(example), "file": "video_fragment_first.bin"},
+        "fragmentation": fragmentation,
+        "invalid": invalid,
+        "reassembly": scenarios,
+    }, files
 
 
 def build_freshness() -> dict:
@@ -867,7 +1047,7 @@ def self_check_hkdf():
         raise SystemExit("SELF-CHECK FAILED: HKDF vs RFC 5869 A.1")
 
 
-def self_check_spec(messages: dict):
+def self_check_spec(messages: dict, video: dict):
     """Every example block in vcp.md must equal the corresponding generated message."""
     text = SPEC.read_text(encoding="utf-8")
     blocks = re.findall(r"```\n(header .*?)```", text, re.S)
@@ -875,9 +1055,9 @@ def self_check_spec(messages: dict):
     for block in blocks:
         joined = re.sub(r"\b(header|payload|tag)\b", " ", block)
         wanted.append(bytes.fromhex(re.sub(r"\s+", "", joined)))
-    generated = {bytes.fromhex(c["hex"]) for c in messages["cases"]}
+    generated = {bytes.fromhex(c["hex"]) for c in messages["cases"]} | {bytes.fromhex(video["example"]["hex"])}
     missing = [w.hex() for w in wanted if w not in generated]
-    if len(wanted) != 6 or missing:
+    if len(wanted) != 7 or missing:
         raise SystemExit(f"SELF-CHECK FAILED: vcp.md examples ({len(wanted)} found) not generated: {missing}")
 
 
@@ -892,7 +1072,8 @@ def build_all() -> dict[str, bytes]:
     self_check_hkdf()
     rfc = build_rfc5054()
     messages, bins = build_messages()
-    self_check_spec(messages)
+    video, video_bins = build_video()
+    self_check_spec(messages, video)
     pairing, ctx = build_pairing()
     motion, motion_bin = build_motion()
     files = {
@@ -900,6 +1081,7 @@ def build_all() -> dict[str, bytes]:
         "vcp/receive.json": dumps(build_receive()).encode(),
         "vcp/freshness.json": dumps(build_freshness()).encode(),
         "vcp/clock_sync.json": dumps(build_clock_sync()).encode(),
+        "vcp/video.json": dumps(video).encode(),
         "vcp/pairing.json": dumps(pairing).encode(),
         "vcp/session.json": dumps(build_session(ctx)).encode(),
         "vcp/srp-rfc5054-appendix-b.json": dumps(rfc).encode(),
@@ -908,7 +1090,7 @@ def build_all() -> dict[str, bytes]:
         "rig/rig_cases.json": dumps(build_rig(motion)).encode(),
         "motion/scripted.bin": motion_bin,
     }
-    files.update({f"vcp/{name}": data for name, data in bins.items()})
+    files.update({f"vcp/{name}": data for name, data in {**bins, **video_bins}.items()})
     return files
 
 

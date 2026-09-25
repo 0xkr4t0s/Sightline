@@ -5,6 +5,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 use crate::message::{Clock, ControlState, Message, PayloadError, Pose, Status, msg_type};
+use crate::video::{FrameInfo, VideoFragment, fragment_count, put_fragment};
 use crate::wire::Reader;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -94,13 +95,7 @@ impl Endpoint {
         if !may_send(self.role, msg) {
             return Err(SealError::WrongDirection);
         }
-        let start = out.len();
-        out.extend_from_slice(&MAGIC);
-        out.extend_from_slice(&[PROTOCOL_VERSION, msg.msg_type()]);
-        out.extend_from_slice(&self.session_id.to_le_bytes());
-        out.extend_from_slice(&[0, 0]); // len, patched below
-        let payload_start = out.len();
-        let encoded = match msg {
+        self.frame(msg.msg_type(), out, |out| match msg {
             Message::Pose(m) => {
                 m.encode(out);
                 Ok(())
@@ -114,12 +109,59 @@ impl Endpoint {
                 Ok(())
             }
             Message::Status(m) => m.encode(out),
-        };
+            Message::VideoFragment(m) => m.encode(out),
+        })
+    }
+
+    /// Splits one encoded frame into `VIDEO_FRAGMENT` datagrams (vcp.md §6.5) and calls `emit`
+    /// with each, in index order. Host only. `chunk_len` is normally [`crate::MAX_CHUNK_LEN`].
+    /// Returns the number of fragments. Nothing is emitted if the frame or `chunk_len` is out of
+    /// range.
+    pub fn seal_frame(
+        &self,
+        info: &FrameInfo,
+        frame: &[u8],
+        chunk_len: u16,
+        mut emit: impl FnMut(&[u8]),
+    ) -> Result<u32, SealError> {
+        if self.role != Role::Host {
+            return Err(SealError::WrongDirection);
+        }
+        let invalid = SealError::Payload(PayloadError::FragmentLayout);
+        let frame_len = u32::try_from(frame.len()).map_err(|_| invalid)?;
+        let count = fragment_count(frame_len, chunk_len)
+            .filter(|_| info.frame_id != 0)
+            .ok_or(invalid)?;
+        let mut datagram = Vec::with_capacity(MAX_DATAGRAM);
+        for (index, data) in (0..=u16::MAX).zip(frame.chunks(usize::from(chunk_len))) {
+            datagram.clear();
+            self.frame(msg_type::VIDEO_FRAGMENT, &mut datagram, |out| {
+                put_fragment(out, info, frame_len, chunk_len, index, data);
+                Ok(())
+            })?;
+            emit(&datagram);
+        }
+        Ok(count)
+    }
+
+    /// Appends header ‖ payload ‖ tag, with the payload written by `payload`.
+    fn frame(
+        &self,
+        msg_type: u8,
+        out: &mut Vec<u8>,
+        payload: impl FnOnce(&mut Vec<u8>) -> Result<(), PayloadError>,
+    ) -> Result<(), SealError> {
+        let start = out.len();
+        out.extend_from_slice(&MAGIC);
+        out.extend_from_slice(&[PROTOCOL_VERSION, msg_type]);
+        out.extend_from_slice(&self.session_id.to_le_bytes());
+        out.extend_from_slice(&[0, 0]); // len, patched below
+        let payload_start = out.len();
         let fail = |out: &mut Vec<u8>, e| {
             out.truncate(start);
             Err(e)
         };
-        if let Err(e) = encoded {
+        if let Err(e) = payload(out) {
             return fail(out, SealError::Payload(e));
         }
         let payload_len = out.len() - payload_start;
@@ -195,6 +237,9 @@ fn decode(msg_type: u8, payload: &[u8]) -> Result<Message, DropReason> {
                 .ok_or(DropReason::UnknownType)?,
         ),
         msg_type::STATUS => Message::Status(Status::decode(payload).map_err(p)?),
+        msg_type::VIDEO_FRAGMENT => {
+            Message::VideoFragment(VideoFragment::decode(payload).map_err(p)?)
+        }
         _ => return Err(DropReason::UnknownType),
     })
 }
@@ -208,7 +253,7 @@ fn may_send(role: Role, msg: &Message) -> bool {
             Message::Pose(_) | Message::ControlState(_) | Message::Clock(Clock::Reply { .. }),
         ) | (
             Role::Host,
-            Message::Status(_) | Message::Clock(Clock::Request { .. })
+            Message::Status(_) | Message::Clock(Clock::Request { .. }) | Message::VideoFragment(_)
         )
     )
 }

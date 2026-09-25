@@ -1,14 +1,16 @@
 //! UDP message payloads (`docs/protocol/vcp.md` §6). Decoding is exact: the values are the
 //! binary32/integers on the wire. Validation follows §6 and rejects rather than clamps.
 
+use crate::video::VideoFragment;
 use crate::wire::{Reader, put_f32s};
 
-/// Wire type codes (vcp.md §5). Only the UDP types v1 specifies.
+/// Wire type codes (vcp.md §5). Only the UDP types the spec defines.
 pub mod msg_type {
     pub const POSE: u8 = 0x01;
     pub const CONTROL_STATE: u8 = 0x02;
     pub const CLOCK: u8 = 0x03;
     pub const STATUS: u8 = 0x04;
+    pub const VIDEO_FRAGMENT: u8 = 0x05;
 }
 
 /// Why a payload was rejected after the frame checks passed (vcp.md §4.3 steps 8 and §6).
@@ -24,6 +26,8 @@ pub enum PayloadError {
     MotionScaleRange,
     /// `STATUS.camera_name` is not UTF-8 or longer than 63 bytes (§6.4).
     BadName,
+    /// `VIDEO_FRAGMENT` fields or data length break the §6.5 layout rules.
+    FragmentLayout,
 }
 
 /// `POSE` (0x01), 42 bytes (vcp.md §6.1).
@@ -251,13 +255,14 @@ impl Status {
     }
 }
 
-/// Any v1 UDP message.
+/// Any UDP message.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message {
     Pose(Pose),
     ControlState(ControlState),
     Clock(Clock),
     Status(Status),
+    VideoFragment(VideoFragment),
 }
 
 impl Message {
@@ -268,6 +273,7 @@ impl Message {
             Self::ControlState(_) => msg_type::CONTROL_STATE,
             Self::Clock(_) => msg_type::CLOCK,
             Self::Status(_) => msg_type::STATUS,
+            Self::VideoFragment(_) => msg_type::VIDEO_FRAGMENT,
         }
     }
 }

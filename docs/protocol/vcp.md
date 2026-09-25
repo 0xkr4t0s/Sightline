@@ -2,8 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft 1 (2026-09-24). Covers T1: tracking, T1 controls, clock sync, status, pairing, and session setup. |
-| Implements | SRS v3 PR-001..004, PR-006, DM-001..003, NET-002/003, NFR-SEC-001, FR-UX-002, FR-TRK-002/003, FR-CTL-004/009 |
+| Status | Draft 2 (2026-09-25). Covers T1 (tracking, T1 controls, clock sync, status, pairing, session setup) and the T2 `VIDEO_FRAGMENT` (§6.5). |
+| Implements | SRS v3 PR-001..004, PR-006, DM-001..003, NET-002/003, NET-VID-001/004, NFR-SEC-001, FR-UX-002, FR-TRK-002/003, FR-CTL-004/009 |
 | Golden vectors | `testdata/vcp/` (task 1.1.2). If this document and the vectors disagree, fix whichever is wrong; neither wins by default. |
 | Implementations | Rust `native/vcam-protocol` (Blender side), Swift `SightlineIOS` (iPhone side) |
 
@@ -25,7 +25,7 @@ device (iPhone)                                  host (Blender + vcam_native)
 - A session has a random non-zero `session_id` and two directional 256-bit keys. Every UDP datagram carries both.
 - Closing the TCP connection ends the session. Reconnecting starts a new session without re-pairing (NET-004).
 
-Reserved for Phase 2 and later (not specified in v1): `VIDEO_FRAGMENT`, `ACK_KEYFRAME_REQ`, lens/focus/aperture/record/transport fields in `CONTROL_STATE`, take-list TCP messages.
+`VIDEO_FRAGMENT` is specified in §6.5 (Draft 2). Reserved for Phase 2 and later: `ACK_KEYFRAME_REQ`, lens/focus/aperture/record/transport fields in `CONTROL_STATE`, take-list TCP messages.
 
 ## 2. Conventions
 
@@ -42,7 +42,7 @@ Reserved for Phase 2 and later (not specified in v1): `VIDEO_FRAGMENT`, `ACK_KEY
 | Channel | Carries | Notes |
 |---|---|---|
 | TCP (host listens; port advertised) | `HELLO`, pairing, session setup, `ERROR` | One connection per device. It stays open for the session. |
-| UDP (host listens; port given in `SESSION_CHALLENGE`) | `POSE`, `CONTROL_STATE`, `CLOCK`, `STATUS` | Every datagram is authenticated (§4.2). |
+| UDP (host listens; port given in `SESSION_CHALLENGE`) | `POSE`, `CONTROL_STATE`, `CLOCK`, `STATUS`, `VIDEO_FRAGMENT` | Every datagram is authenticated (§4.2). |
 
 - **DNS-SD** (NET-001): the host advertises `_vcam-ctl._tcp` for the control port and `_vcam._udp` for the UDP port while the host session is enabled/listening, including before a device pairs. Both TXT records contain `vcp=1` (highest supported protocol version), `blend=<.blend file name>` (empty for an unsaved file), `host=<machine name>`, `tcp=<decimal TCP port>` and `udp=<decimal UDP port>`. SRV and TXT ports are the actual bound ports. Each TXT key/value entry must fit the DNS-SD 255-byte limit, including `=`. The device uses the UDP port from authenticated `SESSION_CHALLENGE`, not from DNS-SD. Disabling the host session withdraws both services.
 - **Addresses:** the device sends UDP to the host's TCP peer address and the `udp_port` from `SESSION_CHALLENGE`. The host sends UDP to the source address and port of the **most recent authenticated** datagram from the device, so it follows Wi-Fi roaming (NET-004).
@@ -92,7 +92,7 @@ A receiver processes a datagram in this order and **silently drops** it at the f
 | `0x02` | `CONTROL_STATE` | UDP | device → host | on change, then repeated at 2 Hz until acknowledged |
 | `0x03` | `CLOCK` | UDP | request host → device, reply device → host | 1 Hz |
 | `0x04` | `STATUS` | UDP | host → device | 2 Hz and on change |
-| `0x05` | `VIDEO_FRAGMENT` | UDP | host → device | reserved (Phase 2) |
+| `0x05` | `VIDEO_FRAGMENT` | UDP | host → device | per rendered frame (§6.5) |
 | `0x06` | `ACK_KEYFRAME_REQ` | UDP | device → host | reserved (Phase 3) |
 | `0x40` | `HELLO` | TCP | device → host | first message on every connection |
 | `0x41` | `PAIR_CHALLENGE` | TCP | host → device | |
@@ -228,6 +228,48 @@ header   56 43 50 31 01 04 cd ab 34 12 16 00
 payload  02 00 00 00 01 00 00 00 07 00 00 00 00 00 03 06
          43 61 6d 65 72 61
 tag      36 5e ea 92 63 1a ca fe
+```
+
+### 6.5 `VIDEO_FRAGMENT` (0x05), 29–1180 bytes (NET-VID-001, NET-VID-004, FR-VF-002)
+
+The host renders the camera view, encodes each frame as one byte string (a baseline JPEG in Stage A), and splits it into fragments. Each fragment carries the whole frame header, so any single fragment says which frame it belongs to and where its bytes go.
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `frame_id` | u32 | +1 per frame sent within the session, starting at 1. MUST NOT be 0 |
+| 4 | `render_time_ns` | u64 | host clock (§2) when Blender rendered the frame (NET-VID-004) |
+| 12 | `pose_seq` | u32 | `POSE.seq` of the pose the frame was rendered from (0 = none; ARC-004) |
+| 16 | `frame_len` | u32 | length of the encoded frame in bytes, 1–4194304 (4 MiB) |
+| 20 | `frag_index` | u16 | this fragment's position, 0-based |
+| 22 | `chunk_len` | u16 | bytes in every fragment of this frame except the last, 1–1152 |
+| 24 | `codec` | u8 | 0 = JPEG (Stage A, NET-VID-001); 1 = H.264 Annex B access unit (reserved, T3); others reserved |
+| 25 | `flags` | u8 | bit 0 keyframe (the frame decodes on its own; always 1 for JPEG); bits 1–7 reserved |
+| 26 | reserved | u16 | 0 |
+| 28 | `data` | bytes | bytes `frag_index·chunk_len …` of the encoded frame; the rest of the payload |
+
+- **Fragment count:** `count = ⌈frame_len / chunk_len⌉`. Fragment `i < count − 1` carries exactly `chunk_len` bytes; the last carries `frame_len − (count − 1)·chunk_len`. 1152 is the largest `chunk_len`, because 12 + 28 + 1152 + 8 = 1200 (§3). The host SHOULD use 1152 unless the path needs smaller datagrams.
+- **Validation (§4.3 step 8):** the receiver drops a fragment if the payload is shorter than 29 bytes, `frame_id` = 0, `frame_len` or `chunk_len` is outside its range, `count` > 65536, `frag_index` ≥ `count`, or the `data` length isn't the one given above. `data` fills the rest of the payload, so this type is the one exception to §2's rule on longer payloads: later versions extend it through `flags` and the reserved field, not by appending.
+- **Consistency:** every fragment of one `frame_id` carries the same `render_time_ns`, `pose_seq`, `frame_len`, `chunk_len`, `codec` and `flags`.
+- **Pacing:** the host sends a frame's fragments in index order, back to back, and never retransmits one. When a newer frame is ready before an older one is fully sent, the host MAY stop sending the older one.
+
+**Reassembly (device, one frame in progress per session).** The receiver keeps a *floor* (the highest `frame_id` it has finished with; 0 at session start) and at most one frame in progress. For each valid fragment:
+
+1. `frame_id` ≤ floor, or less than the frame in progress: **stale**, drop it.
+2. `frame_id` greater than the frame in progress: **abandon** that frame (NET-VID-001: an incomplete frame is dropped when a newer one starts; count it as lost), set floor to its id, and continue.
+3. No frame in progress: start one from this fragment's header, with a `frame_len` buffer. The size limit bounds the allocation, and it only happens after the tag has verified.
+4. Header differs from the frame in progress (see Consistency): **inconsistent**. Drop the frame and set floor to its id.
+5. `frag_index` already received: **duplicate**, ignore it.
+6. Otherwise copy `data` to offset `frag_index·chunk_len`. When all `count` fragments are in, the frame is **complete**: set floor to its id and hand the frame to the decoder. A device that doesn't support `codec` drops the frame there.
+
+The device presents the newest complete frame at once and never queues frames (FR-VF-002). Gaps in completed `frame_id`s count as lost frames in the stats (NET-VID-005). `testdata/vcp/video.json` has fragmentation cases, invalid fragments, and reassembly scenarios with the outcome of every step.
+
+Example: the first of three fragments of a 10-byte frame (`ff d8 ff e0 00 10 4a 46 ff d9`, not a decodable JPEG) with `chunk_len=4`; `frame_id=1`, `render_time_ns=5000000000`, `pose_seq=1`, JPEG, keyframe:
+
+```
+header   56 43 50 31 01 05 cd ab 34 12 20 00
+payload  01 00 00 00 00 f2 05 2a 01 00 00 00 01 00 00 00
+         0a 00 00 00 00 00 04 00 00 01 00 00 ff d8 ff e0
+tag      e5 1d 89 3b f2 b6 b3 58
 ```
 
 ## 7. Canonical pose and coordinates (DM-001..003)
@@ -401,7 +443,7 @@ Example session keys used in the §6 examples (test values only, never used for 
 | O-1 | Which system clock `ARFrame.timestamp` uses. The device's `CLOCK` timestamps must come from the same one. The SDK header doesn't say. | 1.4.2 (device check) |
 | O-2 | ARKit camera-local axes for the landscape orientation the app uses (§7) | 1.4.2 (device check) |
 | O-3 | Interop between `swift-srp` and the Rust SRP code against these exact formulas: RFC 5054 test vectors plus `testdata/vcp/pairing.json`. **Rust side verified 2026-09-24** (`vcam-protocol`: RFC 5054 App. B through the same generic code path, and a full byte-exact `pairing.json` transcript). **Swift side verified 2026-09-25** (`SightlineIOS/SightlineIOS/VCP/VCPPairing.swift` on `swift-srp` 2.4.0: RFC 5054 App. B through the same generic client, byte-exact `pairing.json` and `session.json`). Closed. | 1.4.x |
-| O-4 | `VIDEO_FRAGMENT` layout, `ACK_KEYFRAME_REQ`, and T2/T3 `CONTROL_STATE` fields | Phase 2/3 |
+| O-4 | `ACK_KEYFRAME_REQ` and T2/T3 `CONTROL_STATE` fields. The `VIDEO_FRAGMENT` layout was settled on 2026-09-25 (§6.5) | Phase 2/3 |
 
 ## 14. Change log
 
@@ -409,3 +451,4 @@ Example session keys used in the §6 examples (test values only, never used for 
 |---|---|
 | 2026-09-24 | Draft 1: header, `POSE`, `CONTROL_STATE` (T1 subset), `CLOCK`, `STATUS`, SRP-6a pairing, session setup, HMAC trailer. |
 | 2026-09-25 | O-3 closed: the Swift client (`swift-srp` 2.4.0) matches RFC 5054 App. B, `pairing.json` and `session.json`. No wire change. |
+| 2026-09-25 | Draft 2: `VIDEO_FRAGMENT` (§6.5): fragment layout, validation, and device reassembly (task 2.2a). Vectors in `testdata/vcp/video.json`. The T1 messages are unchanged. |
