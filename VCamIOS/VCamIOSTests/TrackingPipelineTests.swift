@@ -22,6 +22,18 @@ final class TrackingPipelineTests: XCTestCase {
         var anyOnMain: Bool { lock.withLock { items.contains { $0.1 } } }
     }
 
+    /// Keeps only the newest snapshot, without touching the heap (unlike `Recorder`'s array).
+    private final class Latest: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: TrackingSnapshot?
+
+        func set(_ snapshot: TrackingSnapshot) {
+            lock.withLock { value = snapshot }
+        }
+
+        var snapshot: TrackingSnapshot? { lock.withLock { value } }
+    }
+
     /// A UDP socket on 127.0.0.1 that plays the host; it replies to the last sender, as the host does.
     private final class LoopbackReceiver {
         let fd: Int32
@@ -241,6 +253,136 @@ final class TrackingPipelineTests: XCTestCase {
         XCTAssertNil(host.receive(timeout: 0.3))
         XCTAssertEqual(recorder.poses.last?.seq, 29)  // built and shown all the same
         pipeline.stop()
+    }
+
+    /// Sends `frames` poses (after 10 warm-up frames) on the calling thread inside `queue.sync`, so
+    /// the counter sees exactly the pipeline's per-pose work, then reads them back as the host.
+    private func sendPoses(_ frames: Int) throws -> (allocations: Int, last: VCPPose?, leg: SendLegSummary?) {
+        let (device, blender) = try goldenSession()
+        let host = try LoopbackReceiver()
+        var room: Int32 = 8 << 20  // hold every datagram until it is read
+        setsockopt(host.fd, SOL_SOCKET, SO_RCVBUF, &room, socklen_t(MemoryLayout<Int32>.size))
+        let latest = Latest()
+        let pipeline = TrackingPipeline(publish: latest.set)
+        pipeline.start(TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device))
+        defer { pipeline.stop() }
+        let warmUp = 10
+        var allocations = -1
+        pipeline.queue.sync {
+            let frame = { (i: Int) in
+                pipeline.receive(transform: self.translation(Float(i)), timestamp: 100 + Double(i) / 60,
+                                 trackingState: VCPTrackingState.normal)
+            }
+            for i in 0..<warmUp {
+                frame(i)
+            }
+            allocations = heapAllocations {
+                for i in warmUp..<warmUp + frames {
+                    frame(i)
+                }
+            }
+        }
+        var last: VCPPose?
+        while last?.seq != UInt32(warmUp + frames), let datagram = next(VCPMessageType.pose, from: host, timeout: 2) {
+            guard case let .pose(pose) = try blender.open(datagram).get() else { throw POSIXError(.EBADMSG) }
+            last = pose
+        }
+        return (allocations, last, latest.snapshot?.sendLeg)
+    }
+
+    /// NFR-LAT-002: from the frame reaching the pipeline to the POSE handed to the kernel, a pose
+    /// allocates nothing. Checked on optimised code only (CI runs this test with `-configuration
+    /// Release`): at `-Onone` generics stay unspecialised and closures boxed, about 12 blocks a pose.
+    func testPoseSendPathAllocatesNothing() throws {
+        #if DEBUG
+        throw XCTSkip("allocation-free only when optimised: run with -configuration Release")
+        #else
+        // The counter works here: an array of one byte is one allocation.
+        var bytes: [UInt8] = []
+        XCTAssertEqual(heapAllocations { bytes = [UInt8](repeating: 1, count: 1) }, 1)
+        XCTAssertEqual(bytes, [1])
+
+        let (allocations, last, _) = try sendPoses(600)
+        XCTAssertEqual(allocations, 0, "heap allocations over 600 poses")
+        XCTAssertEqual(last?.position.x, 609, "the last pose arrives, authentic and intact")
+        print("VCAM_SEND_ALLOCATIONS poses=600 allocations=\(allocations)")
+        #endif
+    }
+
+    /// NFR-LAT-002: every pose handed to the kernel is a send-leg sample of its run.
+    func testSendLegIsMeasuredForSentPoses() throws {
+        let (_, last, sendLeg) = try sendPoses(600)
+        XCTAssertEqual(last?.position.x, 609, "the last pose arrives, authentic and intact")
+        let leg = try XCTUnwrap(sendLeg)
+        XCTAssertEqual(leg.count, 609)  // as of the last publish: frame 608 (every 4th frame at 60 Hz)
+        XCTAssertLessThanOrEqual(leg.p50, leg.p95)
+        XCTAssertLessThanOrEqual(leg.p95, leg.max)
+        XCTAssertTrue(leg.meetsTarget, "send leg p95 \(leg.p95) ns")
+        print("VCAM_SEND_LEG n=\(leg.count) p50=\(leg.p50) p95=\(leg.p95) p99=\(leg.p99) max=\(leg.max) ns")
+    }
+
+    /// Unpaired frames aren't send-leg samples: nothing was handed to the kernel.
+    func testSendLegIsNotMeasuredWithoutASession() {
+        let latest = Latest()
+        let pipeline = TrackingPipeline(publish: latest.set)
+        pipeline.start(unpaired)
+        feed(pipeline, frames: 0..<8, rate: 60)
+        pipeline.stop()
+        XCTAssertNotNil(latest.snapshot?.pose)
+        XCTAssertNil(latest.snapshot?.sendLeg)
+    }
+
+    /// A host name (not an address) is resolved off the ARKit queue; poses flow once it is.
+    func testHostNameIsResolvedAndPosesFlow() throws {
+        let (device, blender) = try goldenSession()
+        let host = try LoopbackReceiver()
+        let pipeline = TrackingPipeline(publish: { _ in })
+        pipeline.start(TrackingDestination(host: "localhost", port: host.port, endpoint: device))
+        var received: VCPPose?
+        for i in 0..<100 where received == nil {
+            feed(pipeline, frames: i..<i + 1, rate: 60)
+            if let datagram = next(VCPMessageType.pose, from: host, timeout: 0.05),
+               case let .pose(pose) = try blender.open(datagram).get() {
+                received = pose
+            }
+        }
+        XCTAssertNotNil(received, "no POSE reached 127.0.0.1 via \"localhost\"")
+        pipeline.stop()
+    }
+
+    /// Nearest-rank percentiles report their bin's upper edge (capped at the maximum), and samples
+    /// past the last bin still count.
+    func testSendLegMeterPercentiles() throws {
+        var meter = SendLegMeter()
+        XCTAssertNil(meter.summary)
+        meter.add(3_000)
+        XCTAssertEqual(meter.summary, SendLegSummary(count: 1, p50: 3_000, p95: 3_000, p99: 3_000, max: 3_000))
+
+        meter = SendLegMeter()
+        for i in 0..<100 {
+            meter.add(UInt64(i) * 10_000 + 5_000)  // one sample in each of bins 0...99
+        }
+        XCTAssertEqual(meter.summary, SendLegSummary(count: 100, p50: 500_000, p95: 950_000, p99: 990_000, max: 995_000))
+
+        // Ten samples: the 95th percentile's rank is 9.5, rounded up to the 10th (the maximum).
+        meter = SendLegMeter()
+        for i in 0..<10 {
+            meter.add(UInt64(i) * 10_000 + 5_000)
+        }
+        XCTAssertEqual(meter.summary, SendLegSummary(count: 10, p50: 50_000, p95: 95_000, p99: 95_000, max: 95_000))
+
+        meter = SendLegMeter()
+        for _ in 0..<80 {
+            meter.add(1_000)
+        }
+        for _ in 0..<20 {
+            meter.add(6_000_000)  // past the 5 ms of bins
+        }
+        let summary = try XCTUnwrap(meter.summary)
+        XCTAssertEqual(summary, SendLegSummary(count: 100, p50: 10_000, p95: 6_000_000, p99: 6_000_000, max: 6_000_000))
+        XCTAssertFalse(summary.meetsTarget)
+        XCTAssertTrue(SendLegSummary(count: 1, p50: 0, p95: 2_000_000, p99: 0, max: 0).meetsTarget)
+        XCTAssertFalse(SendLegSummary(count: 1, p50: 0, p95: 2_000_001, p99: 0, max: 0).meetsTarget)
     }
 
     /// vcp.md §6.2: a run opens with its complete state as `state_seq` 1, every real change is the

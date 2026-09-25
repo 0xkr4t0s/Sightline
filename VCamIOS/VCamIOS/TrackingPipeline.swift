@@ -11,6 +11,8 @@ nonisolated struct TrackingSnapshot: Equatable, Sendable {
     /// `STATUS.control_ack` the host has sent back (vcp.md §6.2).
     var controlSeq: UInt32 = 0
     var controlAck: UInt32 = 0
+    /// NFR-LAT-002's send leg over this run's poses; nil until one has been sent.
+    var sendLeg: SendLegSummary?
 }
 
 /// Where poses go: the host's UDP address and the session that authenticates them (vcp.md §4).
@@ -95,13 +97,68 @@ nonisolated struct UIThrottle: Sendable {
     }
 }
 
+/// Send-leg percentiles in nanoseconds (NFR-LAT-002).
+nonisolated struct SendLegSummary: Equatable, Sendable {
+    var count: Int
+    var p50: UInt64
+    var p95: UInt64
+    var p99: UInt64
+    var max: UInt64
+
+    /// NFR-LAT-002: p95 ≤ 2 ms.
+    var meetsTarget: Bool { p95 <= SendLegMeter.target }
+}
+
+/// NFR-LAT-002's send leg on the device: the ARKit frame reaching the pipeline → its POSE datagram
+/// handed to the kernel. Samples go into 10 µs bins up to 5 ms, plus one overflow bin, so recording
+/// a pose allocates nothing. Percentiles are nearest-rank and report the upper edge of their bin
+/// (capped at the maximum), so they never understate.
+nonisolated struct SendLegMeter: Sendable {
+    static let binWidth: UInt64 = 10_000
+    static let target: UInt64 = 2_000_000
+
+    private var bins = InlineArray<500, UInt32>(repeating: 0)
+    private(set) var count = 0
+    private var max: UInt64 = 0
+
+    mutating func add(_ ns: UInt64) {
+        if ns < Self.binWidth * UInt64(bins.count) {
+            bins[Int(ns / Self.binWidth)] &+= 1
+        }
+        count += 1
+        max = Swift.max(max, ns)
+    }
+
+    var summary: SendLegSummary? {
+        guard count > 0 else {
+            return nil
+        }
+        return SendLegSummary(count: count, p50: percentile(50), p95: percentile(95), p99: percentile(99), max: max)
+    }
+
+    /// The smallest bin edge with at least `percent` % of the samples at or below it.
+    private func percentile(_ percent: Int) -> UInt64 {
+        let rank = (count * percent + 99) / 100
+        var seen = 0
+        for i in bins.indices {
+            seen += Int(bins[i])
+            if seen >= rank {
+                return Swift.min(UInt64(i + 1) * Self.binWidth, max)
+            }
+        }
+        return max  // in the overflow bin
+    }
+}
+
 /// The per-frame path, off the main actor (ARC-005): ARKit frame → VCP `POSE` → sealed datagram →
 /// UDP send, on one serial queue (FR-TRK-001/002, PR-FD-001). The same path sends the rig controls
 /// as `CONTROL_STATE` and reads the host's `STATUS` for their acknowledgement (vcp.md §6.2).
 ///
-/// That queue is the actor's executor, the `ARSession` delegate queue, and the UDP connection's
-/// queue, so ARKit callbacks, send completions, received datagrams and the retransmit timer run
-/// inside the actor with no hop. The main actor only receives throttled snapshots through `publish`.
+/// That queue is the actor's executor, the `ARSession` delegate queue, and the UDP socket's read
+/// queue, so ARKit callbacks, received datagrams and the retransmit timer run inside the actor with
+/// no hop. A pose is sealed into one reused buffer and handed to the kernel by a single `send`, so
+/// the per-pose path allocates nothing (NFR-LAT-002). The main actor only receives throttled
+/// snapshots through `publish`.
 actor TrackingPipeline {
     nonisolated let queue = DispatchSerialQueue(label: "VCamIOS.TrackingPipeline", qos: .userInteractive)
 
@@ -118,6 +175,11 @@ actor TrackingPipeline {
     private var controls = DeviceControls()
     private var statusFilter = VCPSeqFilter()
     private var controlTimer: DispatchSourceTimer?
+    /// Every datagram is sealed into this buffer; its capacity is reserved once.
+    private var datagram: [UInt8] = []
+    private var sendLeg = SendLegMeter()
+    /// Bumped by every start and stop, so a host name resolved after its run ended is ignored.
+    private var run: UInt64 = 0
 
     /// vcp.md §6.2: the latest state is repeated this often until the host acknowledges it.
     static let controlRepeatInterval: DispatchTimeInterval = .milliseconds(500)
@@ -125,6 +187,7 @@ actor TrackingPipeline {
     init(publish: @escaping @Sendable (TrackingSnapshot) -> Void) {
         self.publish = publish
         sender = UDPSender(queue: queue)
+        datagram.reserveCapacity(VCPEndpoint.maxDatagram)
     }
 
     /// Starts a tracking run: `seq` and `state_seq` restart at 1 (vcp.md §6.1, §6.2), and the
@@ -135,14 +198,17 @@ actor TrackingPipeline {
             assumeIsolated { pipeline in
                 pipeline.sender.close()
                 pipeline.sender.onReceive = { [weak pipeline] data in
-                    // Received datagrams are delivered on the connection's queue, which is `queue`.
+                    // Received datagrams are delivered on the socket's read queue, which is `queue`.
                     pipeline?.assumeIsolated { $0.handleIncoming(data) }
                 }
+                pipeline.run &+= 1
                 pipeline.destination = destination
                 pipeline.seq = 0
                 pipeline.throttle = UIThrottle()
                 pipeline.snapshot = TrackingSnapshot(pose: nil, packetsSent: 0, sendError: nil)
+                pipeline.sendLeg = SendLegMeter()
                 pipeline.statusFilter = VCPSeqFilter()
+                pipeline.connect()
                 pipeline.sendNewControlState()
             }
         }
@@ -152,6 +218,7 @@ actor TrackingPipeline {
     nonisolated func stop() {
         queue.sync {
             assumeIsolated { pipeline in
+                pipeline.run &+= 1
                 pipeline.destination = nil
                 pipeline.cancelControlTimer()
                 pipeline.sender.close()
@@ -177,11 +244,21 @@ actor TrackingPipeline {
 
     /// Entry point for ARKit frames. Must be called on `queue` (the ARSession delegate queue).
     /// `timestamp` is `ARFrame.timestamp` (seconds, device clock); `trackingState` a §6.1 code.
+    ///
+    /// Not `assumeIsolated`: it wraps its closure with `withoutActuallyEscaping` and a bit-cast,
+    /// which costs 2 heap blocks (closure contexts) per call, i.e. per pose (measured, task
+    /// 1.5.1b). This does the same without closures: `dispatchPrecondition` is the isolation check
+    /// (`queue` is the actor's executor), and `handleFrame` is a context-free function whose
+    /// `isolated` parameter is dropped by the same bit-cast the standard library uses.
     nonisolated func receive(transform: simd_float4x4, timestamp: TimeInterval, trackingState: UInt8) {
-        assumeIsolated { $0.handle(transform: transform, timestamp: timestamp, trackingState: trackingState) }
+        let arrived = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        dispatchPrecondition(condition: .onQueue(queue))
+        typealias Isolated = (isolated TrackingPipeline, simd_float4x4, TimeInterval, UInt8, UInt64) -> Void
+        typealias Unchecked = (TrackingPipeline, simd_float4x4, TimeInterval, UInt8, UInt64) -> Void
+        unsafeBitCast(handleFrame as Isolated, to: Unchecked.self)(self, transform, timestamp, trackingState, arrived)
     }
 
-    private func handle(transform: simd_float4x4, timestamp: TimeInterval, trackingState: UInt8) {
+    fileprivate func handle(transform: simd_float4x4, timestamp: TimeInterval, trackingState: UInt8, arrived: UInt64) {
         guard destination != nil else {
             return
         }
@@ -191,32 +268,75 @@ actor TrackingPipeline {
                            position: canonical.position, orientation: canonical.orientation,
                            trackingState: trackingState)
         snapshot.pose = pose
-        send(.pose(pose))
+        if send(.pose(pose)) {
+            sendLeg.add(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) &- arrived)
+        }
         if throttle.shouldPublish(at: timestamp) {
+            snapshot.sendLeg = sendLeg.summary
             publish(snapshot)
         }
     }
 
-    /// Seals and sends one message; without a session endpoint nothing leaves the device.
-    private func send(_ message: VCPMessage) {
-        guard let destination, let endpoint = destination.endpoint else {
+    /// Opens the socket for a paired run. An address connects at once; a host name is resolved off
+    /// the ARKit queue (it may take a DNS or mDNS round trip), and datagrams before that are dropped.
+    private func connect() {
+        guard let destination, destination.endpoint != nil else {
             return
         }
-        do {
-            let datagram = try endpoint.seal(message)
-            sender.send(Data(datagram), host: destination.host, port: destination.port) { [weak self] error in
-                // Completions run on the connection's queue, which is `queue`.
-                self?.assumeIsolated { $0.record(error) }
+        let (host, port, run) = (destination.host, destination.port, run)
+        if case let .success(address) = UDPSender.resolve(host: host, port: port, numericOnly: true) {
+            connected(.success(address), run: run)
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let resolved = UDPSender.resolve(host: host, port: port, numericOnly: false)
+            queue.async { self.assumeIsolated { $0.connected(resolved, run: run) } }
+        }
+    }
+
+    private func connected(_ resolved: Result<UDPAddress, UDPResolveError>, run: UInt64) {
+        guard run == self.run else {
+            return
+        }
+        switch resolved {
+        case let .success(address):
+            if let code = sender.connect(to: address) {
+                snapshot.sendError = "Can't open the UDP socket: \(String(cString: strerror(code)))"
             }
+        case let .failure(error):
+            snapshot.sendError = "Can't resolve \(destination?.host ?? ""): \(error.message)"
+        }
+    }
+
+    /// Seals and sends one message; `true` if it was handed to the kernel. Without a session
+    /// endpoint nothing leaves the device.
+    private func send(_ message: VCPMessage) -> Bool {
+        guard let endpoint = destination?.endpoint else {
+            return false
+        }
+        do {
+            try endpoint.seal(message, into: &datagram)
         } catch {
             snapshot.sendError = "Message \(message.type) not sealed: \(error)"
+            return false
+        }
+        switch sender.send(datagram) {
+        case .sent:
+            snapshot.packetsSent += 1
+            snapshot.sendError = nil
+            return true
+        case .notConnected:
+            return false
+        case let .failed(code):
+            snapshot.sendError = String(cString: strerror(code))
+            return false
         }
     }
 
     /// vcp.md §6.2: `state_seq` + 1, send on change, then repeat every 500 ms until acknowledged.
     private func sendNewControlState() {
         snapshot.controlSeq &+= 1
-        send(.controlState(controls.message(seq: snapshot.controlSeq)))
+        _ = send(.controlState(controls.message(seq: snapshot.controlSeq)))
         cancelControlTimer()
         guard destination?.endpoint != nil else {
             return
@@ -235,7 +355,7 @@ actor TrackingPipeline {
             cancelControlTimer()
             return
         }
-        send(.controlState(controls.message(seq: snapshot.controlSeq)))
+        _ = send(.controlState(controls.message(seq: snapshot.controlSeq)))
     }
 
     private func cancelControlTimer() {
@@ -257,16 +377,11 @@ actor TrackingPipeline {
             cancelControlTimer()
         }
     }
+}
 
-    private func record(_ error: String?) {
-        guard destination != nil else {
-            return
-        }
-        if let error {
-            snapshot.sendError = error
-        } else {
-            snapshot.packetsSent += 1
-            snapshot.sendError = nil
-        }
-    }
+/// `TrackingPipeline.receive`'s way into the actor: a free function, so referring to it captures
+/// nothing (a static method would capture its metatype: one heap block per call).
+private func handleFrame(_ pipeline: isolated TrackingPipeline, _ transform: simd_float4x4, _ timestamp: TimeInterval,
+                         _ trackingState: UInt8, _ arrived: UInt64) {
+    pipeline.handle(transform: transform, timestamp: timestamp, trackingState: trackingState, arrived: arrived)
 }

@@ -62,6 +62,10 @@ struct SettingsView: View {
                     .buttonStyle(.borderedProminent)
 
                     LabeledContent("Packets Sent", value: "\(controller.packetsSent)")
+                    if let leg = controller.sendLeg {
+                        LabeledContent("Send leg p95", value: Self.sendLegText(leg))
+                            .foregroundStyle(leg.meetsTarget ? Color.primary : Color.orange)
+                    }
                     LabeledContent("Session", value: controller.sessionStatus)
                     if let understanding = controller.sceneUnderstanding {
                         LabeledContent("Scene understanding", value: understanding.summary)
@@ -131,6 +135,12 @@ struct SettingsView: View {
 
     private static func format(_ scale: Float) -> String {
         String(format: "%g", scale)
+    }
+
+    /// NFR-LAT-002: "0.04 ms (p99 0.06, max 0.31, 1234 poses)".
+    private static func sendLegText(_ leg: SendLegSummary) -> String {
+        func ms(_ ns: UInt64) -> String { String(format: "%.2f", Double(ns) / 1e6) }
+        return "\(ms(leg.p95)) ms (p99 \(ms(leg.p99)), max \(ms(leg.max)), \(leg.count) poses)"
     }
 
     private func lock(_ flag: UInt8) -> Binding<Bool> {

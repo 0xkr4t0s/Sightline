@@ -250,3 +250,8 @@ jobs:
         run: |
           xcodebuild test -project VCamIOS/VCamIOS.xcodeproj -scheme VCamIOS \
             -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+      - name: Pose send path allocates nothing (NFR-LAT-002; needs optimised code)
+        run: |
+          xcodebuild test -configuration Release -project VCamIOS/VCamIOS.xcodeproj -scheme VCamIOS \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+            -only-testing:VCamIOSTests/TrackingPipelineTests/testPoseSendPathAllocatesNothing

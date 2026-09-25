@@ -32,6 +32,8 @@ final class TrackingSessionController {
     private(set) var controlAck: UInt32 = 0
     /// Poses per second over the last second of capture time (status screen), nil until known.
     private(set) var poseRate: Double?
+    /// NFR-LAT-002's send leg over this run's sent poses, nil until one has been sent.
+    private(set) var sendLeg: SendLegSummary?
     /// The device's thermal state, kept current from `ProcessInfo` notifications (FR-UX-004).
     private(set) var thermal = ThermalStatus(state: ProcessInfo.processInfo.thermalState)
 
@@ -107,6 +109,7 @@ final class TrackingSessionController {
             latestPose = nil
             rateMeter = PoseRateMeter()
             poseRate = nil
+            sendLeg = nil
             sceneUnderstanding = understanding
             isTracking = true
             sessionStatus = "Starting"
@@ -163,6 +166,7 @@ final class TrackingSessionController {
             poseRate = rateMeter.rate
         }
         packetsSent = snapshot.packetsSent
+        sendLeg = snapshot.sendLeg
         controlSeq = snapshot.controlSeq
         controlAck = snapshot.controlAck
         if let error = snapshot.sendError {

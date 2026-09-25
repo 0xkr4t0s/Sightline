@@ -1,4 +1,4 @@
-import CryptoKit
+import CommonCrypto
 import Foundation
 
 /// Authenticated UDP framing for one session (docs/protocol/vcp.md §4): 12-byte header,
@@ -32,36 +32,48 @@ nonisolated struct VCPEndpoint: Sendable {
 
     let role: VCPRole
     let sessionID: UInt32
-    private let sendKey: SymmetricKey
-    private let receiveKey: SymmetricKey
+    private let sendKey: [UInt8]
+    private let receiveKey: [UInt8]
 
     /// `nil` if `sessionID` is 0 (reserved, §10.1) or a key isn't 32 bytes.
     init?(role: VCPRole, sessionID: UInt32, kD2H: [UInt8], kH2D: [UInt8]) {
         guard sessionID != 0, kD2H.count == 32, kH2D.count == 32 else { return nil }
         self.role = role
         self.sessionID = sessionID
-        let d2h = SymmetricKey(data: kD2H), h2d = SymmetricKey(data: kH2D)
-        (sendKey, receiveKey) = role == .device ? (d2h, h2d) : (h2d, d2h)
+        (sendKey, receiveKey) = role == .device ? (kD2H, kH2D) : (kH2D, kD2H)
     }
 
     /// One complete datagram: header ‖ payload ‖ tag.
     func seal(_ message: VCPMessage) throws(VCPSealError) -> [UInt8] {
-        guard Self.maySend(role, message) else { throw .wrongDirection }
-        var payload: [UInt8] = []
-        switch message {
-        case let .pose(m): m.encode(into: &payload)
-        case let .controlState(m): m.encode(into: &payload)
-        case let .clock(m): m.encode(into: &payload)
-        case let .status(m):
-            do { try m.encode(into: &payload) } catch { throw .payload(error) }
-        }
-        guard Self.headerLength + payload.count + Self.tagLength <= Self.maxDatagram else { throw .tooLarge }
-        var out = Self.magic + [Self.version, message.type]
-        out.appendLE(sessionID)
-        out.appendLE(UInt16(payload.count))
-        out += payload
-        out += Self.tag(for: out[...], key: sendKey)
+        var out: [UInt8] = []
+        try seal(message, into: &out)
         return out
+    }
+
+    /// Writes one complete datagram into `out`, replacing its contents (undefined after a throw).
+    /// Once `out` has `maxDatagram` capacity, sealing a POSE, CONTROL_STATE or CLOCK touches no
+    /// heap: the per-pose send path allocates nothing (NFR-LAT-002).
+    func seal(_ message: VCPMessage, into out: inout [UInt8]) throws(VCPSealError) {
+        guard Self.maySend(role, message) else { throw .wrongDirection }
+        out.removeAll(keepingCapacity: true)
+        out.append(contentsOf: Self.magic)
+        out.append(Self.version)
+        out.append(message.type)
+        out.appendLE(sessionID)
+        out.appendLE(UInt16(0))  // payload length, filled in below
+        switch message {
+        case let .pose(m): m.encode(into: &out)
+        case let .controlState(m): m.encode(into: &out)
+        case let .clock(m): m.encode(into: &out)
+        case let .status(m):
+            do { try m.encode(into: &out) } catch { throw .payload(error) }
+        }
+        let length = out.count - Self.headerLength
+        guard out.count + Self.tagLength <= Self.maxDatagram else { throw .tooLarge }
+        out[Self.headerLength - 2] = UInt8(truncatingIfNeeded: length)
+        out[Self.headerLength - 1] = UInt8(truncatingIfNeeded: length >> 8)
+        let mac = out.withUnsafeBytes { Self.mac($0, key: sendKey) }
+        withUnsafeBytes(of: mac) { out.append(contentsOf: $0.prefix(Self.tagLength)) }
     }
 
     /// Checks one datagram against §4.3 in order and decodes it. Freshness is the caller's job.
@@ -76,7 +88,8 @@ nonisolated struct VCPEndpoint: Sendable {
         let authed = Self.headerLength + Int(len)
         guard authed + Self.tagLength == d.count else { return .failure(.length) }
         guard sid != 0, sid == sessionID else { return .failure(.session) }
-        guard Self.constantTimeEqual(Self.tag(for: d[..<authed], key: receiveKey), Array(d[authed...]))
+        let expected = datagram.withUnsafeBytes { Self.mac(UnsafeRawBufferPointer(rebasing: $0[..<authed]), key: receiveKey) }
+        guard withUnsafeBytes(of: expected, { Self.constantTimeEqual(Array($0.prefix(Self.tagLength)), Array(d[authed...])) })
         else { return .failure(.tag) }
         let payload = d[Self.headerLength..<authed]
         let message: VCPMessage
@@ -96,8 +109,17 @@ nonisolated struct VCPEndpoint: Sendable {
         return Self.maySend(role.peer, message) ? .success(message) : .failure(.unknownType)
     }
 
-    private static func tag(for data: ArraySlice<UInt8>, key: SymmetricKey) -> [UInt8] {
-        Array(HMAC<SHA256>.authenticationCode(for: data, using: key)).prefix(tagLength).map { $0 }
+    /// HMAC-SHA256 of `data` (§4.2; the tag is its first `tagLength` bytes). CommonCrypto's one-shot
+    /// call keeps its state on the stack; CryptoKit's `HMAC` allocates 4–8 blocks per call.
+    private static func mac(_ data: UnsafeRawBufferPointer, key: [UInt8]) -> (UInt64, UInt64, UInt64, UInt64) {
+        var mac: (UInt64, UInt64, UInt64, UInt64) = (0, 0, 0, 0)
+        withUnsafeMutableBytes(of: &mac) { out in
+            key.withUnsafeBytes { k in
+                CCHmac(CCHmacAlgorithm(kCCHmacAlgSHA256), k.baseAddress, k.count, data.baseAddress, data.count,
+                       out.baseAddress)
+            }
+        }
+        return mac
     }
 
     /// Compares every byte regardless of where the first difference is.

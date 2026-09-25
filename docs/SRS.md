@@ -581,6 +581,24 @@ Findings (no requirement changed):
 - **Apply cost:** p95 ≈ 0.1 ms, but single applies reached 1.17, 1.34 and 1.65 ms in 3 of 13 runs (where checked, mid-stream, not the first, rig-creating apply). The report judges NFR-LAT-001's "≤ 1 ms" on every apply (`meets.apply_max`), so it flags these.
 - The Wi-Fi pose leg needs a real iPhone (owner): its capture clock is still open item O-1.
 
+### 13.5 Send-leg note — 2026-09-25 (task 1.5.1b, iOS pipeline, iPhone 17 Pro simulator on Apple M4 Pro)
+
+Setup: `TrackingPipeline` with the golden session, 600 poses at 60 Hz into a loopback UDP socket playing the host. Send leg = the frame reaching `TrackingPipeline.receive` → `send(2)` returned for its POSE. Heap allocations were counted per thread through libmalloc's `malloc_logger` hook (`VCamIOSTests/AllocationCounter.swift`). Tests: `TrackingPipelineTests.testSendLegIsMeasuredForSentPoses`, `testPoseSendPathAllocatesNothing`.
+
+Heap blocks per call before the change (a throwaway probe; the loop's own block per call subtracted). The `seal` and framework rows ran in a `-Onone` test build (CryptoKit and Network are system binaries, so their counts don't depend on it); the `assumeIsolated` row is from an optimised build:
+
+| Step | Blocks per call |
+|---|---|
+| `VCPEndpoint.seal` (growing arrays, CryptoKit `HMAC<SHA256>`) | 105 |
+| CryptoKit HMAC alone (one-shot / prepared state copied) | 8 / 4 |
+| `NWConnection.send` (new `Data`, `.contentProcessed` / reused `Data`, `.idempotent`) | 9 / 5 |
+| `Actor.assumeIsolated` (closure contexts from `withoutActuallyEscaping` + bit-cast) | 2 |
+| CommonCrypto `CCHmac` one-shot; BSD `send(2)` on a connected socket | 0 |
+
+Results after the change: 0 blocks over 600 poses in an optimised build. At `-Onone` about 12 blocks per pose remain from unspecialised generics and boxed closures, so the check runs with `-configuration Release` (a CI step). Send leg p50 / p95 / max: 0.01–0.02 / 0.02 / 0.022–0.025 ms optimised, 0.02–0.026 / 0.02–0.026 / 0.020–0.026 ms at `-Onone` (10 µs bins). NFR-LAT-002's 2 ms p95 has about 100× headroom on this host; a device run is still needed.
+
+Flag (no requirement changed): §1.4 lists the Network framework (`NetworkConnection`) as the iOS networking API. To meet NFR-LAT-002's "no allocation per pose", the pose/control UDP socket is now a BSD socket (`VCamIOS/VCamIOS/UDPSender.swift`); discovery stays on `NetworkBrowser`, and the TCP session (1.4.2b) can still use `NetworkConnection`. Two consequences: host names are resolved with `getaddrinfo` off the ARKit queue (addresses connect at once), and IPv4 results come first, because Blender's session binds `0.0.0.0` (`BlenderAddOn/core/session.py:116`), so `localhost` → `::1` or `.local` → `fe80::…` would never reach it.
+
 ---
 
 ## Appendix A — What changed
