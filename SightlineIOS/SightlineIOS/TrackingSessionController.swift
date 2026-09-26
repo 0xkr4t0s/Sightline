@@ -49,6 +49,12 @@ final class TrackingSessionController {
     /// No new viewfinder frame for more than 250 ms during a run (FR-VF-005).
     private(set) var videoStalled = false
     @ObservationIgnored private let stallWatch = VideoStallWatch()
+    /// Pixel size of the frame on screen, for placing the framing guides; nil before the first.
+    private(set) var videoFrameSize: CGSize?
+    /// Framing guides over the viewfinder (FR-VF-003), saved on every change.
+    var framing = FramingSettings.load() {
+        didSet { framing.save() }
+    }
     // ARSession.delegate is weak: this keeps the receiver alive.
     @ObservationIgnored private var receiver: ARFrameReceiver?
     @ObservationIgnored private var rateMeter = PoseRateMeter()
@@ -96,7 +102,14 @@ final class TrackingSessionController {
         session.delegateQueue = pipeline.queue
         reloadPairing()
         stallWatch.onChange = { [weak self] in self?.videoStalled = $0 }
-        viewfinder?.onShown = { [weak self] in self?.stallWatch.frameShown() }
+        viewfinder?.onShown = { [weak self] in
+            guard let self else { return }
+            stallWatch.frameShown()
+            if let texture = viewfinder?.frame?.texture {
+                let size = CGSize(width: texture.width, height: texture.height)
+                if size != videoFrameSize { videoFrameSize = size }
+            }
+        }
         Task { [weak self] in
             for await snapshot in snapshots {
                 guard let self else {

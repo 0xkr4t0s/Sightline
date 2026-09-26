@@ -13,6 +13,7 @@ struct SettingsView: View {
     @State private var browser = HostBrowser()
     @State private var customScale = ""
     @State private var pairingCode = ""
+    @State private var customAspect = ""
 
     /// FR-CTL-004's examples: 1:1, 1:2, 1:10, plus 1:5; anything else via Custom.
     private static let scalePresets: [Float] = [1, 2, 5, 10]
@@ -149,6 +150,30 @@ struct SettingsView: View {
                     LabeledContent("Blender", value: controlStatus)
                 }
 
+                Section("Framing") {
+                    Picker("Aspect mask", selection: $controller.framing.maskAspect) {
+                        Text("Off").tag(Double?.none)
+                        ForEach(FramingSettings.presets, id: \.self) { aspect in
+                            Text(Self.aspectLabel(aspect)).tag(Double?.some(aspect))
+                        }
+                        if let aspect = controller.framing.maskAspect, !FramingSettings.presets.contains(aspect) {
+                            Text(Self.aspectLabel(aspect)).tag(Double?.some(aspect))
+                        }
+                    }
+                    HStack {
+                        Text("Custom")
+                        TextField("2.2 or 16:9", text: $customAspect)
+                            .keyboardType(.numbersAndPunctuation)
+                        Button("Apply") {
+                            controller.framing.maskAspect = FramingSettings.parseAspect(customAspect)
+                        }
+                        .disabled(FramingSettings.parseAspect(customAspect) == nil)
+                    }
+                    Toggle("Rule of thirds", isOn: $controller.framing.thirds)
+                    Toggle("Centre cross", isOn: $controller.framing.centreCross)
+                    Toggle("Action and title safe", isOn: $controller.framing.safeAreas)
+                }
+
                 Section("Pose (Blender axes)") {
                     let pose = controller.latestPose
                     LabeledContent("Seq", value: pose.map { "\($0.seq)" } ?? "–")
@@ -176,6 +201,13 @@ struct SettingsView: View {
 
     private static func format(_ scale: Float) -> String {
         String(format: "%g", scale)
+    }
+
+    /// "2.00:1" for a preset; a custom ratio keeps up to three decimals ("2.2:1", "1.778:1").
+    private static func aspectLabel(_ aspect: Double) -> String {
+        FramingSettings.presets.contains(aspect)
+            ? String(format: "%.2f:1", aspect)
+            : String(format: "%g:1", (aspect * 1000).rounded() / 1000)
     }
 
     /// NFR-LAT-002: "0.04 ms (p99 0.06, max 0.31, 1234 poses)".
