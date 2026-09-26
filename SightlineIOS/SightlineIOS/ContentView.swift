@@ -6,9 +6,9 @@
 import SwiftUI
 
 /// The landscape status screen (task 1.4.5; FR-UX-003/004) over the viewfinder, which shows the
-/// newest frame Blender streams, letterboxed (FR-VF-001/002). Status runs along the top edge, the
-/// controls sit in a rail under the right thumb and hide after a few seconds while tracking;
-/// `HUDLayout` keeps both out of the centre of the frame.
+/// newest frame Blender streams, letterboxed (FR-VF-001/002), and says when that frame goes stale
+/// (FR-VF-005). Status runs along the top edge, the controls sit in a rail under the right thumb
+/// and hide after a few seconds while tracking; `HUDLayout` keeps both out of the centre of the frame.
 struct ContentView: View {
     @Bindable var controller: TrackingSessionController
     @State private var chrome = ChromeVisibility(now: .now)
@@ -26,6 +26,11 @@ struct ContentView: View {
                         now = .now
                         chrome.tapFrame(at: now, tracking: controller.isTracking)
                     }
+                if controller.videoStalled {
+                    stalledOverlay
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .allowsHitTesting(false)
+                }
                 statusStrip
                     .frame(width: layout.statusStrip.width, height: layout.statusStrip.height)
                     .offset(x: layout.statusStrip.minX, y: layout.statusStrip.minY)
@@ -76,6 +81,21 @@ struct ContentView: View {
         .font(.footnote.monospacedDigit())
         .foregroundStyle(.white)
         .padding(.horizontal, 12)
+    }
+
+    /// Centred over the stale frame; taps go through to the viewfinder.
+    private var stalledOverlay: some View {
+        VStack(spacing: 4) {
+            Label("Video stalled", systemImage: "video.slash.fill")
+                .font(.headline)
+            Text("Tracking continues")
+                .font(.caption)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.red.opacity(0.75), in: Capsule())
+        .accessibilityElement(children: .combine)
     }
 
     private var controlRail: some View {

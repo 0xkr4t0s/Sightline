@@ -195,6 +195,8 @@ final class ViewfinderRenderer: NSObject, MTKViewDelegate {
     private let pipelineState: any MTLRenderPipelineState
     private nonisolated let latest = Mutex<ViewfinderFrame?>(nil)
     private weak var view: MTKView?
+    /// Runs on the main thread each time a frame handed to `show` is about to be drawn.
+    var onShown: (() -> Void)?
 
     /// A centred quad whose half-extent in normalized device coordinates is `scale`
     /// (`ViewfinderLayout`), textured with the frame. Compiled once at launch: a `.metal` file
@@ -246,6 +248,7 @@ final class ViewfinderRenderer: NSObject, MTKViewDelegate {
         latest.withLock { $0 = frame }
         DispatchQueue.main.async { [weak self] in
             self?.view?.setNeedsDisplay()
+            self?.onShown?()
         }
     }
 
@@ -293,6 +296,67 @@ final class ViewfinderRenderer: NSObject, MTKViewDelegate {
             commandBuffer.addCompletedHandler { _ in withExtendedLifetime(frame) {} }
         }
         encoder.endEncoding()
+    }
+}
+
+/// FR-VF-005: the viewfinder counts as stalled once more than `threshold` has passed without a new
+/// frame shown, measured from the run's start until its first frame. `onChange` hears each change;
+/// a new frame clears the stall at once. Tracking doesn't depend on it.
+@MainActor
+final class VideoStallWatch {
+    static let threshold: Duration = .milliseconds(250)
+    /// How often a stalled watch looks again; it needs no timer to clear, only to re-arm.
+    static let stalledRecheck: Duration = .milliseconds(100)
+
+    private(set) var isStalled = false
+    /// The run's start or its newest frame; nil while no run is watched.
+    private var since: ContinuousClock.Instant?
+    private var task: Task<Void, Never>?
+    var onChange: ((Bool) -> Void)?
+
+    /// A run started: no frame of it has been shown yet.
+    func start() {
+        since = .now
+        set(false)
+        task?.cancel()
+        task = Task { [weak self] in
+            while !Task.isCancelled, let delay = self?.check() {
+                try? await Task.sleep(for: delay)
+            }
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        task = nil
+        since = nil
+        set(false)
+    }
+
+    /// A new frame is on screen. Ignored while no run is watched.
+    func frameShown() {
+        guard since != nil else { return }
+        since = .now
+        set(false)
+    }
+
+    /// Marks the stall once the threshold has passed; returns how long to sleep before looking again.
+    private func check() -> Duration? {
+        guard let since else { return nil }
+        let deadline = since + Self.threshold
+        let now = ContinuousClock.now
+        if now > deadline {
+            set(true)
+            return Self.stalledRecheck
+        }
+        // Just past the deadline, so waking there finds the threshold exceeded.
+        return deadline - now + .milliseconds(1)
+    }
+
+    private func set(_ stalled: Bool) {
+        guard stalled != isStalled else { return }
+        isStalled = stalled
+        onChange?(stalled)
     }
 }
 
