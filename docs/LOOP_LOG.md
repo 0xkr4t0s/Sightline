@@ -1842,3 +1842,12 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** nothing new.
 - **Next task:** after PR #15 merges, 2.2d2b (run `VideoAdapter` in the video pipeline and expose it through `vcam_native`). No second task started.
 - **Owner actions:** none. PR #15 stays ready with squash auto-merge armed.
+
+## 2026-09-26 — Iteration 75 — waiting on CI for #15 (no task started)
+
+- **Orientation:** no LOOP_STOP; clean tree on `loop/2.2d2a` at `112194f`, same as `origin/loop/2.2d2a`. Only open `loop/*` PR: #15 (ready, squash auto-merge armed). The other open PR by the owner isn't `loop/*` and wasn't touched.
+- **CI:** `git fetch origin` passed. `gh pr checks 15 --watch` hit the 10-minute cap (`exit=124`) on run `36241323591` (the ready run for the iteration 74 fix; the concurrency change let it survive). 14 jobs passed: rust-fmt, rust ×3, fuzz, wheels ×3, python, extension, blender-smoke ×3; `ios pending` (`in_progress`, started 12:15:13Z, still running at 12:26Z). `gh pr view 15 --json state,mergeStateStatus`: `{"mergeStateStatus":"BLOCKED","state":"OPEN"}`. **waiting on CI for #15** (§1b); no new task started.
+- **Not pushed:** this entry is a local commit on `loop/2.2d2a` only. Pushing it to the ready PR would cancel the running ready run (same concurrency group) and restart CI. The next iteration carries it onto its branch (`git cherry-pick`), or pushes it with its fix if #15's CI failed.
+- **Files changed:** `docs/LOOP_LOG.md` only. No code changed; no local suite run.
+- **Next task:** check PR #15 under §1b; after it merges, 2.2d2b (run `VideoAdapter` in the video pipeline and expose it through `vcam_native`). No second task started.
+- **Owner actions:** none.
