@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Offscreen stream renderer (task 2.1a; FR-REN-001, FR-REN-003, SRS §13.1).
+"""Offscreen stream renderer (task 2.1; FR-REN-001/003/004, SRS §13.1).
 
 Draws the VCam camera into a `GPUOffScreen` with `draw_view3d`, using the camera's own view and
 projection matrices, so the stream doesn't depend on what the user's viewports show. Each frame
@@ -14,11 +14,42 @@ drawn and submitted with it.
 window shows (a hidden workspace) when there is one, and sets Solid with overlays off for the
 draw only, restoring the space's settings straight after. The user's viewports never change.
 
-Main thread only. Not here yet: the timer, the main-thread budget and frame skipping (2.1b), the
-stream settings (2.1c), colour management (2.1d).
+Main thread only. The session poll drives it at 30 fps, skipping frames after expensive draw/read
+operations. Stream settings beyond the budget (2.1c) and colour management (2.1d) remain open.
 """
 
+import time
+
 SHADING = 'SOLID'
+DEFAULT_BUDGET_MS = 12
+STREAM_FPS = 30
+
+
+class FramePacer:
+    """Skip frames after an over-budget draw/read, without catching up missed frames.
+
+    A synchronous GPU call cannot be interrupted: the budget limits how often it runs, not the
+    duration of any single GPU call.
+    """
+
+    def __init__(self, budget_ms: int = DEFAULT_BUDGET_MS) -> None:
+        self.budget_ms = budget_ms
+        self.next_due_ns = 0
+        self.cost_ns = 0
+
+    def due(self, now_ns: int, budget_ms: int) -> bool:
+        if budget_ms != self.budget_ms:
+            self.budget_ms = budget_ms
+            self.next_due_ns = now_ns  # a new budget takes effect without waiting for an old skip
+        return now_ns >= self.next_due_ns
+
+    def record(self, now_ns: int, read_ns: int, draw_ns: int) -> None:
+        measured = read_ns + draw_ns
+        # Raise the estimate immediately under load; decay slowly when GPU contention clears.
+        self.cost_ns = max(measured, (3 * self.cost_ns + measured) // 4)
+        budget_ns = self.budget_ms * 1_000_000
+        frames = min(STREAM_FPS, max(1, (self.cost_ns + budget_ns - 1) // budget_ns))
+        self.next_due_ns = now_ns + frames * (1_000_000_000 // STREAM_FPS)
 
 
 def stream_view():
@@ -54,6 +85,8 @@ class StreamRenderer:
         self._offscreen = None
         # (pose_seq, render_time_ns) of the frame drawn but not read yet.
         self._pending = None
+        self.read_ns = 0
+        self.draw_ns = 0
 
     def tick(self, scene, view_layer, depsgraph, camera, pose_seq: int, now_ns: int):
         """Submits the frame drawn on the previous tick, then draws `camera` for the next one.
@@ -66,13 +99,18 @@ class StreamRenderer:
 
         if self._offscreen is None:
             self._offscreen = gpu.types.GPUOffScreen(self.width, self.height, format='RGBA8')
+        self.read_ns = self.draw_ns = 0
         submitted = None
         if self._pending is not None:
             seq, drawn_ns = self._pending
             self._pending = None
+            started = time.perf_counter_ns()
             submitted = self.slot.submit(self._offscreen.texture_color.read(), seq, drawn_ns)
+            self.read_ns = time.perf_counter_ns() - started
         if camera is not None:
+            started = time.perf_counter_ns()
             self._draw(scene, view_layer, depsgraph, camera)
+            self.draw_ns = time.perf_counter_ns() - started
             self._pending = (pose_seq, now_ns)
         return submitted
 
@@ -99,3 +137,23 @@ class StreamRenderer:
             self._offscreen.free()
             self._offscreen = None
         self._pending = None
+
+
+class StreamLoop:
+    """One connected device's renderer and adaptive 30 fps schedule."""
+
+    def __init__(self, slot) -> None:
+        self.renderer = StreamRenderer(slot)
+        self.pacer = FramePacer()
+
+    def tick(self, context, camera, pose_seq: int, clock_ns, budget_ms: int):
+        if not self.pacer.due(clock_ns(), budget_ms):
+            return None
+        depsgraph = context.evaluated_depsgraph_get()
+        now_ns = clock_ns()  # same host clock as CLOCK; after evaluation, just before drawing
+        submitted = self.renderer.tick(context.scene, context.view_layer, depsgraph, camera, pose_seq, now_ns)
+        self.pacer.record(now_ns, self.renderer.read_ns, self.renderer.draw_ns)
+        return submitted
+
+    def free(self) -> None:
+        self.renderer.free()

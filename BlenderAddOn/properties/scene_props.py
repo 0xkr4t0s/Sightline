@@ -6,6 +6,7 @@ from __future__ import annotations
 import bpy
 
 from ..core import session
+from ..core.render import DEFAULT_BUDGET_MS
 from ..core.session import DEFAULT_PORT
 
 
@@ -49,4 +50,11 @@ class VCamProperties(bpy.types.PropertyGroup):
         description="While device tracking is limited, keep the camera at the last normal pose",
         default=True,
         update=_hold_changed,
+    )
+    render_budget_ms: bpy.props.IntProperty(
+        name="Stream Budget (ms)",
+        description="Main-thread draw/read target; expensive frames reduce the stream frame rate",
+        default=DEFAULT_BUDGET_MS,
+        min=1,
+        max=50,
     )

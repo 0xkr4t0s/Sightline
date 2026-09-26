@@ -44,6 +44,7 @@ class VCAM_PT_main_panel(bpy.types.Panel):
             col.label(text=warning, icon='ERROR')  # FR-BL-007
         col.prop(props, "smoothing")
         col.prop(props, "hold_last_good")
+        col.prop(props, "render_budget_ms")
 
         if live is None:
             op = layout.operator("vcam.session_start", text="Start Session", icon='PLAY')
@@ -99,3 +100,5 @@ class VCAM_PT_main_panel(bpy.types.Panel):
 
         if state.last_error:
             layout.label(text=state.last_error, icon='ERROR')
+        if state.stream_error:
+            layout.label(text=state.stream_error, icon='ERROR')
