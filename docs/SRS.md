@@ -464,6 +464,12 @@ Updated proposal: default 960×540, Solid, 30 fps, pipelined, with adaptive fps 
 
 Still open for S-1: Windows and Linux on mid-range GPUs.
 
+#### Colour-management observation — 2026-09-26 (task 2.1d, FR-REN-005)
+
+Blender 5.2.2's Solid/Workbench viewport ignores the scene view transform and look; a headless GPU probe produced identical Solid bytes for Standard, AgX, Raw and two contrast looks. Material Preview applies them. To satisfy the viewport-matching part of FR-REN-005, Sightline follows Blender's selected shading mode rather than forcing a scene look onto Solid. This is a clarification of observed Blender behaviour, not a requirement-text change.
+
+`tests/blender/render_offscreen.py` compares installed stream readbacks with independent Material Preview draws. At 320×180, maximum 8-bit channel differences were 74 with colour management disabled, 37 between low/high contrast looks, 55 between Standard/AgX, and 12 between native Display P3 bytes and sRGB bytes. Matching draws agree within two codes (measured GPU sampling/quantization variation). Stream bytes use the sRGB transfer curve and Rec.709 primaries, not the Rec.709 transfer curve. The renderer temporarily selects sRGB and synchronizes the evaluated scene, then restores the user's display setting; raw frame metadata labels this encoding. Encoded-stream profile propagation and device display verification remain the planned 2.2/2.3 work.
+
 ### 13.2 S-2 results — 2026-09-24 (JPEG, VideoToolbox, OpenH264 on macOS arm64; Windows/Linux pending)
 
 Setup: Apple M4 Pro, one thread, 4:2:0, 100 timed encodes after 5 warm-up. Input: real Blender 5.2.2 readbacks from the S-1 scene (`tests/bench_render.py --dump-raw`). Encoders: `turbojpeg` 1.5.1 (vendored libjpeg-turbo 3.1.0, NEON, linked statically; `otool -L` shows no JPEG dylib) and `jpeg-encoder` 0.7.1 (pure Rust; its `simd` feature is x86-only, so scalar here). Every output was decoded with libjpeg-turbo, size-checked, and PSNR-scored. Script: `native/vcam-video/examples/s2_jpeg.rs`. Raw data: `reports/s2-jpeg-2026-09-24-macos-arm64.txt`.
