@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 from .apply import Applier, clear_zero, find_origin, target_camera
 from .latency import LatencyLog
-from .render import DEFAULT_BUDGET_MS, StreamLoop
+from .render import DEFAULT_BUDGET_MS, STREAM_RESOLUTIONS, StreamLoop
 from .status import pose_latency_ms
 
 HOST_ID_FILE = "host_id"
@@ -244,12 +244,16 @@ def _render_frame(session, context) -> None:
         return
     props = getattr(scene, "vcam_props", None)
     budget_ms = getattr(props, "render_budget_ms", DEFAULT_BUDGET_MS)
+    resolution = STREAM_RESOLUTIONS[getattr(props, "stream_resolution", '540p')]
+    fps = int(getattr(props, "stream_fps", '30'))
+    shading = getattr(props, "stream_shading", 'SOLID')
     try:
         if _stream is None:
             import vcam_native
 
             _stream = StreamLoop(vcam_native.FrameSlot())
-        _stream.tick(context, camera, _applier.applied_seq, session.host_clock_ns, budget_ms)
+        _stream.tick(context, camera, _applier.applied_seq, session.host_clock_ns,
+                     budget_ms, fps, resolution, shading)
     except Exception as e:  # noqa: BLE001 - a broken GPU must not interrupt pose tracking
         state.stream_error = f"Stream: {e}"
         _stream_failed = True

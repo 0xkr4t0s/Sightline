@@ -6,7 +6,7 @@ from __future__ import annotations
 import bpy
 
 from ..core import session
-from ..core.render import DEFAULT_BUDGET_MS
+from ..core.render import DEFAULT_BUDGET_MS, STREAM_FPS_CAPS, STREAM_RESOLUTIONS
 from ..core.session import DEFAULT_PORT
 
 
@@ -57,4 +57,25 @@ class VCamProperties(bpy.types.PropertyGroup):
         default=DEFAULT_BUDGET_MS,
         min=1,
         max=50,
+    )
+    stream_resolution: bpy.props.EnumProperty(
+        name="Stream Resolution",
+        description="Offscreen viewfinder resolution",
+        items=[(key, f"{w} × {h}", f"Stream at {w} × {h}")
+               for key, (w, h) in STREAM_RESOLUTIONS.items()],
+        default='540p',
+    )
+    stream_fps: bpy.props.EnumProperty(
+        name="Stream FPS",
+        description="Maximum number of viewfinder frames per second",
+        items=[(str(fps), f"{fps} fps", f"Cap the stream at {fps} fps") for fps in STREAM_FPS_CAPS],
+        default='30',
+    )
+    stream_shading: bpy.props.EnumProperty(
+        name="Stream Shading",
+        description="Shading mode for the viewfinder; EEVEE may slow Blender",
+        items=[('SOLID', "Solid", "Fast viewport shading"),
+               ('MATERIAL', "Material Preview", "Preview materials and lighting"),
+               ('RENDERED', "Rendered (EEVEE)", "Preview EEVEE; the UI may lag and stream fps may drop")],
+        default='SOLID',
     )
