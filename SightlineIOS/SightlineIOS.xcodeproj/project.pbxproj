@@ -35,6 +35,7 @@
 		9E380C5A2F8567040073B53B /* Exceptions for "SightlineIOS" folder in "SightlineIOSTests" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				FramingOverlay.swift,
 				HostDiscovery.swift,
 				PairingStore.swift,
 				SceneUnderstanding.swift,

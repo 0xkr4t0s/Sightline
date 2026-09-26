@@ -6,9 +6,10 @@
 import SwiftUI
 
 /// The landscape status screen (task 1.4.5; FR-UX-003/004) over the viewfinder, which shows the
-/// newest frame Blender streams, letterboxed (FR-VF-001/002), and says when that frame goes stale
-/// (FR-VF-005). Status runs along the top edge, the controls sit in a rail under the right thumb
-/// and hide after a few seconds while tracking; `HUDLayout` keeps both out of the centre of the frame.
+/// newest frame Blender streams, letterboxed (FR-VF-001/002), with the chosen framing guides on top
+/// (FR-VF-003), and says when that frame goes stale (FR-VF-005). Status runs along the top edge, the
+/// controls sit in a rail under the right thumb and hide after a few seconds while tracking;
+/// `HUDLayout` keeps both out of the centre of the frame.
 struct ContentView: View {
     @Bindable var controller: TrackingSessionController
     @State private var chrome = ChromeVisibility(now: .now)
@@ -43,7 +44,14 @@ struct ContentView: View {
             }
             .animation(.easeInOut(duration: 0.25), value: controlsShown)
         }
-        .background(ViewfinderView(renderer: controller.viewfinder).ignoresSafeArea())
+        .background {
+            // Same full-screen space as the Metal view, so the guides line up with the frame.
+            ZStack {
+                ViewfinderView(renderer: controller.viewfinder)
+                FramingOverlayView(settings: controller.framing, frameSize: controller.videoFrameSize)
+            }
+            .ignoresSafeArea()
+        }
         .preferredColorScheme(.dark)
         // Re-check visibility once the hide delay has passed since the last change.
         .task(id: chrome) {
