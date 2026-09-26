@@ -2,6 +2,7 @@ import ARKit
 import Darwin
 import Foundation
 import simd
+import Synchronization
 import XCTest
 
 /// The device send path (tasks 1.4.1, 1.4.2, 1.4.4): ARKit frames become VCP `POSE` datagrams off
@@ -32,6 +33,23 @@ final class TrackingPipelineTests: XCTestCase {
         }
 
         var snapshot: TrackingSnapshot? { lock.withLock { value } }
+    }
+
+    /// The completed viewfinder frames the pipeline handed on, in order.
+    private final class Delivered: Sendable {
+        private let frames = Mutex<[VideoFrame]>([])
+
+        struct VideoFrame: Equatable, Sendable {
+            var id: UInt32
+            var poseSeq: UInt32
+            var data: Data
+        }
+
+        func add(_ info: VCPVideoFrameInfo, _ data: Data) {
+            frames.withLock { $0.append(VideoFrame(id: info.frameID, poseSeq: info.poseSeq, data: data)) }
+        }
+
+        var all: [VideoFrame] { frames.withLock { $0 } }
     }
 
     /// A UDP socket on 127.0.0.1 that plays the host; it replies to the last sender, as the host does.
@@ -465,7 +483,8 @@ final class TrackingPipelineTests: XCTestCase {
     func testVideoFragmentsAreReassembledAndReportedEveryHalfSecond() throws {
         let (device, blender) = try goldenSession()
         let host = try LoopbackReceiver()
-        let pipeline = TrackingPipeline(publish: { _ in })
+        let delivered = Delivered()
+        let pipeline = TrackingPipeline(publish: { _ in }, videoFrame: { delivered.add($0, $1) })
         let destination = TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device)
         pipeline.start(destination)
         defer { pipeline.stop() }
@@ -499,6 +518,9 @@ final class TrackingPipelineTests: XCTestCase {
         var got = try report()
         XCTAssertGreaterThan(Date().timeIntervalSince(first), 0.4, "the first report comes one interval after")
         XCTAssertEqual(got, VCPVideoReport(reportSeq: 1, newestFrameID: 3, framesComplete: 2, m2pP95Ms: 0))
+        XCTAssertEqual(delivered.all, [.init(id: 1, poseSeq: 1, data: Data(repeating: 1, count: 8)),
+                                       .init(id: 3, poseSeq: 3, data: Data(repeating: 3, count: 4))],
+                       "each completed frame is handed on once, whole; incomplete and stale ones never")
         let sent = Date()
         got = try report()
         XCTAssertEqual(got, VCPVideoReport(reportSeq: 2, newestFrameID: 3, framesComplete: 2, m2pP95Ms: 0),
@@ -510,6 +532,7 @@ final class TrackingPipelineTests: XCTestCase {
         XCTAssertNil(next(VCPMessageType.videoReport, from: host, timeout: 0.8), "the old session's reports stop")
         host.reply(try fragment(1, 0, of: 1))  // ids start again at 1
         XCTAssertEqual(try report(), VCPVideoReport(reportSeq: 1, newestFrameID: 1, framesComplete: 1, m2pP95Ms: 0))
+        XCTAssertEqual(delivered.all.map(\.id), [1, 3, 1], "the new session's frame 1 is handed on")
 
         pipeline.stop()
         while host.receive(timeout: 0.02) != nil {}
