@@ -160,6 +160,14 @@ with tempfile.TemporaryDirectory() as tmp:
     assert report["m2p_p95_ms"] == 150 and 0 < report["frames_complete"] <= report["newest_frame_id"], adapt
     assert adapt["last_interval"]["report_seq"] == report["report_seq"] and adapt["lost"] <= adapt["expected"], adapt
     assert (raised["quality"], raised["user_quality"], raised["adapt"]["changes"]) == (60, 90, 2), raised
+    # The device left: the adapter goes with its session and the stream is back at the user's
+    # quality for the next device.
+    deadline = time.monotonic() + 10
+    while session.video_stats()["adapt"] is not None:
+        assert time.monotonic() < deadline, session.video_stats()
+        slot.submit(frame, 0, session.host_clock_ns())
+        time.sleep(1 / 30)
+    assert session.video_stats()["quality"] == 90, session.video_stats()
 
     started = time.perf_counter()
     session.stop()  # stops the running video stream too

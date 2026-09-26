@@ -236,12 +236,15 @@ impl VideoPipeline {
 
     #[must_use]
     pub fn stats(&self) -> VideoStats {
-        let (encoder, quality, skipped) = self.worker.as_ref().map_or((None, 0, 0), |w| {
-            (Some(w.stats()), w.quality(), w.output().replaced())
-        });
-        let (user_quality, adapt) = {
+        let (encoder, skipped) = self
+            .worker
+            .as_ref()
+            .map_or((None, 0), |w| (Some(w.stats()), w.output().replaced()));
+        // The encoder's quality is only set under this lock, so it matches the adapter's level.
+        let (quality, user_quality, adapt) = {
             let adapt = lock(&self.shared.adapt);
-            (adapt.quality, adapt.info())
+            let quality = self.worker.as_ref().map_or(0, |w| w.quality());
+            (quality, adapt.quality, adapt.info())
         };
         let last = lock(&self.shared.last);
         VideoStats {
