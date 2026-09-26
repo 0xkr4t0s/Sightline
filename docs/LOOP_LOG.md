@@ -1829,3 +1829,16 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** nothing new; device checks (1.5.1c, O-1, NET-004) remain owner-only.
 - **Next task:** 2.2d2b, running `VideoAdapter` in the video pipeline and exposing it through `vcam_native`. No second task started.
 - **Owner actions:** none. PR #15 set ready with squash auto-merge.
+
+## 2026-09-26 — Iteration 74 — 2.2d2a CI fix (NET-VID-005, XP-001) — done
+
+- **Orientation:** no LOOP_STOP, tree clean on `loop/2.2d2a`. Ready PR #15 (squash auto-merge armed) was `BLOCKED`: `ci-ok` failed.
+- **CI failure on PR #15**, not caused by the code: the `ready_for_review` run `36241217689` (created 12:12:56) was cancelled, and run `36241218050` (12:12:57, same SHA `a308c62`) skipped every job because its payload still said draft; its `ci-ok` log: `Job results: skipped skipped skipped skipped skipped skipped skipped skipped`, `Not every job passed (drafts skip CI: mark the PR ready to run it)`. The final push's `synchronize` event (draft) arrived after `ready_for_review` and, sharing the `ci-${{ github.ref }}` concurrency group with `cancel-in-progress`, cancelled the real run. In PRs #11–#13 the order happened to be the other way round.
+- **Change:** `.github/workflows/ci.yml:13`: the concurrency group ends in `draft`/`ready` (from `github.event.pull_request.draft`), so a draft run can't cancel a ready run; ready runs still cancel older ready runs on the same branch. `ci-ok` and the job conditions are unchanged.
+- **Commands and observed results:**
+  - `.venv.nosync/bin/actionlint .github/workflows/ci.yml`: 1 finding, the same one as on `HEAD` before the change (`label "xcode-27" is unknown`, the GitHub preview runner from PR #14); nothing about the new expression.
+  - No Rust, Python, vector or iOS change, so cargo/pytest/Blender/xcodebuild weren't re-run. The push to the ready PR starts a full CI run, which checks 2.2d2a on all OSes.
+- **Not verified:** the race itself can't be replayed on demand; the next ready PR shows whether both runs survive.
+- **Blocked:** nothing new.
+- **Next task:** after PR #15 merges, 2.2d2b (run `VideoAdapter` in the video pipeline and expose it through `vcam_native`). No second task started.
+- **Owner actions:** none. PR #15 stays ready with squash auto-merge armed.

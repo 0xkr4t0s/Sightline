@@ -10,8 +10,10 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
+# Draft runs get their own group: the push before `gh pr ready` can be delivered after the
+# ready_for_review event, and a draft run (every job skipped) must not cancel the real one.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event.pull_request.draft == true && 'draft' || 'ready' }}
   cancel-in-progress: true
 
 # Public repo: the token only needs to read the code. Artifacts and caches use the runtime token.
