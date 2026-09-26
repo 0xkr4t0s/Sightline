@@ -1973,3 +1973,24 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** nothing new; device checks (1.5.1c, O-1, NET-004) remain owner-only.
 - **Next task:** 2.3d, the "video stalled" indicator after 250 ms without a new frame (FR-VF-005). No second task started.
 - **Owner actions:** none. PR #20 set ready with squash auto-merge.
+
+## 2026-09-27 — Iteration 82 — 2.3d (FR-VF-005) — done
+
+- **Orientation:** no LOOP_STOP; clean tree on `loop/2.3c`. Ready PR #20: its `ci-ok` failure was the draft run `36248292744` (every job skipped, "drafts skip CI"); the ready run `36248293749` finished `completed success` (`gh run watch` exit 0; ios the last job) and PR #20 auto-merged (`79e2be7`). Fast-forwarded `main`, deleted local `loop/2.3c`, published `loop/2.3d` with draft PR https://github.com/0xkr4t0s/Sightline/pull/21. The other open PR (not `loop/*`) was not touched.
+- **Change:**
+  - `SightlineIOS/SightlineIOS/Viewfinder.swift`: `VideoStallWatch` (`:306`, main actor). `start` times from the run's start, `frameShown` (`:337`) re-times from the newest frame and clears a stall at once, `stop` clears it and ignores later frames. One task sleeps until just past `since + 250 ms` (`threshold` `:307`); if no frame came it marks the stall (`check` `:344`) and looks again every 100 ms until one does, so there's no per-frame timer. `ViewfinderRenderer.onShown` (`:199`) runs on the main thread in the same dispatch that asks the view to draw a new frame (`:251`); "new frame" means a decoded frame going on screen, so frames that fail to decode don't count.
+  - `TrackingSessionController.swift`: `videoStalled` (`:50`), fed by the watch (`:98-99`); the watch starts with the run (`:292`) and stops with it (`:386`). A reconnect (NET-004) keeps the run, so the badge shows while video is down. Tracking never reads it.
+  - `ContentView.swift:29`: a centred red "Video stalled / Tracking continues" badge over the stale frame, hit testing off so taps still reach the viewfinder.
+  - No dependency, wire-format, vector, Rust, Python or add-on change.
+- **Tests:** `SightlineIOSTests/ViewfinderTests.swift:203` `testVideoStalledAfter250MillisecondsWithoutANewFrame`: no frame → stalled once, > 250 ms and < 400 ms after the start; the next frame clears it synchronously; frames 50 ms apart for 0.5 s never stall; after the last frame, stalled again > 250 and < 400 ms later; a new run starts unstalled and counts from its own start; `stop` clears it, and neither 450 ms nor a later frame changes that.
+- **Commands and observed results (Xcode 27, iPhone 17 simulator):**
+  - `-only-testing:SightlineIOSTests/ViewfinderTests`: `Executed 6 tests, with 0 failures (0 unexpected) in 2.624 (2.627) seconds`; `** TEST SUCCEEDED **`.
+  - Full `xcodebuild test … -destination 'platform=iOS Simulator,name=iPhone 17'`: `Executed 69 tests, with 4 tests skipped and 0 failures (0 unexpected) in 36.879 (36.905) seconds`; `** TEST SUCCEEDED **` (68 before + 1).
+  - `.venv.nosync/bin/pytest -q -p no:cacheprovider BlenderAddOn/tests`: `35 passed in 0.04s`; `tools/gen_testdata.py --check`: `testdata/ up to date (25 files)`.
+  - Rust and Blender not run: no file they build or read changed.
+  - **Mutation proof** (sequential script, one backup, each pattern hit exactly once, restored, `restored identical: True` after each and at the end), 7 of 7 caught: threshold 100 ms → `("105.01895800000001") is not greater than ("250.0") - not before the threshold`; threshold 400 ms → `("425.28316600000005") is not less than ("400.0") - soon after the threshold`; frame doesn't clear → `("[true]") is not equal to ("[true, false]")`; frame doesn't re-time → `("12") is not equal to ("2") - frames 50 ms apart never stall`; `stop` keeps the stall → `("5") is not equal to ("6")`; `start` keeps the old time → `("0.085542") is not greater than ("250.0") - counted from the new run's start`; stalled watch never looks again → `("[true, false]") is not equal to ("[true, false, true]")`.
+  - **Smoke:** a throwaway build with the badge forced on (source restored, `cmp` identical) launched in the iPhone 17 simulator: the badge sits centred on the black viewfinder, clear of the status strip and control rail. The real build was reinstalled afterwards. A real stall can't be shown in the simulator, because ARKit can't start a run there.
+- **Not verified:** a real stream stalling and resuming on a device.
+- **Blocked:** nothing new; device checks (1.5.1c, O-1, NET-004) remain owner-only.
+- **Next task:** 2.3e, framing overlays drawn on the device (FR-VF-003). No second task started.
+- **Owner actions:** none. PR #21 set ready with squash auto-merge.
