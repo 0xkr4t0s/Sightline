@@ -111,6 +111,9 @@ fn check_fields(msg: &Message, f: &Value, name: &str) {
             assert_eq!(u64::from(s.flags), uint(&f["flags"]), "{name}");
             assert_eq!(s.camera_name, f["camera_name"].as_str().unwrap(), "{name}");
         }
+        Message::VideoFragment(_) => {
+            panic!("{name}: VIDEO_FRAGMENT vectors are in testdata/video/")
+        }
     }
 }
 
@@ -175,7 +178,8 @@ fn receive_rules_match_vectors() {
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let (rx, _) = pair(case["direction"].as_str().unwrap(), &host, &device);
-        let result = rx.open(&hex(case["hex"].as_str().unwrap()));
+        let bytes = hex(case["hex"].as_str().unwrap());
+        let result = rx.open(&bytes);
         let want = case["accept"].as_bool().unwrap();
         assert_eq!(
             result.is_ok(),

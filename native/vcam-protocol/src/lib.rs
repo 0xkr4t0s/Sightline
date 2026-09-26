@@ -10,6 +10,7 @@ mod endpoint;
 mod fresh;
 mod message;
 mod pairing;
+mod video;
 mod wire;
 
 pub use clock::{
@@ -30,6 +31,10 @@ pub use message::{
 };
 pub use pairing::{
     HostPairing, PairError, PendingPair, SessionHandshake, SessionKeys, device_pair,
+};
+pub use video::{
+    CompleteFrame, Pushed, Reassembler, ReassemblyStats, VideoFragment, VideoFrameInfo,
+    fragment_frame,
 };
 
 /// Version of the Rust workspace, shared by every `vcam-*` crate.
