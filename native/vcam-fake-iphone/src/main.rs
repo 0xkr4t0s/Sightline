@@ -2,12 +2,14 @@
 //! (or reuses a stored pairing), sets up a session, then streams scripted canonical poses from
 //! `testdata/motion/*.bin` over authenticated UDP. It sends a complete `CONTROL_STATE` at 2 Hz,
 //! answers `CLOCK` requests from its own monotonic clock, and reports the host's `STATUS`.
+//! Host `VIDEO_FRAGMENT`s are reassembled newest-frame-wins like the viewfinder (vcp.md §6.5,
+//! task 2.2c1); `--video-out` keeps the newest complete frame in a file.
 //!
 //! ```text
 //! vcam-fake-iphone --host 127.0.0.1:47000 --state DIR/fake-iphone.key [--code 123456]
 //!                  --motion testdata/motion/scripted.bin [--rate HZ] [--linger SECONDS]
 //!                  [--name NAME] [--scale S] [--locks FLAGS] [--set-origin-at FRAME]
-//!                  [--limited FROM-TO]
+//!                  [--limited FROM-TO] [--video-out PATH]
 //! ```
 //! Prints `FAKE_IPHONE_PAIRED`, `FAKE_IPHONE_SESSION ...` and a final `FAKE_IPHONE_DONE ...`
 //! line on stdout. Any failure exits 1 with the reason on stderr.
@@ -23,7 +25,7 @@ use std::time::{Duration, Instant};
 
 use vcam_protocol::{
     Clock, ControlMessage, ControlState, Endpoint, HEADER_LEN, Hello, MAX_DATAGRAM, Message, Pose,
-    Role, SessionHandshake, SessionKeys, Status, device_pair,
+    Pushed, Reassembler, Role, SessionHandshake, SessionKeys, Status, VideoFrameInfo, device_pair,
 };
 
 type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
@@ -65,6 +67,8 @@ struct Args {
     set_origin_at: Option<usize>,
     /// Frame indices `FROM..TO` (end exclusive) are sent as `limited(.relocalizing)`.
     limited: std::ops::Range<usize>,
+    /// Where each newly completed video frame is written (replacing the previous one).
+    video_out: Option<PathBuf>,
 }
 
 fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
@@ -78,6 +82,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
         "Fake iPhone".to_owned(),
     );
     let (mut scale, mut locks, mut set_origin_at, mut limited) = (1.0f32, 0u8, None, 0..0);
+    let mut video_out = None;
     while let Some(flag) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("{flag} needs a value"));
         match flag.as_str() {
@@ -117,6 +122,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
                     return Err("--limited needs FROM < TO".into());
                 }
             }
+            "--video-out" => video_out = Some(PathBuf::from(value()?)),
             other => return Err(format!("unknown argument {other}").into()),
         }
     }
@@ -132,6 +138,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
         locks,
         set_origin_at,
         limited,
+        video_out,
     })
 }
 
@@ -295,6 +302,10 @@ struct Stream {
     status: Option<Status>,
     last_control: Option<Instant>,
     control: ControlState,
+    video: Reassembler,
+    /// Fields and length of the newest complete video frame.
+    last_video: Option<(VideoFrameInfo, usize)>,
+    video_out: Option<PathBuf>,
 }
 
 impl Stream {
@@ -364,6 +375,14 @@ impl Stream {
                         self.status = Some(s);
                     }
                 }
+                Ok(Message::VideoFragment(frag)) => {
+                    if let Pushed::Complete(frame) = self.video.push(&frag) {
+                        self.last_video = Some((frame.frame, frame.data.len()));
+                        if let Some(path) = &self.video_out {
+                            fs::write(path, frame.data)?;
+                        }
+                    }
+                }
                 Ok(_) | Err(_) => {}
             }
         }
@@ -418,6 +437,9 @@ fn run(args: &Args) -> Result<String> {
             lock_flags: Some(args.locks),
             origin_epoch: Some(0),
         },
+        video: Reassembler::new(),
+        last_video: None,
+        video_out: args.video_out.clone(),
     };
     let period = Duration::from_secs_f64(1.0 / rate);
     let mut next = Instant::now();
@@ -460,14 +482,21 @@ fn run(args: &Args) -> Result<String> {
         flags: 0,
         camera_name: String::new(),
     });
+    let video = s.video.stats();
+    let (last, last_len) = s.last_video.unzip();
     Ok(format!(
-        "FAKE_IPHONE_DONE session_id={} poses={} clock_replies={} status_seq={} applied_pose_seq={} control_ack={} camera={}",
+        "FAKE_IPHONE_DONE session_id={} poses={} clock_replies={} status_seq={} applied_pose_seq={} control_ack={} video_frames={} video_lost={} video_last_id={} video_last_len={} video_last_pose_seq={} camera={}",
         keys.session_id,
         s.poses,
         s.clock_replies,
         status.status_seq,
         status.applied_pose_seq,
         status.control_ack,
+        video.complete,
+        video.lost,
+        last.map_or(0, |f| f.frame_id),
+        last_len.unwrap_or(0),
+        last.map_or(0, |f| f.pose_seq),
         status.camera_name
     ))
 }

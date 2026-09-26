@@ -6,7 +6,10 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use vcam_net::{ControlEvent, ControlServer, HostStatus, MemoryStore, ServerConfig};
+use vcam_net::{
+    ControlEvent, ControlServer, HostStatus, MemoryStore, ServerConfig, VideoFrameMeta,
+};
+use vcam_protocol::VideoFragment;
 
 const MOTION: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -272,4 +275,64 @@ fn scripted_controls_reach_the_host_in_order() {
     );
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("--scale must be in [0.001, 1000]"));
+}
+
+#[test]
+fn viewfinder_frames_reach_the_device_whole_over_the_paired_session() {
+    const SENT: u32 = 20;
+    let server = server();
+    let scratch = Scratch::new("video");
+    let video_out = scratch.0.join("newest.jpg");
+    let code = server.enable_pairing().unwrap();
+    let child = spawn(
+        &server,
+        &scratch.state(),
+        Some(&code),
+        &[
+            "--rate",
+            "300",
+            "--linger",
+            "1",
+            "--video-out",
+            &video_out.to_string_lossy(),
+        ],
+    );
+    let mut video = server.video_sender();
+    let (mut sent, mut last) = (Vec::new(), Vec::new());
+    let out = drive(child, || {
+        // Frames of 1 to 5 fragments, sent once the device's UDP source is known.
+        if sent.len() < SENT as usize && server.stats().source.is_some() {
+            let n = sent.len() as u32 + 1;
+            last = (0..n as usize * 1000 + 17)
+                .map(|i| (i % 253) as u8 ^ n as u8)
+                .collect();
+            let meta = VideoFrameMeta {
+                render_time_ns: server.host_clock_ns(),
+                pose_seq: 1000 + n,
+                codec: VideoFragment::CODEC_JPEG,
+                color: VideoFragment::COLOR_SRGB_REC709,
+                quality: 70,
+            };
+            sent.push(video.send(meta, &last).unwrap());
+        }
+    });
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(sent.len(), SENT as usize, "{stdout}");
+    let ids: Vec<u32> = sent.iter().map(|s| s.frame_id).collect();
+    assert_eq!(ids, (1..=SENT).collect::<Vec<_>>(), "numbered per session");
+    // Loopback loses nothing: every frame completed, and the newest one is byte-exact.
+    assert_eq!(field(&stdout, "video_frames"), u64::from(SENT), "{stdout}");
+    assert_eq!(field(&stdout, "video_lost"), 0, "{stdout}");
+    assert_eq!(field(&stdout, "video_last_id"), u64::from(SENT), "{stdout}");
+    assert_eq!(
+        field(&stdout, "video_last_pose_seq"),
+        u64::from(1000 + SENT)
+    );
+    assert_eq!(field(&stdout, "video_last_len"), last.len() as u64);
+    assert_eq!(std::fs::read(&video_out).unwrap(), last);
 }

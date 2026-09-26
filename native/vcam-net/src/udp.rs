@@ -1,7 +1,9 @@
 //! UDP receiver thread with latest-sample slots and per-source stats (task 1.2.1; NET-002,
-//! FR-BL-002/004, NFR-REL-002).
+//! FR-BL-002/004, NFR-REL-002), and the host's viewfinder video sender (task 2.2c1;
+//! NET-VID-001/004).
 //!
-//! The thread owns the socket. No datagram is accepted until the session owner installs a
+//! The thread shares the socket with its receiver; a [`VideoSender`] holds it only weakly, so
+//! stopping the receiver still closes it. No datagram is accepted until the session owner installs a
 //! host-role [`Endpoint`]. Authentication and latest-sample updates share the session lock,
 //! so replaced or revoked keys cannot repopulate a cleared slot.
 
@@ -9,7 +11,7 @@ use std::collections::VecDeque;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -18,7 +20,7 @@ use mio::{Events, Interest, Poll, Token};
 
 use vcam_protocol::{
     Clock, ClockEstimate, ClockEstimator, ControlState, DropReason, Endpoint, MAX_DATAGRAM,
-    Message, Pose, SeqFilter, Status,
+    Message, Pose, SeqFilter, Status, VideoFragment, VideoFrameInfo, fragment_frame,
 };
 
 use crate::smooth::{PoseFilter, Smoothing};
@@ -32,6 +34,11 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 const STATUS_INTERVAL: Duration = Duration::from_millis(500);
 const CLOCK_INTERVAL: Duration = Duration::from_secs(1);
+/// A frame whose fragments can't all be handed to the socket within this time is abandoned:
+/// a newer frame is on its way, and the device drops incomplete frames anyway.
+const VIDEO_SEND_BUDGET: Duration = Duration::from_millis(50);
+/// Pause before retrying a fragment the socket refused as `WouldBlock` (full send buffer).
+const VIDEO_RETRY: Duration = Duration::from_micros(200);
 
 /// State actually applied by the host, not merely received over UDP (vcp.md §6.4).
 /// Publish after Blender's main-thread apply step; the network worker owns sequence/flags.
@@ -153,6 +160,11 @@ pub struct ReceiverStats {
     pub clock: Option<ClockEstimate>,
     /// Authenticated `CLOCK` replies not used: unmatched, expired or impossible (vcp.md §6.3).
     pub clock_rejected: u64,
+    /// Viewfinder frames whose every fragment was sent this session (vcp.md §6.5).
+    pub video_frames_sent: u64,
+    pub video_fragments_sent: u64,
+    /// Frames given up part-way this session: a socket error, or not sent within 50 ms.
+    pub video_frames_failed: u64,
 }
 
 struct ActiveSession {
@@ -164,6 +176,8 @@ struct ActiveSession {
     last_status: Option<Instant>,
     last_clock: Option<Instant>,
     clock: ClockEstimator,
+    /// Last `VIDEO_FRAGMENT` `frame_id` used in this session (0 before the first frame).
+    video_frame_id: u32,
 }
 
 #[derive(Default)]
@@ -343,6 +357,8 @@ pub struct UdpReceiver {
     state: Arc<Mutex<State>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    /// Shared with the thread; dropped in `stop` under the state lock (see `VideoSender::step`).
+    socket: Option<Arc<UdpSocket>>,
     local_addr: SocketAddr,
     epoch: Instant,
 }
@@ -357,19 +373,22 @@ impl UdpReceiver {
         poll.registry()
             .register(&mut socket, Token(0), Interest::READABLE)?;
         let local_addr = socket.local_addr()?;
+        let socket = Arc::new(socket);
         let state = Arc::new(Mutex::new(State::default()));
         let epoch = Instant::now();
         let stop = Arc::new(AtomicBool::new(false));
         let thread = std::thread::Builder::new()
             .name("vcam-udp-rx".into())
             .spawn({
-                let (state, stop) = (Arc::clone(&state), Arc::clone(&stop));
+                let (state, stop, socket) =
+                    (Arc::clone(&state), Arc::clone(&stop), Arc::clone(&socket));
                 move || receive_loop(&socket, poll, &state, &stop, epoch)
             })?;
         Ok(Self {
             state,
             stop,
             thread: Some(thread),
+            socket: Some(socket),
             local_addr,
             epoch,
         })
@@ -395,6 +414,7 @@ impl UdpReceiver {
                 last_status: None,
                 last_clock: None,
                 clock: ClockEstimator::default(),
+                video_frame_id: 0,
             }),
             smoothing: state.smoothing,
             ..State::default()
@@ -502,6 +522,16 @@ impl UdpReceiver {
         lock(&self.state).snapshot(Instant::now())
     }
 
+    /// A sender for viewfinder frames over this receiver's socket and session (task 2.2c1).
+    #[must_use]
+    pub fn video_sender(&self) -> VideoSender {
+        VideoSender {
+            state: Arc::downgrade(&self.state),
+            socket: self.socket.as_ref().map_or_else(Weak::new, Arc::downgrade),
+            out: Vec::with_capacity(MAX_DATAGRAM),
+        }
+    }
+
     /// Stops the thread and closes the socket. Idempotent; returns once the thread has exited.
     pub fn stop(&mut self) {
         self.stop.store(true, Ordering::Release);
@@ -510,7 +540,10 @@ impl UdpReceiver {
             // recover here and the socket is closed either way.
             let _ = thread.join();
         }
-        lock(&self.state).reset();
+        // Under the state lock, so a `VideoSender` never keeps the socket open past `stop`.
+        let mut state = lock(&self.state);
+        self.socket = None;
+        state.reset();
     }
 }
 
@@ -518,6 +551,184 @@ impl Drop for UdpReceiver {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+/// Fields of one encoded viewfinder frame that every fragment repeats (vcp.md §6.5). The
+/// sender numbers the frames: `frame_id` starts at 1 in each session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VideoFrameMeta {
+    /// Host clock ([`UdpReceiver::host_clock_ns`]) when Blender drew the frame.
+    pub render_time_ns: u64,
+    /// `POSE.seq` on the camera when the frame was drawn (0 = none).
+    pub pose_seq: u32,
+    /// [`VideoFragment::CODEC_JPEG`] in Stage A.
+    pub codec: u8,
+    /// [`VideoFragment::COLOR_SRGB_REC709`].
+    pub color: u8,
+    /// JPEG quality 1–100, for display; 0 = not stated.
+    pub quality: u8,
+}
+
+/// A frame [`VideoSender::send`] handed to the socket in full.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VideoSent {
+    pub session_id: u32,
+    pub frame_id: u32,
+    pub fragments: usize,
+}
+
+enum Step {
+    Sent,
+    /// The socket's send buffer is full.
+    Busy,
+    /// The session changed or ended, or the receiver stopped.
+    Gone,
+    Failed(io::Error),
+}
+
+fn not_connected() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotConnected,
+        "no device session to send video to",
+    )
+}
+
+/// Sends encoded frames as `VIDEO_FRAGMENT`s over a [`UdpReceiver`]'s socket (task 2.2c1;
+/// NET-VID-001/004). Made by [`UdpReceiver::video_sender`]; use it from one sender thread.
+/// It holds only weak references: once the receiver stops, sends fail with `NotConnected`.
+pub struct VideoSender {
+    state: Weak<Mutex<State>>,
+    socket: Weak<UdpSocket>,
+    out: Vec<u8>,
+}
+
+impl VideoSender {
+    /// Splits `data` into fragments and sends them in index order to the device's latest
+    /// authenticated source, sealed with the session keys (vcp.md §6.5). Fragments are never
+    /// retransmitted. The session lock is held per fragment, not per frame, so pose handling
+    /// waits for at most one `send_to`; a session change or stop ends the frame at once.
+    ///
+    /// # Errors
+    /// `NotConnected` when there is no session with an authenticated source, the session
+    /// changed part-way, or the receiver stopped; `InvalidInput` for an empty frame, one over
+    /// 4 MiB, or an unknown codec/colour; `TimedOut` if the socket stayed full for 50 ms;
+    /// other socket errors as returned. `TimedOut` and socket errors count in
+    /// [`ReceiverStats::video_frames_failed`].
+    pub fn send(&mut self, meta: VideoFrameMeta, data: &[u8]) -> io::Result<VideoSent> {
+        let started = Instant::now();
+        let (session_id, frame_id, fragments) = begin(&self.state, meta, data)?;
+        let count = fragments.len();
+        for (i, frag) in fragments.enumerate() {
+            loop {
+                match self.step(session_id, &frag, i + 1 == count) {
+                    Step::Sent => break,
+                    Step::Busy if started.elapsed() < VIDEO_SEND_BUDGET => {
+                        std::thread::sleep(VIDEO_RETRY);
+                    }
+                    Step::Busy => return Err(self.fail(session_id, io::ErrorKind::TimedOut.into())),
+                    Step::Gone => return Err(not_connected()),
+                    Step::Failed(e) => return Err(self.fail(session_id, e)),
+                }
+            }
+        }
+        Ok(VideoSent {
+            session_id,
+            frame_id,
+            fragments: count,
+        })
+    }
+
+    fn step(&mut self, session_id: u32, frag: &VideoFragment<'_>, last: bool) -> Step {
+        let Some(shared) = self.state.upgrade() else {
+            return Step::Gone;
+        };
+        let mut state = lock(&shared);
+        // Upgraded under the lock that `UdpReceiver::stop` drops its socket under, and released
+        // before it: the socket never outlives `stop`.
+        let Some(socket) = self.socket.upgrade() else {
+            return Step::Gone;
+        };
+        let (Some(active), Some(dest)) = (state.active.as_ref(), state.stats.source) else {
+            return Step::Gone;
+        };
+        if active.endpoint.session_id() != session_id {
+            return Step::Gone;
+        }
+        self.out.clear();
+        if let Err(e) = active
+            .endpoint
+            .seal(&Message::VideoFragment(*frag), &mut self.out)
+        {
+            return Step::Failed(io::Error::new(io::ErrorKind::InvalidData, format!("{e:?}")));
+        }
+        match socket.send_to(&self.out, dest) {
+            Ok(n) if n == self.out.len() => {
+                state.stats.video_fragments_sent += 1;
+                if last {
+                    state.stats.video_frames_sent += 1;
+                }
+                Step::Sent
+            }
+            Ok(_) => Step::Failed(io::ErrorKind::WriteZero.into()),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Step::Busy,
+            Err(e) => Step::Failed(e),
+        }
+    }
+
+    /// Counts a frame given up part-way, if its session is still the active one.
+    fn fail(&self, session_id: u32, e: io::Error) -> io::Error {
+        if let Some(shared) = self.state.upgrade() {
+            let mut state = lock(&shared);
+            if state
+                .active
+                .as_ref()
+                .is_some_and(|s| s.endpoint.session_id() == session_id)
+            {
+                state.stats.video_frames_failed += 1;
+            }
+        }
+        e
+    }
+}
+
+/// Numbers the frame in the active session and validates it; returns its fragments.
+fn begin<'d>(
+    state: &Weak<Mutex<State>>,
+    meta: VideoFrameMeta,
+    data: &'d [u8],
+) -> io::Result<(
+    u32,
+    u32,
+    impl ExactSizeIterator<Item = VideoFragment<'d>> + use<'d>,
+)> {
+    let shared = state.upgrade().ok_or_else(not_connected)?;
+    let mut state = lock(&shared);
+    let has_source = state.stats.source.is_some();
+    let active = state
+        .active
+        .as_mut()
+        .filter(|_| has_source)
+        .ok_or_else(not_connected)?;
+    let frame_id = active.video_frame_id.checked_add(1).ok_or_else(|| {
+        io::Error::other("VIDEO_FRAGMENT frame_id exhausted; the device must start a new session")
+    })?;
+    let info = VideoFrameInfo {
+        frame_id,
+        render_time_ns: meta.render_time_ns,
+        pose_seq: meta.pose_seq,
+        codec: meta.codec,
+        color: meta.color,
+        quality: meta.quality,
+        flags: 0,
+    };
+    let fragments = fragment_frame(info, data).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid video frame: {e:?}"),
+        )
+    })?;
+    active.video_frame_id = frame_id;
+    Ok((active.endpoint.session_id(), frame_id, fragments))
 }
 
 fn host_clock(epoch: Instant) -> u64 {

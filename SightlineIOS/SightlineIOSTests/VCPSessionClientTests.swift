@@ -358,13 +358,18 @@ final class VCPSessionClientTests: XCTestCase {
     private final class Attempts: @unchecked Sendable {
         private let lock = NSLock()
         private var starts: [ContinuousClock.Instant] = []
+        private var ends: [ContinuousClock.Instant] = []
         func record() -> Int { lock.withLock { starts.append(.now); return starts.count } }
+        func finished() { lock.withLock { ends.append(.now) } }
         var all: [ContinuousClock.Instant] { lock.withLock { starts } }
+        var finishes: [ContinuousClock.Instant] { lock.withLock { ends } }
     }
 
     /// Blender is down (nothing listens), then comes back on the same port: the device retries at
     /// least every 500 ms and has a new session with the stored pairing well within NET-004's 3 s
-    /// of the host returning. The host sees a fresh HELLO(mode 1), not a pairing.
+    /// of the host returning. The host sees a fresh HELLO(mode 1), not a pairing. Attempts don't
+    /// overlap, so the next one starts 500 ms after the previous start or as soon as it ends, if a
+    /// slow Network callback made it take longer.
     func testReconnectRetriesUntilTheHostIsBackWithinThreeSeconds() async throws {
         let (m, s, hello, challenge) = try sessionVector()
         let port = try freePort()
@@ -375,6 +380,7 @@ final class VCPSessionClientTests: XCTestCase {
             do throws(VCPLinkError) {
                 return .success(try await VCPReconnect.run { () async throws(VCPLinkError) -> VCPLiveSession in
                     _ = attempts.record()
+                    defer { attempts.finished() }
                     return try await VCPSessionClient.connect(host: "127.0.0.1", port: port, device: device, pairing: pairing,
                                                               timeout: VCPReconnect.attemptTimeout, nonce: hello.nonceD)
                 })
@@ -396,11 +402,15 @@ final class VCPSessionClientTests: XCTestCase {
         XCTAssertEqual(live.keys.sessionID, challenge.sessionID)
         XCTAssertLessThan(took, .seconds(3), "NET-004: reconnect within 3 s of the host returning")
         let starts = attempts.all
+        let finishes = attempts.finishes
         XCTAssertGreaterThanOrEqual(starts.count, 3, "retries while the host was down")
-        for (earlier, later) in zip(starts, starts.dropFirst()) {
-            XCTAssertLessThan(later - earlier, .milliseconds(650), "attempts must start at least every 500 ms")
+        XCTAssertEqual(finishes.count, starts.count)
+        for ((earlier, finished), later) in zip(zip(starts, finishes), starts.dropFirst()) {
+            let due = max(earlier + VCPReconnect.retryInterval, finished)
+            XCTAssertLessThan(later - due, .milliseconds(150),
+                              "attempts must start 500 ms apart, or at once after a longer one (took \(finished - earlier))")
         }
-        print("NET004_RECONNECT host_back_to_session_ms=\(took.components.attoseconds / 1_000_000_000_000_000 + took.components.seconds * 1000) attempts=\(starts.count)")
+        print("NET004_RECONNECT host_back_to_session_ms=\(took.components.attoseconds / 1_000_000_000_000_000 + took.components.seconds * 1000) attempts=\(starts.count) attempt_times=\(zip(starts, finishes).map { $1 - $0 }) start_gaps=\(zip(starts, starts.dropFirst()).map { $1 - $0 })")
         live.close()
         XCTAssertNil(host.result())
     }

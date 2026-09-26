@@ -20,7 +20,7 @@ use vcam_protocol::{
 };
 
 use crate::discovery::{self, Discovery};
-use crate::{ControlSample, HostStatus, PoseSample, ReceiverStats, UdpReceiver};
+use crate::{ControlSample, HostStatus, PoseSample, ReceiverStats, UdpReceiver, VideoSender};
 
 const POLL: Duration = Duration::from_millis(50);
 /// How long a connection refused with `ERROR` keeps draining input before closing.
@@ -263,6 +263,13 @@ impl ControlServer {
     /// Publish state applied by Blender for the current session (not just received samples).
     pub fn update_status(&self, session_id: u32, status: HostStatus) -> io::Result<()> {
         self.shared.udp().update_status(session_id, status)
+    }
+
+    /// A sender for encoded viewfinder frames to the current device session (task 2.2c1).
+    /// It follows session changes and fails with `NotConnected` after `stop`.
+    #[must_use]
+    pub fn video_sender(&self) -> VideoSender {
+        self.shared.udp().video_sender()
     }
 
     /// Starts (or restarts) pairing with a fresh code, valid for one success, 3 failures, or
