@@ -369,7 +369,9 @@ final class VCPSessionClientTests: XCTestCase {
     /// least every 500 ms and has a new session with the stored pairing well within NET-004's 3 s
     /// of the host returning. The host sees a fresh HELLO(mode 1), not a pairing. Attempts don't
     /// overlap, so the next one starts 500 ms after the previous start or as soon as it ends, if a
-    /// slow Network callback made it take longer.
+    /// slow Network callback made it take longer. How many attempts fit into the outage depends on
+    /// how fast Network reports the refusal (1–17 ms locally; on the CI simulator the first attempt
+    /// once ran into `attemptTimeout`), so the test requires one retry and checks the spacing.
     func testReconnectRetriesUntilTheHostIsBackWithinThreeSeconds() async throws {
         let (m, s, hello, challenge) = try sessionVector()
         let port = try freePort()
@@ -403,7 +405,7 @@ final class VCPSessionClientTests: XCTestCase {
         XCTAssertLessThan(took, .seconds(3), "NET-004: reconnect within 3 s of the host returning")
         let starts = attempts.all
         let finishes = attempts.finishes
-        XCTAssertGreaterThanOrEqual(starts.count, 3, "retries while the host was down")
+        XCTAssertGreaterThanOrEqual(starts.count, 2, "retries after an attempt failed while the host was down")
         XCTAssertEqual(finishes.count, starts.count)
         for ((earlier, finished), later) in zip(zip(starts, finishes), starts.dropFirst()) {
             let due = max(earlier + VCPReconnect.retryInterval, finished)

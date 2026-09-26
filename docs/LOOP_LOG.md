@@ -1807,3 +1807,64 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** nothing new.
 - **Next task:** after PR #13 merges, 2.2d2 (host quality/resolution controller driven by `VIDEO_REPORT`, shown in the N-panel). No second task started.
 - **Owner actions:** decide whether to commit or remove the untracked `docs/AGENT_LOOP_PROMPT_WINDOWS.md`. PR #13 stays ready with squash auto-merge armed.
+
+## 2026-09-26 — Iteration 73 — 2.2d2a (NET-VID-005) — done
+
+- **Orientation:** no LOOP_STOP, and the tree was clean on the merged branch `docs/windows-loop-prompt` (the owner's Windows loop prompt went in as PR #14, so it isn't untracked any more). No open `loop/*` PR: PR #13 (2.2d1) merged as `b5dc8a8`. Switched to `main`, fast-forwarded to `f71e00d`, deleted the local merged branch, published `loop/2.2d2a` with draft PR https://github.com/0xkr4t0s/Sightline/pull/15.
+- **Split of 2.2d2** (one sub-step per iteration):
+  - **2.2d2a** (this one): the host's adaptation controller as pure Rust in `vcam-net`, with unit tests.
+  - **2.2d2b**: run it in `vcam-py`'s `VideoPipeline` (the sender records finished frames, the newest `ReceiverStats::video_report` is fed in, quality is applied in Rust); expose the report, loss, level and changes through `Session.video_stats()`.
+  - **2.2d2c**: the add-on applies the resolution step to the stream loop and shows the level and the last change in the N-panel.
+- **Change:** `native/vcam-net/src/adapt.rs` (new), exported from `lib.rs`. `VideoAdapter::new(quality, max_resolution_drop)`, `frame_sent(frame_id)`, `report(&VideoReport) -> Option<AdaptChange>`, `level()`, `stats()`.
+  - Loss per vcp.md §6.6: expected = finished frames with ids up to the report's `newest_frame_id` that no earlier interval counted, found from the last 64 finished ids. Loss is kept as a session total (`counted − frames_complete`), so a frame still arriving at a report is lost once and taken back, not counted twice. A frame finished after the device already reported it counts in the next interval. Reports with an old or repeated `report_seq` are ignored, so the pipeline can pass the newest report on every poll.
+  - Policy (NET-VID-005): bad = > 10 % of ≥ 5 frames lost, or M2P p95 > 120 ms (NFR-LAT-003 Stage A); clean = ≤ 2 % lost and M2P ≤ 96 ms or unmeasured. 2 bad reports in a row (1 s) lower quality by 10 down to 50, then resolution by one step up to the caller's limit; 10 clean in a row (5 s) raise resolution first, then quality back to the user's. Anything else breaks both runs. The 2 reports after a change are ignored while old-level frames are in flight. Each change keeps its report, from/to levels and reason (loss figures or M2P) for both UIs.
+  - The thresholds are starting values, not yet tuned on real Wi-Fi (S-4, owner).
+  - No dependency, wire-format, vector, Python, workflow or iOS change.
+- **Commands and observed results:**
+  - In `native/`: `cargo fmt --check`: `FMT_EXIT=0`; `cargo clippy --all-targets -- -D warnings`: ``Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.28s``; `cargo test`: `cargo test: 96 passed, 0 failed (15 suites)` (85 before + 11 in `adapt`); `cargo test -p vcam-net --lib adapt`: `test result: ok. 11 passed; 0 failed`.
+  - **Smoke** (throwaway example, deleted): 60 s at 30 fps, reports every 500 ms with the newest frame still arriving, 20 % loss from 10 to 25 s and M2P 140 ms from 40 to 44 s. Output: `t= 11.0s (80, 0) -> (70, 0) Loss { lost: 3, expected: 15 }`, then 60, 50, `(50, 0) -> (50, 1)` at 17 s; `Recovered` to `(50, 0)` at 30 s and `(60, 0)` at 36 s; `MotionToPhoton { m2p_p95_ms: 140 }` to `(50, 0)` at 41 s and `(50, 1)` at 43 s; recovered to `(60, 0)` by 55 s; `END level=(60, 0) expected=1800 lost=91 changes=10`: the 90 frames dropped plus the one still arriving at the last report, as §6.6 says.
+  - **Mutation proof** (sequential script, each pattern hit checked, restored, `cmp` identical: `RESTORED_IDENTICAL`): 16 caught, including `id >=` newest, no take-back of the arriving frame, 1 bad report enough, 9 clean enough, no settling, resolution before quality, quality before resolution on the way up, repeated `report_seq` accepted, M2P `>=` the limit (first survived; the test now sends consecutive at-limit reports), neutral reports not breaking a clean run, 10 % exactly counted as bad, no minimum frame count, raising past the user's quality, late-finished frames dropped, floor 40. One equivalent mutant removed from the code instead: `QUALITY_FLOOR.min(user quality)` gave the same result as `QUALITY_FLOOR`, because the level never exceeds the user's quality.
+  - Not run: pytest, headless Blender, `xcodebuild` (no Python, add-on, vector or iOS file changed; the adapter isn't wired into the pipeline yet).
+- **Not verified:** Windows/Linux (CI on the ready PR); behaviour on real Wi-Fi.
+- **Blocked:** nothing new; device checks (1.5.1c, O-1, NET-004) remain owner-only.
+- **Next task:** 2.2d2b, running `VideoAdapter` in the video pipeline and exposing it through `vcam_native`. No second task started.
+- **Owner actions:** none. PR #15 set ready with squash auto-merge.
+
+## 2026-09-26 — Iteration 74 — 2.2d2a CI fix (NET-VID-005, XP-001) — done
+
+- **Orientation:** no LOOP_STOP, tree clean on `loop/2.2d2a`. Ready PR #15 (squash auto-merge armed) was `BLOCKED`: `ci-ok` failed.
+- **CI failure on PR #15**, not caused by the code: the `ready_for_review` run `36241217689` (created 12:12:56) was cancelled, and run `36241218050` (12:12:57, same SHA `a308c62`) skipped every job because its payload still said draft; its `ci-ok` log: `Job results: skipped skipped skipped skipped skipped skipped skipped skipped`, `Not every job passed (drafts skip CI: mark the PR ready to run it)`. The final push's `synchronize` event (draft) arrived after `ready_for_review` and, sharing the `ci-${{ github.ref }}` concurrency group with `cancel-in-progress`, cancelled the real run. In PRs #11–#13 the order happened to be the other way round.
+- **Change:** `.github/workflows/ci.yml:13`: the concurrency group ends in `draft`/`ready` (from `github.event.pull_request.draft`), so a draft run can't cancel a ready run; ready runs still cancel older ready runs on the same branch. `ci-ok` and the job conditions are unchanged.
+- **Commands and observed results:**
+  - `.venv.nosync/bin/actionlint .github/workflows/ci.yml`: 1 finding, the same one as on `HEAD` before the change (`label "xcode-27" is unknown`, the GitHub preview runner from PR #14); nothing about the new expression.
+  - No Rust, Python, vector or iOS change, so cargo/pytest/Blender/xcodebuild weren't re-run. The push to the ready PR starts a full CI run, which checks 2.2d2a on all OSes.
+- **Not verified:** the race itself can't be replayed on demand; the next ready PR shows whether both runs survive.
+- **Blocked:** nothing new.
+- **Next task:** after PR #15 merges, 2.2d2b (run `VideoAdapter` in the video pipeline and expose it through `vcam_native`). No second task started.
+- **Owner actions:** none. PR #15 stays ready with squash auto-merge armed.
+
+## 2026-09-26 — Iteration 75 — waiting on CI for #15 (no task started)
+
+- **Orientation:** no LOOP_STOP; clean tree on `loop/2.2d2a` at `112194f`, same as `origin/loop/2.2d2a`. Only open `loop/*` PR: #15 (ready, squash auto-merge armed). The other open PR by the owner isn't `loop/*` and wasn't touched.
+- **CI:** `git fetch origin` passed. `gh pr checks 15 --watch` hit the 10-minute cap (`exit=124`) on run `36241323591` (the ready run for the iteration 74 fix; the concurrency change let it survive). 14 jobs passed: rust-fmt, rust ×3, fuzz, wheels ×3, python, extension, blender-smoke ×3; `ios pending` (`in_progress`, started 12:15:13Z, still running at 12:26Z). `gh pr view 15 --json state,mergeStateStatus`: `{"mergeStateStatus":"BLOCKED","state":"OPEN"}`. **waiting on CI for #15** (§1b); no new task started.
+- **Not pushed:** this entry is a local commit on `loop/2.2d2a` only. Pushing it to the ready PR would cancel the running ready run (same concurrency group) and restart CI. The next iteration carries it onto its branch (`git cherry-pick`), or pushes it with its fix if #15's CI failed.
+- **Files changed:** `docs/LOOP_LOG.md` only. No code changed; no local suite run.
+- **Next task:** check PR #15 under §1b; after it merges, 2.2d2b (run `VideoAdapter` in the video pipeline and expose it through `vcam_native`). No second task started.
+- **Owner actions:** none.
+
+## 2026-09-26 — Iteration 76 — 2.2d2a CI fix (NET-004 test) — done
+
+- **Orientation:** no LOOP_STOP; clean tree on `loop/2.2d2a` at `0cd89bb` (iteration 75's log commit, one ahead of `origin/loop/2.2d2a`). Only open `loop/*` PR: #15 (ready, squash auto-merge armed). The other open PR isn't `loop/*` and wasn't touched.
+- **CI:** `gh pr checks 15 --watch` ended with `ios fail 16m3s` and `ci-ok fail` on run `36241323591`; the other 14 jobs passed. Fixing it on the same branch is this iteration's only task; 2.2d2b not started. This is the second CI failure on #15 (iteration 74's was the cancelled-run race, a different cause); iterations 74 and 76 aren't consecutive, so §6 doesn't apply yet. A third failure on #15 next iteration would.
+- **Failure:** `VCPSessionClientTests.swift:406: error: … testReconnectRetriesUntilTheHostIsBackWithinThreeSeconds : XCTAssertGreaterThanOrEqual failed: ("2") is less than ("3") - retries while the host was down`. Same run: `NET004_RECONNECT host_back_to_session_ms=2222 attempts=2 attempt_times=[2.021903917 seconds, 1.42037375 seconds] start_gaps=[2.021926542 seconds]`. NET-004's `< 3 s` bound and the start-spacing check both passed. `Executed 60 tests, with 4 tests skipped and 1 failure (0 unexpected)`. The job then spent 10 min in `Failure collecting diagnostics from simulator: Timed out after 600.0 seconds`, hence 16 min. PR #15 changed no iOS file.
+- **Cause [INFERENCE]:** the simulator log shows `Socket SO_ERROR [61: Connection refused]` right after the first attempt started, but Network never delivered `.waiting`/`.failed`, so the attempt ran into `VCPReconnect.attemptTimeout` (2 s), after which the next attempt started at once (the documented contract). With the host back at 1.2 s, only 2 attempts fit. The `≥ 3` count assumed the refusal is reported fast (1–17 ms locally); iteration 68's fix for PR #10 kept that assumption.
+- **Change (test only):** `SightlineIOS/SightlineIOSTests/VCPSessionClientTests.swift:368-374,408`: the test requires `≥ 2` attempts (at least one failed attempt, then a retry) instead of `≥ 3`, and the doc comment says why. The spacing check (each start within 150 ms of `max(previous start + 500 ms, previous end)`) and the `< 3 s` NET-004 check are unchanged; they are what catches a slower retry loop. No product code changed; NET-004 stays Partial (no status change in `IMPLEMENTATION_PROGRESS.md`).
+- **Commands and observed results (Xcode 27, iPhone 17 simulator):**
+  - Focused test: `NET004_RECONNECT host_back_to_session_ms=311 attempts=4 attempt_times=[0.070340416 seconds, 0.002244083 seconds, 0.006469541 seconds, 0.010729583 seconds] start_gaps=[0.528427708 seconds, 0.522431667 seconds, 0.520537125 seconds]`; `Executed 1 test, with 0 failures (0 unexpected)`; `** TEST SUCCEEDED **`.
+  - Mutation (sequential, one snapshot): `VCPReconnect.run` sleeping until `started + retryInterval * 2` (`grep -c` = 1) → `attempts=3 … start_gaps=[1.027314084 seconds, 1.06359825 seconds]`, `VCPSessionClientTests.swift:412: error: … XCTAssertLessThan failed: ("0.527314084 seconds") is not less than …` (twice), `** TEST FAILED **`. Source restored; `cmp` identical.
+  - Full `xcodebuild test … -destination 'platform=iOS Simulator,name=iPhone 17'`: `Executed 60 tests, with 4 tests skipped and 0 failures (0 unexpected) in 29.212 (29.388) seconds`; `** TEST SUCCEEDED **`; `NET004_RECONNECT host_back_to_session_ms=304 attempts=4`.
+  - Rust/Python/Blender not re-run: no file they build or read changed; they passed on run `36241323591`.
+- **Not verified:** why Network didn't report the refusal on the CI simulator; it can't be reproduced locally. If a CI attempt hangs for the full 2 s again, NET-004 on CI is down to ~0.8 s of margin (2222 ms here); a device-side check of NET-004 stays with the owner.
+- **Blocked:** nothing new.
+- **Next task:** after PR #15 merges, 2.2d2b (run `VideoAdapter` in the video pipeline and expose it through `vcam_native`). No second task started.
+- **Owner actions:** none. PR #15 stays ready with squash auto-merge armed.

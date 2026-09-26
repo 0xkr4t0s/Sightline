@@ -1,12 +1,17 @@
 //! Sockets, mDNS discovery, pairing, clock sync and fragment reassembly (ARC-002).
 //! Runs its I/O on its own threads, never on Blender's main thread.
 
+mod adapt;
 mod control;
 mod discovery;
 mod smooth;
 mod store;
 mod udp;
 
+pub use adapt::{
+    AdaptChange, AdaptReason, AdaptStats, IntervalLoss, M2P_LIMIT_MS, QUALITY_FLOOR, QUALITY_STEP,
+    StreamLevel, VideoAdapter,
+};
 pub use control::{
     ControlEvent, ControlServer, MemoryStore, PairedDevice, PairingStore, ServerConfig,
 };
