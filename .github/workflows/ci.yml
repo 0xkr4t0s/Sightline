@@ -100,8 +100,9 @@ jobs:
           for seq in json.load(open("../../testdata/video/reassembly.json"))["sequences"]:
               payloads = [bytes.fromhex(s["hex"])[12:-8] for s in seq["steps"]]
               open(f"corpus/video_reassembly/{seq['name']}.bin", "wb").write(b"".join(bytes([len(p)]) + p for p in payloads))
-          for case in json.load(open("../../testdata/video/fragments.json"))["cases"]:
-              open(f"corpus/udp_open/{case['name']}.bin", "wb").write(bytes.fromhex(case["hex"]))
+          for vectors in ("fragments", "report"):
+              for case in json.load(open(f"../../testdata/video/{vectors}.json"))["cases"]:
+                  open(f"corpus/udp_open/{case['name']}.bin", "wb").write(bytes.fromhex(case["hex"]))
           EOF
       - name: cargo fuzz run (60 s per target)
         working-directory: native
