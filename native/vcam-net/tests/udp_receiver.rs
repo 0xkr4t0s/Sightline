@@ -4,8 +4,11 @@
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
-use vcam_net::{HostStatus, OneEuro, Smoothing, UdpReceiver};
-use vcam_protocol::{Clock, ControlState, Endpoint, Message, Pose, Role, Status};
+use vcam_net::{HostStatus, OneEuro, Smoothing, UdpReceiver, VideoFrameMeta};
+use vcam_protocol::{
+    Clock, ControlState, Endpoint, Message, Pose, Pushed, Reassembler, Role, Status, VideoFragment,
+    VideoFrameInfo,
+};
 
 const SID: u32 = 0x1234_ABCD;
 const K_D2H: [u8; 32] = [0x11; 32];
@@ -515,4 +518,191 @@ fn outbound_routing_requires_authentication_and_stops_on_revocation() {
     );
     rx.stop();
     quiet(&b, Duration::from_millis(150));
+}
+
+fn video_meta(pose_seq: u32) -> VideoFrameMeta {
+    VideoFrameMeta {
+        render_time_ns: u64::from(pose_seq) * 1_000_000,
+        pose_seq,
+        codec: VideoFragment::CODEC_JPEG,
+        color: VideoFragment::COLOR_SRGB_REC709,
+        quality: 80,
+    }
+}
+
+/// Bytes that differ at every offset of a frame, so a misplaced fragment shows up.
+fn frame_bytes(len: usize, salt: u8) -> Vec<u8> {
+    (0..len).map(|i| (i % 251) as u8 ^ salt).collect()
+}
+
+/// Completed frames and the (frame_id, frag_index) of every fragment, in arrival order.
+type Received = (Vec<(VideoFrameInfo, Vec<u8>)>, Vec<(u32, u16)>);
+
+/// Feeds host `VIDEO_FRAGMENT`s into a device reassembler (skipping STATUS/CLOCK) until
+/// `frames` frames complete.
+fn receive_frames(tx: &UdpSocket, endpoint: &Endpoint, frames: usize) -> Received {
+    tx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let (mut done, mut order) = (Vec::new(), Vec::new());
+    let mut reassembler = Reassembler::new();
+    let mut bytes = [0; 1200];
+    while done.len() < frames {
+        let n = tx.recv(&mut bytes).expect("VIDEO_FRAGMENT");
+        if let Message::VideoFragment(frag) = endpoint.open(&bytes[..n]).unwrap() {
+            order.push((frag.frame.frame_id, frag.frag_index));
+            match reassembler.push(&frag) {
+                Pushed::Complete(c) => done.push((c.frame, c.data.to_vec())),
+                Pushed::Pending => {}
+                other => panic!("host sent a fragment the device rejects: {other:?}"),
+            }
+        }
+    }
+    (done, order)
+}
+
+#[test]
+fn video_frames_reach_the_latest_source_numbered_in_order_and_exact() {
+    let rx = start();
+    let mut video = rx.video_sender();
+    let (a, b) = (sender(), sender());
+    // No authenticated source yet: nowhere to send, and no frame number is used up.
+    let err = video.send(video_meta(1), &[0xFF; 10]).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::NotConnected);
+    a.send_to(&datagram(&pose(1)), rx.local_addr()).unwrap();
+    wait_until("source", || rx.stats().source.is_some());
+
+    let first = frame_bytes(2 * VideoFragment::MAX_DATA + 7, 0x5A);
+    let sent = video.send(video_meta(1), &first).unwrap();
+    assert_eq!(
+        (sent.session_id, sent.frame_id, sent.fragments),
+        (SID, 1, 3)
+    );
+    // Invalid frames are refused before anything is sent or numbered.
+    for (meta, data) in [
+        (video_meta(2), &[][..]),
+        (
+            VideoFrameMeta {
+                codec: 2, // H.264 is reserved for Stage B
+                ..video_meta(2)
+            },
+            &[1, 2, 3][..],
+        ),
+    ] {
+        let err = video.send(meta, data).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+    let second = frame_bytes(VideoFragment::MAX_DATA, 0xA5);
+    assert_eq!(video.send(video_meta(2), &second).unwrap().frame_id, 2);
+
+    let (frames, order) = receive_frames(&a, &device(), 2);
+    assert_eq!(
+        order,
+        [(1, 0), (1, 1), (1, 2), (2, 0)],
+        "index order, frame by frame"
+    );
+    let (info, data) = &frames[0];
+    assert_eq!(data, &first);
+    assert_eq!(
+        *info,
+        VideoFrameInfo {
+            frame_id: 1,
+            render_time_ns: 1_000_000,
+            pose_seq: 1,
+            codec: VideoFragment::CODEC_JPEG,
+            color: VideoFragment::COLOR_SRGB_REC709,
+            quality: 80,
+            flags: 0,
+        }
+    );
+    assert_eq!((frames[1].0.frame_id, frames[1].0.pose_seq), (2, 2));
+    assert_eq!(frames[1].1, second);
+    let stats = rx.stats();
+    assert_eq!(
+        (
+            stats.video_frames_sent,
+            stats.video_fragments_sent,
+            stats.video_frames_failed
+        ),
+        (2, 4, 0)
+    );
+
+    // Roaming: the next frame follows the latest authenticated source.
+    b.send_to(&datagram(&pose(2)), rx.local_addr()).unwrap();
+    wait_until("roamed", || {
+        rx.stats().source == Some(b.local_addr().unwrap())
+    });
+    drain(&a);
+    video
+        .send(video_meta(3), &[0xFF, 0xD8, 0xFF, 0xD9])
+        .unwrap();
+    let (frames, _) = receive_frames(&b, &device(), 1);
+    assert_eq!(frames[0].0.frame_id, 3);
+    tx_has_no_video(&a);
+}
+
+/// No `VIDEO_FRAGMENT` arrives on `tx` for 150 ms (STATUS/CLOCK may).
+fn tx_has_no_video(tx: &UdpSocket) {
+    tx.set_read_timeout(Some(Duration::from_millis(150)))
+        .unwrap();
+    let mut bytes = [0; 1200];
+    while let Ok(n) = tx.recv(&mut bytes) {
+        assert_ne!(
+            bytes.get(5),
+            Some(&0x05),
+            "unexpected VIDEO_FRAGMENT ({n} bytes)"
+        );
+    }
+}
+
+#[test]
+fn video_is_session_scoped_and_ends_with_the_receiver() {
+    let mut rx = start();
+    let mut video = rx.video_sender();
+    let tx = sender();
+    tx.send_to(&datagram(&pose(1)), rx.local_addr()).unwrap();
+    wait_until("source", || rx.stats().source.is_some());
+    video.send(video_meta(1), &[1; 10]).unwrap();
+    video.send(video_meta(2), &[2; 10]).unwrap();
+    receive_frames(&tx, &device(), 2);
+
+    // A replacement session numbers from 1 again, under its own keys only.
+    let new_host = Endpoint::new(Role::Host, SID + 1, &[3; 32], &[4; 32]).unwrap();
+    let new_device = Endpoint::new(Role::Device, SID + 1, &[3; 32], &[4; 32]).unwrap();
+    rx.set_session(new_host).unwrap();
+    let err = video.send(video_meta(3), &[3; 10]).unwrap_err();
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::NotConnected,
+        "new session has no source"
+    );
+    let mut hello = Vec::new();
+    new_device.seal(&pose(1), &mut hello).unwrap();
+    tx.send_to(&hello, rx.local_addr()).unwrap();
+    wait_until("new source", || rx.stats().source.is_some());
+    drain(&tx);
+    let sent = video.send(video_meta(3), &[3; 10]).unwrap();
+    assert_eq!((sent.session_id, sent.frame_id), (SID + 1, 1));
+    let (frames, _) = receive_frames(&tx, &new_device, 1);
+    assert_eq!(
+        (frames[0].0.frame_id, frames[0].1.as_slice()),
+        (1, &[3; 10][..])
+    );
+
+    rx.clear_session(SID + 1);
+    let err = video.send(video_meta(4), &[4; 10]).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::NotConnected);
+    tx_has_no_video(&tx);
+
+    // A sender never keeps the socket alive: after stop the port binds again at once.
+    let addr = rx.local_addr();
+    rx.stop();
+    let err = video.send(video_meta(5), &[5; 10]).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::NotConnected);
+    let again = UdpReceiver::start(addr).expect("port released");
+    assert_eq!(again.local_addr(), addr);
+    let err = video.send(video_meta(6), &[6; 10]).unwrap_err();
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::NotConnected,
+        "not rebound to a new receiver"
+    );
 }

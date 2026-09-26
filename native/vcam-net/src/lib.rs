@@ -12,7 +12,10 @@ pub use control::{
 };
 pub use smooth::{OneEuro, Smoothing};
 pub use store::FileStore;
-pub use udp::{ControlSample, DropCounts, HostStatus, PoseSample, ReceiverStats, UdpReceiver};
+pub use udp::{
+    ControlSample, DropCounts, HostStatus, PoseSample, ReceiverStats, UdpReceiver, VideoFrameMeta,
+    VideoSender, VideoSent,
+};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
