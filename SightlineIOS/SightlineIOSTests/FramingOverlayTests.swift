@@ -2,9 +2,11 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 import XCTest
+import simd
 
-/// Framing guides over the viewfinder (task 2.3e1; FR-VF-003): aspect masks, rule of thirds,
-/// centre cross and action/title safe, placed on the frame as the Metal view draws it.
+/// Framing guides over the viewfinder (tasks 2.3e1/2.3e2; FR-VF-003): aspect masks, rule of
+/// thirds, centre cross, action/title safe and the horizon level, placed on the frame as the Metal
+/// view draws it.
 final class FramingOverlayTests: XCTestCase {
     private static let hd = CGSize(width: 1920, height: 1080)
     private static let phone = CGSize(width: 874, height: 402)  // iPhone 17 Pro landscape
@@ -114,7 +116,7 @@ final class FramingOverlayTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
 
         XCTAssertEqual(FramingSettings.load(userDefaults: defaults), FramingSettings(), "first launch: all off")
-        let chosen = FramingSettings(maskAspect: 2.39, thirds: true, centreCross: false, safeAreas: true)
+        let chosen = FramingSettings(maskAspect: 2.39, thirds: true, centreCross: false, safeAreas: true, horizon: true)
         chosen.save(userDefaults: defaults)
         XCTAssertEqual(FramingSettings.load(userDefaults: defaults), chosen)
         var off = chosen
@@ -125,14 +127,113 @@ final class FramingOverlayTests: XCTestCase {
         XCTAssertNil(FramingSettings.load(userDefaults: defaults).maskAspect, "an out-of-range ratio isn't drawn")
     }
 
+    // MARK: - Horizon level
+
+    private static let degree = Double.pi / 180
+
+    /// Canonical orientation built like tools/gen_testdata.py `cam`: world yaw about Z, then the
+    /// level camera (looking along +Y), then local pitch about X and roll about the view axis.
+    private func cam(yaw: Double, pitch: Double = 0, roll: Double = 0) -> SIMD4<Float> {
+        let axis = { (x: Double, y: Double, z: Double, deg: Double) in
+            simd_quatd(angle: deg * Self.degree, axis: SIMD3(x, y, z))
+        }
+        let q = axis(0, 0, 1, yaw) * axis(1, 0, 0, 90) * axis(1, 0, 0, pitch) * axis(0, 0, 1, roll)
+        return SIMD4<Float>(q.vector)
+    }
+
+    private func rigCase(_ name: String) throws -> [String: Any] {
+        let root = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "testdata", withExtension: nil))
+        let data = try Data(contentsOf: root.appending(path: "rig/rig_cases.json"))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let cases = try XCTUnwrap(json["cases"] as? [[String: Any]])
+        return try XCTUnwrap(cases.first { $0["name"] as? String == name }, name)
+    }
+
+    private func quaternion(_ value: Any?) throws -> SIMD4<Float> {
+        let c = try XCTUnwrap(value as? [Double])
+        return SIMD4<Float>(Float(c[0]), Float(c[1]), Float(c[2]), Float(c[3]))
+    }
+
+    func testHorizonAngleIsTheWorldHorizonInThePicture() throws {
+        // The shared rig vector: yaw 30, pitch −20, roll 15 about the view axis. Rolling the camera
+        // counter-clockwise (seen from behind) turns the horizon clockwise in the picture.
+        let tilted = try rigCase("lock_roll")
+        let rolled = try quaternion(tilted["orientation"])
+        XCTAssertEqual(try XCTUnwrap(HorizonLevel.angle(orientation: rolled, lockFlags: 0)), -15 * Self.degree,
+                       accuracy: 1e-5)
+        // Blender's roll-removed result is level, and Lock roll makes Blender render exactly that.
+        let unrolled = try quaternion(tilted["expected_orientation"])
+        XCTAssertEqual(try XCTUnwrap(HorizonLevel.angle(orientation: unrolled, lockFlags: 0)), 0, accuracy: 1e-5)
+        XCTAssertEqual(HorizonLevel.angle(orientation: rolled, lockFlags: DeviceControls.lockRoll), 0)
+        XCTAssertEqual(try XCTUnwrap(HorizonLevel.angle(orientation: rolled, lockFlags: DeviceControls.lockHeight
+                                                            | DeviceControls.panOnly)), -15 * Self.degree,
+                       accuracy: 1e-5, "the other locks leave the roll")
+
+        // Heading and pitch don't change it; the full circle does, including upside down.
+        for yaw in [-135.0, 0, 70] {
+            for pitch in [-60.0, 0, 45] {
+                for roll in [-170.0, -90, -1, 0, 25, 179] {
+                    let angle = try XCTUnwrap(HorizonLevel.angle(orientation: cam(yaw: yaw, pitch: pitch, roll: roll),
+                                                                 lockFlags: 0))
+                    XCTAssertEqual(angle, -roll * Self.degree, accuracy: 1e-5, "yaw \(yaw) pitch \(pitch) roll \(roll)")
+                }
+            }
+        }
+    }
+
+    func testNoHorizonLevelLookingStraightUpOrDown() throws {
+        let down = try quaternion(try rigCase("straight_down_lock_roll")["orientation"])
+        XCTAssertNil(HorizonLevel.angle(orientation: down, lockFlags: 0))
+        XCTAssertNil(HorizonLevel.angle(orientation: down, lockFlags: DeviceControls.lockRoll))
+        for pitch in [-89.9, -85.1, 85.1, 90] {
+            XCTAssertNil(HorizonLevel.angle(orientation: cam(yaw: 10, pitch: pitch, roll: 30), lockFlags: 0), "\(pitch)")
+        }
+        for pitch in [-84.9, 84.9] {
+            let angle = HorizonLevel.angle(orientation: cam(yaw: 10, pitch: pitch, roll: 30), lockFlags: 0)
+            XCTAssertEqual(try XCTUnwrap(angle, "\(pitch)"), -30 * Self.degree, accuracy: 1e-4)
+        }
+    }
+
+    func testHorizonLineTurnsAboutThePictureCentre() throws {
+        let g = try XCTUnwrap(FramingGeometry(frame: Self.hd, view: Self.phone, maskAspect: 2.39))
+        let c = g.centre
+        let half = g.picture.width / 4
+        XCTAssertEqual(g.horizonHalfLength, half)
+
+        let level = g.horizonLine(angle: 0)
+        XCTAssertEqual(level.count, 2)
+        for (index, side) in [-1.0, 1.0].enumerated() {
+            let (inner, outer) = level[index]
+            XCTAssertEqual(inner.x, c.x + side * 20, accuracy: 1e-9, "gap for the centre cross")
+            XCTAssertEqual(outer.x, c.x + side * half, accuracy: 1e-9)
+            XCTAssertEqual(inner.y, c.y, accuracy: 1e-9)
+            XCTAssertEqual(outer.y, c.y, accuracy: 1e-9)
+            let (markIn, markOut) = g.levelMarks[index]
+            XCTAssertEqual(markIn.y, c.y)
+            XCTAssertEqual(markOut.y, c.y)
+            XCTAssertGreaterThan(abs(markIn.x - c.x), half, "marks sit beyond the line's ends")
+            XCTAssertGreaterThan(abs(markOut.x - c.x), abs(markIn.x - c.x))
+        }
+
+        // 30° counter-clockwise: the right end rises (screen y is down), the left end drops.
+        let turned = g.horizonLine(angle: 30 * Self.degree)
+        let right = turned[1].1, left = turned[0].1
+        XCTAssertEqual(right.x, c.x + half * cos(30 * Self.degree), accuracy: 1e-9)
+        XCTAssertEqual(right.y, c.y - half * sin(30 * Self.degree), accuracy: 1e-9)
+        XCTAssertEqual(left.x, c.x - half * cos(30 * Self.degree), accuracy: 1e-9)
+        XCTAssertEqual(left.y, c.y + half * sin(30 * Self.degree), accuracy: 1e-9)
+    }
+
     // MARK: - Drawing
 
-    /// The overlay drawn over white at 1 pt per pixel, as 8-bit red values, row 0 at the top.
+    /// The overlay drawn over white at 1 pt per pixel, as 8-bit values of one channel (red unless
+    /// `channel` says otherwise), row 0 at the top.
     @MainActor
-    private func render(_ settings: FramingSettings, frameSize: CGSize?, size: CGSize) throws -> (Int, [UInt8]) {
+    private func render(_ settings: FramingSettings, frameSize: CGSize?, size: CGSize, horizonAngle: Double? = nil,
+                        channel: Int = 0) throws -> (Int, [UInt8]) {
         let renderer = ImageRenderer(content: ZStack {
             Color.white
-            FramingOverlayView(settings: settings, frameSize: frameSize)
+            FramingOverlayView(settings: settings, frameSize: frameSize, horizonAngle: horizonAngle)
         }.frame(width: size.width, height: size.height))
         renderer.scale = 1
         let image = try XCTUnwrap(renderer.cgImage)
@@ -146,7 +247,7 @@ final class FramingOverlayTests: XCTestCase {
                                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
             context.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
         }
-        return (w, stride(from: 0, to: rgba.count, by: 4).map { rgba[$0] })
+        return (w, stride(from: channel, to: rgba.count, by: 4).map { rgba[$0] })
     }
 
     /// Darkest red value in the window (inclusive pixel ranges).
@@ -182,5 +283,40 @@ final class FramingOverlayTests: XCTestCase {
         XCTAssertEqual(darkest(drawn, x: 225...235, y: 95...105), 255, "the picture between guides is untouched")
         XCTAssertEqual(darkest(drawn, x: 0...18, y: 0...199), 255, "nothing outside the image")
         XCTAssertEqual(darkest(none, x: 0...399, y: 0...199), 255, "nothing before the first frame")
+    }
+
+    @MainActor
+    func testOverlayDrawsTheHorizonLevel() throws {
+        // 16:9 in 400×200 without a mask: picture x 22.2–377.8, centre (200, 100), half-length 88.9.
+        let size = CGSize(width: 400, height: 200)
+        let on = FramingSettings(horizon: true)
+        let angle = 20 * Self.degree
+        let turned = try render(on, frameSize: Self.hd, size: size, horizonAngle: angle)
+        // 60 pt right of centre the line is 60·tan 20° ≈ 21.8 pt above it.
+        let lineY = Int((100 - 60 * tan(angle)).rounded())
+        XCTAssertLessThan(darkest(turned, x: 259...261, y: lineY - 1...lineY + 1), 235, "turned line drawn")
+        XCTAssertEqual(darkest(turned, x: 255...265, y: 98...102), 255, "not level: nothing along the centre row")
+        XCTAssertLessThan(darkest(turned, x: 295...305, y: 99...101), 235, "fixed level mark drawn")
+        XCTAssertEqual(darkest(turned, x: 195...205, y: 95...105), 255, "gap at the centre")
+
+        for (name, picture) in [
+            ("setting off", try render(FramingSettings(), frameSize: Self.hd, size: size, horizonAngle: angle)),
+            ("no pose", try render(on, frameSize: Self.hd, size: size, horizonAngle: nil)),
+            ("no frame", try render(on, frameSize: nil, size: size, horizonAngle: angle)),
+        ] {
+            XCTAssertEqual(darkest(picture, x: 0...399, y: 0...199), 255, "nothing drawn: \(name)")
+        }
+
+        // Green within half a degree of level, white beyond: compare green against red on the line.
+        func greenOverRed(_ angle: Double) throws -> Int {
+            let red = try render(on, frameSize: Self.hd, size: size, horizonAngle: angle, channel: 0)
+            let green = try render(on, frameSize: Self.hd, size: size, horizonAngle: angle, channel: 1)
+            return (230...240).flatMap { x in (99...101).map { y in
+                Int(green.1[y * green.0 + x]) - Int(red.1[y * red.0 + x])
+            } }.max() ?? 0
+        }
+        XCTAssertGreaterThan(try greenOverRed(0), 100, "level: green")
+        XCTAssertGreaterThan(try greenOverRed(0.49 * Self.degree), 100, "within half a degree: green")
+        XCTAssertLessThan(try greenOverRed(0.51 * Self.degree), 10, "past half a degree: white")
     }
 }

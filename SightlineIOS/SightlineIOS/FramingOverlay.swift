@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import SwiftUI
+import simd
 
 /// Which framing guides the operator wants over the viewfinder (FR-VF-003). Saved between launches.
 nonisolated struct FramingSettings: Equatable, Sendable {
@@ -14,6 +15,7 @@ nonisolated struct FramingSettings: Equatable, Sendable {
     var thirds = false
     var centreCross = false
     var safeAreas = false
+    var horizon = false
 
     /// A ratio typed by the operator ("2.2", "2,2", "16:9"), or nil if it isn't one in `aspectRange`.
     static func parseAspect(_ text: String) -> Double? {
@@ -34,6 +36,7 @@ nonisolated struct FramingSettings: Equatable, Sendable {
         userDefaults.set(thirds, forKey: Keys.thirds)
         userDefaults.set(centreCross, forKey: Keys.centreCross)
         userDefaults.set(safeAreas, forKey: Keys.safeAreas)
+        userDefaults.set(horizon, forKey: Keys.horizon)
     }
 
     /// A stored ratio outside `aspectRange` (or none) loads as no mask.
@@ -43,7 +46,8 @@ nonisolated struct FramingSettings: Equatable, Sendable {
             maskAspect: aspectRange.contains(aspect) ? aspect : nil,
             thirds: userDefaults.bool(forKey: Keys.thirds),
             centreCross: userDefaults.bool(forKey: Keys.centreCross),
-            safeAreas: userDefaults.bool(forKey: Keys.safeAreas)
+            safeAreas: userDefaults.bool(forKey: Keys.safeAreas),
+            horizon: userDefaults.bool(forKey: Keys.horizon)
         )
     }
 
@@ -52,6 +56,29 @@ nonisolated struct FramingSettings: Equatable, Sendable {
         static let thirds = "viewfinder.framing.thirds"
         static let centreCross = "viewfinder.framing.centreCross"
         static let safeAreas = "viewfinder.framing.safeAreas"
+        static let horizon = "viewfinder.framing.horizon"
+    }
+}
+
+/// The horizon level (FR-VF-003): how far the world's horizon is turned in the picture Blender
+/// renders, from the pose roll.
+nonisolated enum HorizonLevel {
+    /// Within half a degree the line counts as level and turns green.
+    static let tolerance = 0.5 * Double.pi / 180
+    /// Roll isn't defined looking straight up or down, and is noise near there: no level within 5°.
+    static let minHorizontal = sin(5 * Double.pi / 180)
+
+    /// Angle of the horizon in the picture in radians, counter-clockwise positive (0 is level), for
+    /// a canonical orientation (x, y, z, w; vcp.md §7). Nil within 5° of straight up or down. With
+    /// Lock roll, Blender renders the camera without roll (rig.py `remove_roll`), so it's level.
+    static func angle(orientation: SIMD4<Float>, lockFlags: UInt8) -> Double? {
+        let q = simd_quatd(vector: SIMD4<Double>(orientation))
+        // World up in the camera's axes: +X right, +Y up, looking down −Z.
+        let up = q.normalized.inverse.act(SIMD3<Double>(0, 0, 1))
+        guard (up.x * up.x + up.y * up.y).squareRoot() >= minHorizontal else { return nil }
+        guard lockFlags & DeviceControls.lockRoll == 0 else { return 0 }
+        // The horizon is perpendicular to up's projection on the picture: along (up.y, −up.x).
+        return atan2(-up.x, up.y)
     }
 }
 
@@ -122,6 +149,32 @@ nonisolated struct FramingGeometry: Equatable, Sendable {
     func safeArea(_ share: Double) -> CGRect {
         picture.insetBy(dx: picture.width * (1 - share) / 2, dy: picture.height * (1 - share) / 2)
     }
+
+    /// Half the horizon line's length: it spans the middle half of the picture.
+    var horizonHalfLength: CGFloat { picture.width / 4 }
+
+    /// The horizon level through the centre, turned by `angle` (radians, counter-clockwise), as two
+    /// segments with a gap for the centre cross.
+    func horizonLine(angle: Double) -> [(CGPoint, CGPoint)] {
+        let c = centre
+        let half = horizonHalfLength
+        let gap = min(20, half / 2)
+        // Screen y points down, so counter-clockwise is −y.
+        let dx = CGFloat(cos(angle)), dy = -CGFloat(sin(angle))
+        return [-1.0, 1.0].map { side in
+            (CGPoint(x: c.x + side * gap * dx, y: c.y + side * gap * dy),
+             CGPoint(x: c.x + side * half * dx, y: c.y + side * half * dy))
+        }
+    }
+
+    /// Fixed level marks just beyond each end of a level horizon line.
+    var levelMarks: [(CGPoint, CGPoint)] {
+        let c = centre
+        let half = horizonHalfLength
+        return [-1.0, 1.0].map { side in
+            (CGPoint(x: c.x + side * (half + 6), y: c.y), CGPoint(x: c.x + side * (half + 22), y: c.y))
+        }
+    }
 }
 
 /// Draws the enabled guides over the viewfinder. Nothing is drawn before the first frame, because
@@ -130,6 +183,8 @@ struct FramingOverlayView: View {
     let settings: FramingSettings
     /// Pixel size of the frame on screen, nil before the first.
     let frameSize: CGSize?
+    /// `HorizonLevel.angle` of the newest pose, nil when there's none to show.
+    var horizonAngle: Double? = nil
 
     /// Length of each arm of the centre cross, in points.
     static let crossArm: CGFloat = 12
@@ -169,6 +224,23 @@ struct FramingOverlayView: View {
                 let title = Path(geometry.safeArea(FramingGeometry.titleSafe))
                 context.stroke(title, with: .color(.black.opacity(0.5)), style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
                 context.stroke(title, with: .color(.white.opacity(0.7)), style: StrokeStyle(lineWidth: 1, dash: [6, 4]))
+            }
+            if settings.horizon, let angle = horizonAngle {
+                var marks = Path()
+                for (start, end) in geometry.levelMarks {
+                    marks.move(to: start)
+                    marks.addLine(to: end)
+                }
+                var line = Path()
+                for (start, end) in geometry.horizonLine(angle: angle) {
+                    line.move(to: start)
+                    line.addLine(to: end)
+                }
+                let colour: Color = abs(angle) <= HorizonLevel.tolerance ? .green : .white.opacity(0.9)
+                context.stroke(marks, with: .color(.black.opacity(0.5)), lineWidth: 3)
+                context.stroke(marks, with: .color(.white.opacity(0.7)), lineWidth: 1.5)
+                context.stroke(line, with: .color(.black.opacity(0.5)), lineWidth: 3)
+                context.stroke(line, with: .color(colour), lineWidth: 1.5)
             }
         }
         .allowsHitTesting(false)
