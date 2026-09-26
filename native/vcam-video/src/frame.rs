@@ -7,13 +7,29 @@
 //! stream skips it rather than queueing), and its buffer is reused, so a steady stream
 //! allocates nothing per frame.
 //!
-//! Pixels are RGBA8 as `GPUTexture.read()` returns them: rows bottom-up, display-referred
-//! (Blender's view transform applied).
+//! Pixels are RGBA8 as GPUTexture.read() returns them: rows bottom-up, with Blender's
+//! viewport display transform applied into sRGB (Rec.709 primaries).
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// Bytes per RGBA8 pixel.
 pub const BYTES_PER_PIXEL: usize = 4;
+
+/// Display-referred colour encoding of a submitted frame, for the future encoder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameColorSpace {
+    /// sRGB transfer curve and Rec.709 primaries, after Blender's viewport transform/look.
+    SrgbRec709,
+}
+
+impl FrameColorSpace {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::SrgbRec709 => "sRGB/Rec.709",
+        }
+    }
+}
 
 /// Why a frame was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +60,8 @@ pub struct FrameMeta {
     pub pose_seq: u32,
     /// Host clock (`vcam_net` host clock, ns) when the frame was drawn.
     pub render_time_ns: u64,
+    /// Colour encoding of pixels; the Blender renderer supplies sRGB/Rec.709.
+    pub color_space: FrameColorSpace,
 }
 
 impl FrameMeta {
@@ -68,6 +86,7 @@ impl FrameMeta {
             height,
             pose_seq,
             render_time_ns,
+            color_space: FrameColorSpace::SrgbRec709,
         })
     }
 

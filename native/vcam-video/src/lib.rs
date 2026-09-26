@@ -4,7 +4,7 @@
 
 pub mod frame;
 
-pub use frame::{Frame, FrameError, FrameMeta, FrameSlot};
+pub use frame::{Frame, FrameColorSpace, FrameError, FrameMeta, FrameSlot};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

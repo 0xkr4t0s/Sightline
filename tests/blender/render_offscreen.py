@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Headless Blender check: the offscreen stream renderer (task 2.1a; FR-REN-001, FR-REN-003).
+"""Headless Blender check: offscreen stream frames (FR-REN-001/003/005).
 
 Needs a GPU (`gpu.init()`); CI runners have none, so this runs locally for now. Install the
 extension as for `smoke_native.py`, then:
@@ -9,6 +9,8 @@ extension as for `smoke_native.py`, then:
 - Submitted Solid frames are pixel-identical to independent draws at the matching pose, not blank.
 - Material Preview and EEVEE frames match independent draws in those modes, not Solid.
 - Pipelining carries the draw tick's pose seq and time, not the readback tick's.
+- Display-referred material frames change with the scene view transform and look; uncorrected
+  linear pixels differ, and the submitted bytes carry an sRGB/Rec.709 colour tag.
 - Every 3D view's shading and overlays are unchanged even when the borrowed view is Wireframe.
 - FrameSlot.submit refuses buffers of the wrong shape.
 """
@@ -56,7 +58,7 @@ def pose(yaw_deg):
     return bpy.context.evaluated_depsgraph_get()
 
 
-def reference(yaw_deg, mode='SOLID'):
+def reference(yaw_deg, mode='SOLID', color_management=True):
     """Independent synchronous draw at yaw_deg, with explicit viewport shading."""
     depsgraph = pose(yaw_deg)
     offscreen = gpu.types.GPUOffScreen(W, H, format='RGBA8')
@@ -65,7 +67,7 @@ def reference(yaw_deg, mode='SOLID'):
     offscreen.draw_view3d(
         scene, view_layer, space, region,
         camera.matrix_world.inverted(), camera.calc_matrix_camera(depsgraph, x=W, y=H),
-        do_color_management=True,
+        do_color_management=color_management,
     )
     space.shading.type, space.overlay.show_overlays = saved
     pixels = np.array(offscreen.texture_color.read(), dtype=np.uint8)
@@ -89,6 +91,7 @@ def check(frame_id, yaw_deg, seq, now_ns):
     assert frame is not None, "no frame submitted"
     got = {k: frame[k] for k in ("frame_id", "width", "height", "pose_seq", "render_time_ns")}
     assert got == {"frame_id": frame_id, "width": W, "height": H, "pose_seq": seq, "render_time_ns": now_ns}, got
+    assert frame['color_space'] == 'sRGB/Rec.709', frame['color_space']
     pixels = np.frombuffer(frame["pixels"], dtype=np.uint8).reshape(H, W, 4)
     colours = len(np.unique(pixels[::4, ::4].reshape(-1, 4), axis=0))
     assert colours > 16, f"frame {frame_id} looks blank ({colours} colours)"
@@ -130,6 +133,59 @@ for mode in ('MATERIAL', 'RENDERED'):
     mode_error = np.abs(pixels.astype(np.int16) - expected.astype(np.int16)).mean()
     assert mode_error < solid_error / 2, (mode, mode_error, solid_error)
 
+# Use the same scene colour settings that Blender uses for a Material viewport. Solid is
+# Workbench shading and, like Blender's Solid viewport, does not track the scene look.
+assert renderer.configure(W, H, 'MATERIAL')
+saved_color = (scene.display_settings.display_device, scene.view_settings.view_transform, scene.view_settings.look)
+scene.display_settings.display_device = 'sRGB'
+
+
+def stream_color(seq):
+    renderer.free()  # discard the preceding look's pending frame
+    assert tick(0.0, seq, seq * 1_000) is None
+    assert tick(0.0, seq + 1, (seq + 1) * 1_000) is not None
+    frame = slot._take()
+    assert frame['color_space'] == 'sRGB/Rec.709'
+    return np.frombuffer(frame['pixels'], dtype=np.uint8).reshape(H, W, 4)
+
+
+def max_rgb_diff(a, b):
+    return int(np.abs(a[:, :, :3].astype(np.int16) - b[:, :, :3].astype(np.int16)).max())
+
+
+try:
+    scene.view_settings.view_transform = 'Standard'
+    scene.view_settings.look = 'Medium Low Contrast'
+    low = stream_color(21)
+    # EEVEE sampling/8-bit quantization can differ by two codes on repeated draws.
+    assert max_rgb_diff(low, reference(0.0, 'MATERIAL')) <= 2
+    unmanaged_diff = max_rgb_diff(low, reference(0.0, 'MATERIAL', color_management=False))
+    assert unmanaged_diff > 10, unmanaged_diff
+
+    scene.view_settings.look = 'Medium High Contrast'
+    high = stream_color(23)
+    look_diff = max_rgb_diff(low, high)
+    assert look_diff > 5 and max_rgb_diff(high, reference(0.0, 'MATERIAL')) <= 2, look_diff
+
+    scene.view_settings.view_transform = 'AgX'
+    scene.view_settings.look = 'AgX - Medium High Contrast'
+    agx = stream_color(25)
+    view_diff = max_rgb_diff(high, agx)
+    assert view_diff > 5 and max_rgb_diff(agx, reference(0.0, 'MATERIAL')) <= 2, view_diff
+
+    # A wide-gamut monitor setting must not change the meaning of tagged stream bytes
+    # or be overwritten in the user's scene after the draw.
+    scene.display_settings.display_device = 'Display P3'
+    wide = stream_color(27)
+    assert max_rgb_diff(wide, agx) <= 2, max_rgb_diff(wide, agx)
+    assert (scene.display_settings.display_device, scene.view_settings.view_transform,
+            scene.view_settings.look) == ('Display P3', 'AgX', 'AgX - Medium High Contrast')
+    gamut_diff = max_rgb_diff(wide, reference(0.0, 'MATERIAL'))
+    assert gamut_diff > 5, gamut_diff
+finally:
+    (scene.display_settings.display_device, scene.view_settings.view_transform,
+     scene.view_settings.look) = saved_color
+
 renderer.free()
 
 after = [(s.shading.type, s.overlay.show_overlays) for s in spaces]
@@ -144,3 +200,5 @@ for bad in (np.zeros((H, W, 3), np.uint8), np.zeros(W * H * 4, np.uint8), np.zer
         raise AssertionError(f"shape {bad.shape} accepted")
 
 print(f"VCAM_RENDER_OK size={W}x{H} frames=7 modes=Solid/Material/EEVEE colours={colours} views_checked={len(spaces)}")
+print(f"VCAM_COLOR_OK unmanaged_max={unmanaged_diff} look_max={look_diff} view_max={view_diff} "
+      f"gamut_max={gamut_diff} display_restored=true tag=sRGB/Rec.709")
