@@ -1706,3 +1706,19 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** nothing new; device checks (1.5.1c, O-1, NET-004) remain owner-only.
 - **Next task:** 2.2c2: wire `JpegWorker` → `VideoSender` into `vcam_native`/the add-on, headless-Blender fake-iPhone video test, libjpeg-turbo notices. No second task started.
 - **Owner actions:** none; PR #10 set ready with squash auto-merge.
+
+## 2026-09-26 — Iteration 68 — PR #10 CI repair (NET-004 test) — done
+
+- **Orientation:** no LOOP_STOP; clean `loop/2.2c1`, even with its remote. Ready PR #10 (auto-merge armed): run `36215199149` passed 13 jobs (rust-fmt, rust ×3, wheels ×3, extension, blender-smoke ×3) and failed `ios`, hence `ci-ok`. First CI failure on this PR. Fixing it is this iteration's only task; 2.2c2 not started. The other open PR (#2, not `loop/*`) was not touched.
+- **Failure:** `VCPSessionClientTests.swift:401: error: … testReconnectRetriesUntilTheHostIsBackWithinThreeSeconds : XCTAssertLessThan failed: ("0.81554425 seconds") is not less than ("0.65 seconds") - attempts must start at least every 500 ms`. Same run: `NET004_RECONNECT host_back_to_session_ms=120 attempts=3`, so NET-004's 3 s bound held; only one gap between attempt starts was long. PR #10 changed no iOS file.
+- **Cause [INFERENCE]:** `VCPReconnect.run` never overlaps attempts: it starts the next one 500 ms after the previous start, or at once if that attempt took longer (its documented contract). The test's fixed 650 ms bound assumed a refused loopback connect always finishes in < 150 ms. On the shared CI simulator one gap took 815 ms; the log doesn't show whether the attempt (Network `.waiting` callback) or the sleep took the time. Locally attempts take 1–17 ms.
+- **Change (test only):** `SightlineIOS/SightlineIOSTests/VCPSessionClientTests.swift`: `Attempts` also records when each attempt ends; the test asserts each start is within 150 ms of `max(previous start + retryInterval, previous end)`, i.e. the loop's own scheduling, and prints `attempt_times` and `start_gaps` so a future CI failure shows which part was slow. The NET-004 `< 3 s` assertion and `≥ 3` attempts are unchanged. No product code changed; NET-004 stays Partial (no status change in `IMPLEMENTATION_PROGRESS.md`).
+- **Commands and observed results (Xcode 27, iPhone 17 simulator):**
+  - Focused test: `NET004_RECONNECT host_back_to_session_ms=277 attempts=4 attempt_times=[0.016744 seconds, 0.001361792 seconds, 0.000779792 seconds, 0.005981834 seconds] start_gaps=[0.509754417 seconds, 0.533270458 seconds, 0.508104875 seconds]`; `Executed 1 test, with 0 failures (0 unexpected)`; `** TEST SUCCEEDED **`.
+  - Mutation: `run` sleeping until `started + retryInterval * 2` → `XCTAssertLessThan failed: ("0.50589225 seconds") is not less than ("0.15 seconds")` (twice), `** TEST FAILED **`. Source restored; `cmp` identical.
+  - Full `xcodebuild test … -destination 'platform=iOS Simulator,name=iPhone 17'`: `Executed 60 tests, with 4 tests skipped and 0 failures (0 unexpected) in 29.304 (29.319) seconds`; `** TEST SUCCEEDED **`.
+  - Rust/Python/Blender not re-run: no file they build or read changed.
+- **Not verified:** the fix on the CI runner (runs on push). If a slow sleep rather than a slow attempt caused the 815 ms gap, the new assertion fails again, and the printed `attempt_times`/`start_gaps` will show it; that would be this PR's second consecutive CI failure (§6 stop).
+- **Blocked:** nothing new; device checks (1.5.1c, O-1, NET-004) remain owner-only.
+- **Next task:** check PR #10 under §1b; after it merges, 2.2c2 (wire `JpegWorker` → `VideoSender` into `vcam_native`/the add-on). No second task started.
+- **Owner actions:** none; auto-merge stays armed on PR #10.
