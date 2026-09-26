@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Offscreen stream renderer (task 2.1; FR-REN-001/003/004, SRS §13.1).
+"""Offscreen stream renderer (task 2.1; FR-REN-001..004, SRS §13.1).
 
 Draws the VCam camera into a `GPUOffScreen` with `draw_view3d`, using the camera's own view and
 projection matrices, so the stream doesn't depend on what the user's viewports show. Each frame
@@ -10,19 +10,19 @@ has usually finished it by then, so `read()` barely waits), then draws the next 
 therefore one tick old when it's submitted. Its pose `seq` and draw time are captured when it's
 drawn and submitted with it.
 
-`draw_view3d` takes its shading from a `SpaceView3D`. The renderer uses one on a screen that no
-window shows (a hidden workspace) when there is one, and sets Solid with overlays off for the
-draw only, restoring the space's settings straight after. The user's viewports never change.
+draw_view3d takes its shading from a SpaceView3D. The renderer uses one on a screen that no
+window shows (a hidden workspace) when there is one, and sets the selected shading with overlays
+off for the draw only, restoring the space's settings straight after. User viewports never change.
 
-Main thread only. The session poll drives it at 30 fps, skipping frames after expensive draw/read
-operations. Stream settings beyond the budget (2.1c) and colour management (2.1d) remain open.
+Main thread only. The session poll drives it at the selected fps cap, skipping frames after
+expensive draw/read operations. Colour management (2.1d) remains open.
 """
 
 import time
 
-SHADING = 'SOLID'
 DEFAULT_BUDGET_MS = 12
-STREAM_FPS = 30
+STREAM_RESOLUTIONS = {'360p': (640, 360), '540p': (960, 540), '720p': (1280, 720), '1080p': (1920, 1080)}
+STREAM_FPS_CAPS = (24, 30, 60)
 
 
 class FramePacer:
@@ -34,13 +34,15 @@ class FramePacer:
 
     def __init__(self, budget_ms: int = DEFAULT_BUDGET_MS) -> None:
         self.budget_ms = budget_ms
+        self.fps = 30
         self.next_due_ns = 0
         self.cost_ns = 0
 
-    def due(self, now_ns: int, budget_ms: int) -> bool:
-        if budget_ms != self.budget_ms:
+    def due(self, now_ns: int, budget_ms: int, fps: int) -> bool:
+        if budget_ms != self.budget_ms or fps != self.fps:
             self.budget_ms = budget_ms
-            self.next_due_ns = now_ns  # a new budget takes effect without waiting for an old skip
+            self.fps = fps
+            self.next_due_ns = now_ns  # a new setting takes effect without waiting for an old skip
         return now_ns >= self.next_due_ns
 
     def record(self, now_ns: int, read_ns: int, draw_ns: int) -> None:
@@ -48,8 +50,8 @@ class FramePacer:
         # Raise the estimate immediately under load; decay slowly when GPU contention clears.
         self.cost_ns = max(measured, (3 * self.cost_ns + measured) // 4)
         budget_ns = self.budget_ms * 1_000_000
-        frames = min(STREAM_FPS, max(1, (self.cost_ns + budget_ns - 1) // budget_ns))
-        self.next_due_ns = now_ns + frames * (1_000_000_000 // STREAM_FPS)
+        frames = min(self.fps, max(1, (self.cost_ns + budget_ns - 1) // budget_ns))
+        self.next_due_ns = now_ns + frames * (1_000_000_000 // self.fps)
 
 
 def stream_view():
@@ -76,17 +78,26 @@ def stream_view():
 
 
 class StreamRenderer:
-    """Renders the camera at a fixed size into `slot` (a `vcam_native.FrameSlot`), one tick behind."""
+    """Renders the camera into `slot` (a `vcam_native.FrameSlot`), one tick behind."""
 
-    def __init__(self, slot, width: int = 960, height: int = 540) -> None:
+    def __init__(self, slot, width: int = 960, height: int = 540, shading: str = 'SOLID') -> None:
         self.slot = slot
         self.width = width
         self.height = height
+        self.shading = shading
         self._offscreen = None
         # (pose_seq, render_time_ns) of the frame drawn but not read yet.
         self._pending = None
         self.read_ns = 0
         self.draw_ns = 0
+
+    def configure(self, width: int, height: int, shading: str) -> bool:
+        """Discard the old setting's pending frame before drawing with the new one."""
+        if (width, height, shading) == (self.width, self.height, self.shading):
+            return False
+        self.free()
+        self.width, self.height, self.shading = width, height, shading
+        return True
 
     def tick(self, scene, view_layer, depsgraph, camera, pose_seq: int, now_ns: int):
         """Submits the frame drawn on the previous tick, then draws `camera` for the next one.
@@ -121,7 +132,7 @@ class StreamRenderer:
         space, region = view
         shading, overlay = space.shading, space.overlay
         saved = shading.type, overlay.show_overlays
-        shading.type, overlay.show_overlays = SHADING, False
+        shading.type, overlay.show_overlays = self.shading, False
         try:
             view_matrix = camera.evaluated_get(depsgraph).matrix_world.inverted()
             projection = camera.calc_matrix_camera(depsgraph, x=self.width, y=self.height)
@@ -140,14 +151,18 @@ class StreamRenderer:
 
 
 class StreamLoop:
-    """One connected device's renderer and adaptive 30 fps schedule."""
+    """One connected device's renderer and adaptive fps schedule."""
 
     def __init__(self, slot) -> None:
         self.renderer = StreamRenderer(slot)
         self.pacer = FramePacer()
 
-    def tick(self, context, camera, pose_seq: int, clock_ns, budget_ms: int):
-        if not self.pacer.due(clock_ns(), budget_ms):
+    def tick(self, context, camera, pose_seq: int, clock_ns, budget_ms: int,
+             fps: int, resolution: tuple[int, int], shading: str):
+        if self.renderer.configure(*resolution, shading):
+            self.pacer.next_due_ns = 0
+            self.pacer.cost_ns = 0  # a new mode's GPU cost may be very different
+        if not self.pacer.due(clock_ns(), budget_ms, fps):
             return None
         depsgraph = context.evaluated_depsgraph_get()
         now_ns = clock_ns()  # same host clock as CLOCK; after evaluation, just before drawing

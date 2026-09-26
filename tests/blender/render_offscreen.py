@@ -6,13 +6,11 @@ extension as for `smoke_native.py`, then:
 
     "$B" --background --factory-startup --python-exit-code 1 --python tests/blender/render_offscreen.py
 
-- Each submitted frame is 320×180 RGBA8, not blank, and pixel-identical to an independent
-  synchronous Solid draw of the camera at the pose it was drawn with, with overlays off.
-- Pipelining: a frame is submitted one tick after it's drawn, with that tick's pose seq and draw
-  time, even though the camera has moved since.
-- Every 3D view's shading and overlays are unchanged afterwards, and the stream stays Solid while
-  the hidden view it borrows is set to Wireframe with overlays on.
-- `FrameSlot.submit` refuses a buffer that isn't shaped (height, width, 4).
+- Submitted Solid frames are pixel-identical to independent draws at the matching pose, not blank.
+- Material Preview and EEVEE frames match independent draws in those modes, not Solid.
+- Pipelining carries the draw tick's pose seq and time, not the readback tick's.
+- Every 3D view's shading and overlays are unchanged even when the borrowed view is Wireframe.
+- FrameSlot.submit refuses buffers of the wrong shape.
 """
 
 import importlib
@@ -38,6 +36,10 @@ camera = scene.camera
 bpy.ops.mesh.primitive_monkey_add(location=(0.0, 0.0, 1.5))
 bpy.context.active_object.modifiers.new("smooth", 'SUBSURF').levels = 2
 bpy.ops.object.shade_smooth()
+material = bpy.data.materials.new("Stream test red")
+material.diffuse_color = (0.9, 0.02, 0.02, 1.0)
+material.node_tree.nodes.get("Principled BSDF").inputs["Base Color"].default_value = material.diffuse_color
+bpy.context.active_object.data.materials.append(material)
 base = camera.matrix_world.copy()
 
 spaces = [a.spaces.active for s in bpy.data.screens for a in s.areas if a.type == 'VIEW_3D']
@@ -54,12 +56,12 @@ def pose(yaw_deg):
     return bpy.context.evaluated_depsgraph_get()
 
 
-def reference(yaw_deg):
-    """Synchronous Solid draw at `yaw_deg`, written without the add-on's code."""
+def reference(yaw_deg, mode='SOLID'):
+    """Independent synchronous draw at yaw_deg, with explicit viewport shading."""
     depsgraph = pose(yaw_deg)
     offscreen = gpu.types.GPUOffScreen(W, H, format='RGBA8')
     saved = space.shading.type, space.overlay.show_overlays
-    space.shading.type, space.overlay.show_overlays = 'SOLID', False
+    space.shading.type, space.overlay.show_overlays = mode, False
     offscreen.draw_view3d(
         scene, view_layer, space, region,
         camera.matrix_world.inverted(), camera.calc_matrix_camera(depsgraph, x=W, y=H),
@@ -114,6 +116,20 @@ tick(16.0, 17, 7_000)
 tick(0.0, 18, 8_000)
 assert slot.replaced() == 1, slot.replaced()
 check(5, 16.0, 17, 7_000)
+for mode in ('MATERIAL', 'RENDERED'):
+    expected = reference(0.0, mode)
+    solid_error = np.abs(expected.astype(np.int16) - refs[0.0].astype(np.int16)).mean()
+    assert solid_error > 2, f"{mode} reference indistinguishable from Solid"
+    assert renderer.configure(W, H, mode)
+    assert tick(0.0, 19, 9_000) is None  # the pending Solid frame was dropped
+    assert slot._take() is None
+    assert tick(0.0, 20, 10_000) is not None
+    frame = slot._take()
+    assert frame is not None
+    pixels = np.frombuffer(frame['pixels'], dtype=np.uint8).reshape(H, W, 4)
+    mode_error = np.abs(pixels.astype(np.int16) - expected.astype(np.int16)).mean()
+    assert mode_error < solid_error / 2, (mode, mode_error, solid_error)
+
 renderer.free()
 
 after = [(s.shading.type, s.overlay.show_overlays) for s in spaces]
@@ -127,4 +143,4 @@ for bad in (np.zeros((H, W, 3), np.uint8), np.zeros(W * H * 4, np.uint8), np.zer
     else:
         raise AssertionError(f"shape {bad.shape} accepted")
 
-print(f"VCAM_RENDER_OK size={W}x{H} frames=5 colours={colours} views_checked={len(spaces)}")
+print(f"VCAM_RENDER_OK size={W}x{H} frames=7 modes=Solid/Material/EEVEE colours={colours} views_checked={len(spaces)}")

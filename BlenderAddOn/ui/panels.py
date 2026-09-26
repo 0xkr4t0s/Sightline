@@ -44,7 +44,16 @@ class VCAM_PT_main_panel(bpy.types.Panel):
             col.label(text=warning, icon='ERROR')  # FR-BL-007
         col.prop(props, "smoothing")
         col.prop(props, "hold_last_good")
+        stream = layout.box()
+        stream.label(text="Stream", icon='RENDER_STILL')
+        col = stream.column(align=True)
+        col.prop(props, "stream_resolution", text="Size")
+        col.prop(props, "stream_fps", text="FPS")
+        col.prop(props, "stream_shading", text="Shading")
         col.prop(props, "render_budget_ms")
+        if props.stream_shading == 'RENDERED':
+            col.label(text="EEVEE: UI may lag", icon='ERROR')
+            col.label(text="Stream fps may drop")
 
         if live is None:
             op = layout.operator("vcam.session_start", text="Start Session", icon='PLAY')
