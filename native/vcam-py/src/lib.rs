@@ -358,6 +358,19 @@ mod vcam_native {
             })
         }
 
+        /// The user's stream resolution changed: the adapter may now lower it by up to
+        /// `max_resolution_drop` steps (NET-VID-005); a current drop beyond that is cut back at
+        /// once. Raises `RuntimeError` when no stream is running.
+        fn set_video_max_resolution_drop(&self, max_resolution_drop: u8) -> PyResult<()> {
+            guard(|| {
+                self.lock_video()
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("video stream is not running"))?
+                    .set_max_resolution_drop(max_resolution_drop);
+                Ok(())
+            })
+        }
+
         /// Viewfinder counters as a dict, or None when no stream is running. `quality` is the
         /// quality the encoder uses now, `user_quality` the one asked for. `last_sent` is the
         /// newest frame handed to the socket in full (source and wire `frame_id`, pose, size,

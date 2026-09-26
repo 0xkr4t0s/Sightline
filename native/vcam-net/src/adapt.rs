@@ -197,6 +197,14 @@ impl VideoAdapter {
         Ok(())
     }
 
+    /// The user changed the resolution mid-session: the stream may now drop up to
+    /// `max_resolution_drop` steps below the new one (0 = never lower it). The current drop is
+    /// kept, at most the new limit, and recovers as before. Not counted as a change.
+    pub fn set_max_resolution_drop(&mut self, max_resolution_drop: u8) {
+        self.max_resolution_drop = max_resolution_drop;
+        self.level.resolution_drop = self.level.resolution_drop.min(max_resolution_drop);
+    }
+
     /// Records a frame the sender handed to the socket in full (`VideoSent::frame_id`). Frames
     /// given up part-way are not recorded: §6.6 counts only finished frames.
     pub fn frame_sent(&mut self, frame_id: u32) {
@@ -649,6 +657,36 @@ mod tests {
         let e = low.adapter.set_quality(0).unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(low.level(), (40, 1));
+    }
+
+    #[test]
+    fn a_new_resolution_limit_caps_the_drop_and_bounds_later_ones() {
+        let mut link = Link::new(40, 2);
+        let lower = |link: &mut Link| {
+            link.interval(15, 0, 0); // the two settling reports after a change
+            link.interval(15, 0, 0);
+            link.interval(15, 5, 0);
+            link.interval(15, 5, 0)
+        };
+        lower(&mut link);
+        lower(&mut link);
+        assert_eq!(link.level(), (40, 2));
+        // Fewer steps below the user's new resolution: capped at once.
+        link.adapter.set_max_resolution_drop(1);
+        assert_eq!(link.level(), (40, 1));
+        assert_eq!(lower(&mut link), None, "no step below the new limit");
+        // More steps: the drop is kept and may go further.
+        link.adapter.set_max_resolution_drop(3);
+        assert_eq!(link.level(), (40, 1));
+        assert_eq!(lower(&mut link).map(|c| c.to.resolution_drop), Some(2));
+        link.adapter.set_max_resolution_drop(0);
+        assert_eq!(link.level(), (40, 0));
+        assert_eq!(lower(&mut link), None);
+        assert_eq!(
+            link.adapter.stats().changes,
+            3,
+            "user changes aren't the adapter's"
+        );
     }
 
     #[test]

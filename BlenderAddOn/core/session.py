@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 from .apply import Applier, clear_zero, find_origin, target_camera
 from .latency import LatencyLog
-from .render import DEFAULT_BUDGET_MS, STREAM_RESOLUTIONS, StreamLoop
+from .render import DEFAULT_BUDGET_MS, StreamLoop, adapted_resolution, resolution_steps
 from .status import pose_latency_ms
 
 HOST_ID_FILE = "host_id"
@@ -249,7 +249,8 @@ def _render_frame(session, context) -> None:
         return
     props = getattr(scene, "vcam_props", None)
     budget_ms = getattr(props, "render_budget_ms", DEFAULT_BUDGET_MS)
-    resolution = STREAM_RESOLUTIONS[getattr(props, "stream_resolution", '540p')]
+    resolution_key = getattr(props, "stream_resolution", '540p')
+    steps = resolution_steps(resolution_key)
     fps = int(getattr(props, "stream_fps", '30'))
     shading = getattr(props, "stream_shading", 'SOLID')
     try:
@@ -259,9 +260,15 @@ def _render_frame(session, context) -> None:
             # Encoder + sender live exactly as long as this StreamLoop (NET-VID-001, task 2.2c2b),
             # so no frame of an earlier device session or camera reaches the next one.
             slot = vcam_native.FrameSlot()
-            stream = StreamLoop(slot)
-            session.start_video(slot)
+            stream = StreamLoop(slot, steps)
+            session.start_video(slot, max_resolution_drop=steps)
             _stream = stream
+        elif _stream.max_resolution_drop != steps:
+            session.set_video_max_resolution_drop(steps)
+            _stream.max_resolution_drop = steps
+        # NET-VID-005: the adapter's resolution step, below the user's size.
+        adapt = session.video_stats()["adapt"]
+        resolution = adapted_resolution(resolution_key, adapt["resolution_drop"] if adapt else 0)
         _stream.tick(context, camera, _applier.applied_seq, session.host_clock_ns,
                      budget_ms, fps, resolution, shading)
     except Exception as e:  # noqa: BLE001 - a broken GPU must not interrupt pose tracking

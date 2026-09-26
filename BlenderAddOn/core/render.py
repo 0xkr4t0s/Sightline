@@ -26,6 +26,17 @@ STREAM_RESOLUTIONS = {'360p': (640, 360), '540p': (960, 540), '720p': (1280, 720
 STREAM_FPS_CAPS = (24, 30, 60)
 
 
+def resolution_steps(key: str) -> int:
+    """How many resolution steps the stream can drop below the user's `key` (NET-VID-005)."""
+    return list(STREAM_RESOLUTIONS).index(key)
+
+
+def adapted_resolution(key: str, drop: int) -> tuple[int, int]:
+    """The stream size `drop` steps below the user's `key`, never below the smallest size."""
+    keys = list(STREAM_RESOLUTIONS)
+    return STREAM_RESOLUTIONS[keys[max(keys.index(key) - drop, 0)]]
+
+
 class FramePacer:
     """Skip frames after an over-budget draw/read, without catching up missed frames.
 
@@ -164,9 +175,12 @@ class StreamRenderer:
 class StreamLoop:
     """One connected device's renderer and adaptive fps schedule."""
 
-    def __init__(self, slot) -> None:
+    def __init__(self, slot, max_resolution_drop: int = 0) -> None:
         self.renderer = StreamRenderer(slot)
         self.pacer = FramePacer()
+        # The resolution steps the video stream's adapter may drop (NET-VID-005), kept in step
+        # with the user's resolution.
+        self.max_resolution_drop = max_resolution_drop
 
     def tick(self, context, camera, pose_seq: int, clock_ns, budget_ms: int,
              fps: int, resolution: tuple[int, int], shading: str):

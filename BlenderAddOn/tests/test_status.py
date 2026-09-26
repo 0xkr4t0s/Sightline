@@ -38,12 +38,39 @@ def test_pairing_code_is_grouped():
 
 
 def test_video_counters_show_the_last_frame_and_only_real_failures():
-    stats = {"sent": 40, "encoded_skipped": 2, "quality": 80, "send_failed": 0, "encode_failed": 0,
-             "last_error": None, "last_sent": None, "unsent": 5}
-    assert video_labels(None) == ["Video: not streaming"]
-    assert video_labels(stats) == ["Video: 40 sent, 2 skipped, q80"]  # unsent (no device) is not a failure
+    stats = {"sent": 40, "encoded_skipped": 2, "quality": 80, "user_quality": 80, "send_failed": 0,
+             "encode_failed": 0, "last_error": None, "last_sent": None, "unsent": 5, "adapt": None}
+    assert video_labels(None, '540p') == ["Video: not streaming"]
+    assert video_labels(stats, '540p') == ["Video: 40 sent, 2 skipped, q80"]  # unsent (no device) is not a failure
     stats["last_sent"] = {"width": 960, "height": 540, "jpeg_bytes": 52099, "encode_ns": 890_000,
                           "send_ns": 320_000}
     stats.update(send_failed=1, last_error="timed out")
-    assert video_labels(stats)[1:] == ["Last: 960×540, 51 KB, encode 0.9 ms, send 0.3 ms",
-                                       "Video failures: 1 (timed out)"]
+    assert video_labels(stats, '540p')[1:] == ["Last: 960×540, 51 KB, encode 0.9 ms, send 0.3 ms",
+                                              "Video failures: 1 (timed out)"]
+
+
+def test_adaptation_shows_the_level_as_a_size_below_the_users_and_why_it_changed():
+    adapt = {"quality": 80, "resolution_drop": 0, "expected": 0, "lost": 0, "report": None,
+             "last_change": None}
+    stats = {"sent": 3, "encoded_skipped": 0, "quality": 80, "user_quality": 80, "send_failed": 0,
+             "encode_failed": 0, "last_error": None, "last_sent": None, "adapt": adapt}
+    assert video_labels(stats, '720p')[1:] == ["Adaptive: full, q80 1280×720", "Link: 0 of 0 frames lost"]
+    # At the user's quality but one size down is still lowered.
+    adapt.update(quality=50, resolution_drop=1, expected=300, lost=40,
+                 report={"m2p_p95_ms": 0},
+                 last_change={"reason": "loss", "lost": 5, "expected": 15, "m2p_p95_ms": None,
+                              "from_quality": 50, "from_resolution_drop": 0,
+                              "to_quality": 50, "to_resolution_drop": 1})
+    stats["user_quality"] = 50
+    assert video_labels(stats, '720p')[1:] == [
+        "Adaptive: lowered to q50 960×540",
+        "Link: 40 of 300 frames lost",
+        "Last change: q50 1280×720 → q50 960×540 (5/15 lost)",
+    ]
+    adapt["report"] = {"m2p_p95_ms": 140}
+    adapt["last_change"].update(reason="m2p", lost=None, expected=None, m2p_p95_ms=140)
+    assert video_labels(stats, '720p')[2:] == ["Link: 40 of 300 frames lost, M2P p95 140 ms",
+                                              "Last change: q50 1280×720 → q50 960×540 (M2P 140 ms)"]
+    adapt["last_change"].update(reason="recovered", m2p_p95_ms=None, from_resolution_drop=2,
+                                to_resolution_drop=1)
+    assert video_labels(stats, '720p')[3] == "Last change: q50 640×360 → q50 960×540 (link clear)"
