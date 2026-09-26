@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Offscreen stream renderer (task 2.1; FR-REN-001..004, SRS §13.1).
+"""Offscreen stream renderer (task 2.1; FR-REN-001..005, SRS §13.1).
 
 Draws the VCam camera into a `GPUOffScreen` with `draw_view3d`, using the camera's own view and
 projection matrices, so the stream doesn't depend on what the user's viewports show. Each frame
@@ -15,7 +15,8 @@ window shows (a hidden workspace) when there is one, and sets the selected shadi
 off for the draw only, restoring the space's settings straight after. User viewports never change.
 
 Main thread only. The session poll drives it at the selected fps cap, skipping frames after
-expensive draw/read operations. Colour management (2.1d) remains open.
+expensive draw/read operations. Blender applies the viewport display transform and look to
+Material Preview/Rendered; Solid follows Blender's Workbench viewport. The result is sRGB.
 """
 
 import time
@@ -131,16 +132,24 @@ class StreamRenderer:
             raise RuntimeError("No 3D view to render the stream from")
         space, region = view
         shading, overlay = space.shading, space.overlay
+        display = scene.display_settings
         saved = shading.type, overlay.show_overlays
+        saved_device = display.display_device
         shading.type, overlay.show_overlays = self.shading, False
         try:
+            if saved_device != 'sRGB':
+                display.display_device = 'sRGB'  # the frame is tagged sRGB, not the user's monitor gamut
             view_matrix = camera.evaluated_get(depsgraph).matrix_world.inverted()
             projection = camera.calc_matrix_camera(depsgraph, x=self.width, y=self.height)
             self._offscreen.draw_view3d(
                 scene, view_layer, space, region, view_matrix, projection, do_color_management=True
             )
         finally:
-            shading.type, overlay.show_overlays = saved
+            try:
+                if saved_device != 'sRGB':
+                    display.display_device = saved_device
+            finally:
+                shading.type, overlay.show_overlays = saved
 
     def free(self) -> None:
         """Releases the GPU buffer; a frame drawn but not read yet is dropped."""

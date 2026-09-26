@@ -78,8 +78,9 @@ mod vcam_native {
         ///
         /// `frame` is a buffer-protocol `uint8` array shaped `(height, width, 4)`, such as the
         /// `gpu.types.Buffer` from `GPUOffScreen.texture_color.read()` (RGBA8, rows
-        /// bottom-up). `pose_seq` is the pose on the camera when it was drawn and
-        /// `render_time_ns` the host clock then. Raises `ValueError` for any other shape.
+        /// bottom-up, view/look applied, sRGB/Rec.709). `pose_seq` is the pose on the
+        /// camera when it was drawn and `render_time_ns` the host clock then. Raises
+        /// `ValueError` for any other shape.
         fn submit(
             &self,
             py: Python<'_>,
@@ -110,7 +111,7 @@ mod vcam_native {
         }
 
         /// Test hook: takes the newest frame as a dict (`frame_id`, `width`, `height`,
-        /// `pose_seq`, `render_time_ns`, `pixels` as `bytes`), or None.
+        /// `pose_seq`, `render_time_ns`, `color_space`, `pixels` as `bytes`), or None.
         fn _take<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
             let Some(frame) = self.slot.take() else {
                 return Ok(None);
@@ -121,6 +122,7 @@ mod vcam_native {
             d.set_item("height", frame.meta.height())?;
             d.set_item("pose_seq", frame.meta.pose_seq)?;
             d.set_item("render_time_ns", frame.meta.render_time_ns)?;
+            d.set_item("color_space", frame.meta.color_space.label())?;
             d.set_item("pixels", pyo3::types::PyBytes::new(py, &frame.pixels))?;
             self.slot.recycle(frame.pixels);
             Ok(Some(d))
