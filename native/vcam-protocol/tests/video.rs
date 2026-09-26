@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 use vcam_protocol::{
     DropReason, Endpoint, Message, PayloadError, Pushed, Reassembler, Role, VideoFragment,
-    VideoFrameInfo, fragment_frame,
+    VideoFrameInfo, VideoReport, fragment_frame,
 };
 
 fn load(name: &str) -> Value {
@@ -191,11 +191,13 @@ fn reassembly_matches_vectors() {
     for seq in sequences {
         let name = seq["name"].as_str().unwrap();
         let mut r = Reassembler::new();
+        let mut highest = 0;
         for (i, step) in seq["steps"].as_array().unwrap().iter().enumerate() {
             let bytes = hex(step["hex"].as_str().unwrap());
             let Ok(Message::VideoFragment(frag)) = device.open(&bytes) else {
                 panic!("{name}[{i}]: vector datagram must open");
             };
+            highest = highest.max(frag.frame.frame_id);
             let pushed = r.push(&frag);
             let got = match pushed {
                 Pushed::Pending => "pending",
@@ -220,5 +222,70 @@ fn reassembly_matches_vectors() {
             (uint(&seq["complete"]), uint(&seq["lost"])),
             "{name}"
         );
+        // The device's VIDEO_REPORT totals (vcp.md §6.6) after the sequence.
+        let report = r.report(7, 0);
+        assert_eq!(
+            (report.newest_frame_id, u64::from(report.frames_complete)),
+            (highest, stats.complete),
+            "{name}"
+        );
     }
+}
+
+#[test]
+fn reports_match_vectors() {
+    let v = load("report.json");
+    assert_eq!(uint(&v["len"]), VideoReport::LEN as u64);
+    let (device, host) = endpoints(&v["receiver"]);
+    let cases = v["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 8);
+    for case in cases {
+        let name = case["name"].as_str().unwrap();
+        let bytes = hex(case["hex"].as_str().unwrap());
+        let (rx, tx) = match case["direction"].as_str().unwrap() {
+            "d2h" => (&host, &device),
+            _ => (&device, &host),
+        };
+        let result = rx.open(&bytes);
+        if !case["accept"].as_bool().unwrap() {
+            let want = match case["reason"].as_str().unwrap() {
+                "too_short" => DropReason::Payload(PayloadError::TooShort),
+                "counts" => DropReason::Payload(PayloadError::ReportCounts),
+                "direction" => DropReason::UnknownType,
+                r => panic!("{name}: reason {r}"),
+            };
+            assert_eq!(result, Err(want), "{name}: rule {}", case["rule"]);
+            continue;
+        }
+        let f = &case["fields"];
+        let want = VideoReport {
+            report_seq: u32::try_from(uint(&f["report_seq"])).unwrap(),
+            newest_frame_id: u32::try_from(uint(&f["newest_frame_id"])).unwrap(),
+            frames_complete: u32::try_from(uint(&f["frames_complete"])).unwrap(),
+            m2p_p95_ms: u16::try_from(uint(&f["m2p_p95_ms"])).unwrap(),
+        };
+        assert_eq!(result, Ok(Message::VideoReport(want)), "{name}");
+        // Re-sealing gives the 16-byte v1 layout: reserved zeroed, extra bytes dropped.
+        let mut out = Vec::new();
+        tx.seal(&Message::VideoReport(want), &mut out).unwrap();
+        assert_eq!(out.len(), 12 + VideoReport::LEN + 8, "{name}");
+        if name == "report_example" || name == "report_nothing_complete" {
+            assert_eq!(out, bytes, "{name}: re-encoding differs");
+        }
+        assert_eq!(rx.open(&out), Ok(Message::VideoReport(want)), "{name}");
+    }
+    // A device can't seal counts the host would drop, nor can the host send a report.
+    let bad = VideoReport {
+        report_seq: 1,
+        newest_frame_id: 2,
+        frames_complete: 3,
+        m2p_p95_ms: 0,
+    };
+    let mut out = Vec::new();
+    assert!(device.seal(&Message::VideoReport(bad), &mut out).is_err());
+    assert!(
+        host.seal(&Message::VideoReport(VideoReport::default()), &mut out)
+            .is_err()
+    );
+    assert!(out.is_empty());
 }

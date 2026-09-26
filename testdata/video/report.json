@@ -1,0 +1,100 @@
+{
+  "cases": [
+    {
+      "accept": true,
+      "direction": "d2h",
+      "fields": {
+        "frames_complete": 117,
+        "m2p_p95_ms": 95,
+        "newest_frame_id": 120,
+        "report_seq": 3
+      },
+      "hex": "564350310107cdab341210000300000078000000750000005f000000c915613bbd7746c1",
+      "name": "report_example",
+      "rule": "vcp.md §6.6 example"
+    },
+    {
+      "accept": true,
+      "direction": "d2h",
+      "fields": {
+        "frames_complete": 0,
+        "m2p_p95_ms": 0,
+        "newest_frame_id": 5,
+        "report_seq": 1
+      },
+      "hex": "564350310107cdab3412100001000000050000000000000000000000bebc5e96d3e3c7e0",
+      "name": "report_nothing_complete",
+      "rule": "§6.6 a fragment arrived but no frame completed; m2p not measured"
+    },
+    {
+      "accept": true,
+      "direction": "d2h",
+      "fields": {
+        "frames_complete": 4294967295,
+        "m2p_p95_ms": 65535,
+        "newest_frame_id": 4294967295,
+        "report_seq": 4294967295
+      },
+      "hex": "564350310107cdab34121000ffffffffffffffffffffffffffff0000164e34d34905f67c",
+      "name": "report_all_complete",
+      "rule": "§6.6 frames_complete = newest_frame_id is allowed; u32/u16 maxima"
+    },
+    {
+      "accept": true,
+      "direction": "d2h",
+      "fields": {
+        "frames_complete": 8,
+        "m2p_p95_ms": 30,
+        "newest_frame_id": 9,
+        "report_seq": 4
+      },
+      "hex": "564350310107cdab341210000400000009000000080000001e00efbe859960e4cbfca46a",
+      "name": "report_reserved_ignored",
+      "rule": "§2 reserved ignored"
+    },
+    {
+      "accept": true,
+      "direction": "d2h",
+      "fields": {
+        "frames_complete": 117,
+        "m2p_p95_ms": 95,
+        "newest_frame_id": 120,
+        "report_seq": 3
+      },
+      "hex": "564350310107cdab341214000300000078000000750000005f000000eeeeeeeec7ff5b9c3413f6a7",
+      "name": "report_payload_longer_accepted",
+      "rule": "§2 (extra bytes ignored)"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "hex": "564350310107cdab34120f000300000078000000750000005f0000125e006f2881df58",
+      "name": "report_short",
+      "reason": "too_short",
+      "rule": "§6.6 shorter than 16 bytes"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "hex": "564350310107cdab3412100002000000070000000800000000000000c7e112f38631df0d",
+      "name": "report_complete_above_newest",
+      "reason": "counts",
+      "rule": "§6.6 frames_complete > newest_frame_id"
+    },
+    {
+      "accept": false,
+      "direction": "h2d",
+      "hex": "564350310107cdab341210000300000078000000750000005f000000227cf228e94ee081",
+      "name": "report_from_host",
+      "reason": "direction",
+      "rule": "4.3.7 (device → host only)"
+    }
+  ],
+  "len": 16,
+  "receiver": {
+    "k_d2h": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "k_h2d": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "role": "host for direction d2h, device for h2d",
+    "session_id": 305441741
+  }
+}

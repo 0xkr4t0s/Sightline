@@ -34,7 +34,7 @@ pub use pairing::{
 };
 pub use video::{
     CompleteFrame, Pushed, Reassembler, ReassemblyStats, VideoFragment, VideoFrameInfo,
-    fragment_frame,
+    VideoReport, fragment_frame,
 };
 
 /// Version of the Rust workspace, shared by every `vcam-*` crate.

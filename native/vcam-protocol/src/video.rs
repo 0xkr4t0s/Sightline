@@ -1,5 +1,6 @@
 //! `VIDEO_FRAGMENT` (`docs/protocol/vcp.md` §6.5): the fragment codec, the host's split of an
 //! encoded frame, and the device's newest-frame-wins reassembly (NET-VID-001, NET-VID-004).
+//! `VIDEO_REPORT` (§6.6): the device's session totals for adaptive quality (NET-VID-005).
 
 use crate::message::PayloadError;
 use crate::wire::Reader;
@@ -175,6 +176,58 @@ pub fn fragment_frame(
         }))
 }
 
+/// `VIDEO_REPORT` (0x07), 16 bytes, device → host (vcp.md §6.6): how the viewfinder stream is
+/// arriving, as session totals, so a lost report loses nothing (NET-VID-005).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VideoReport {
+    /// +1 per report, starting at 1; the host keeps only newer ones.
+    pub report_seq: u32,
+    /// The device's reassembly `newest`: highest `frame_id` of any valid fragment (0 = none).
+    pub newest_frame_id: u32,
+    /// Frames completed this session; never above `newest_frame_id`.
+    pub frames_complete: u32,
+    /// Motion-to-photon p95 since the previous report, in ms; 0 = not measured, 65535 = at least.
+    pub m2p_p95_ms: u16,
+}
+
+impl VideoReport {
+    pub const LEN: usize = 16;
+
+    pub(crate) fn decode(payload: &[u8]) -> Result<Self, PayloadError> {
+        let mut r = Reader::new(payload);
+        let (report_seq, newest_frame_id, frames_complete, m2p_p95_ms, _reserved) =
+            (|| Some((r.u32()?, r.u32()?, r.u32()?, r.u16()?, r.u16()?)))()
+                .ok_or(PayloadError::TooShort)?;
+        let report = Self {
+            report_seq,
+            newest_frame_id,
+            frames_complete,
+            m2p_p95_ms,
+        };
+        report.check()?;
+        Ok(report)
+    }
+
+    /// Fails for counts a receiver would drop.
+    pub(crate) fn encode(&self, out: &mut Vec<u8>) -> Result<(), PayloadError> {
+        self.check()?;
+        out.extend_from_slice(&self.report_seq.to_le_bytes());
+        out.extend_from_slice(&self.newest_frame_id.to_le_bytes());
+        out.extend_from_slice(&self.frames_complete.to_le_bytes());
+        out.extend_from_slice(&self.m2p_p95_ms.to_le_bytes());
+        out.extend_from_slice(&[0, 0]);
+        Ok(())
+    }
+
+    /// Each completed frame has its own `frame_id` in 1..=`newest_frame_id` (vcp.md §6.6).
+    fn check(&self) -> Result<(), PayloadError> {
+        if self.frames_complete > self.newest_frame_id {
+            return Err(PayloadError::ReportCounts);
+        }
+        Ok(())
+    }
+}
+
 /// A complete frame from [`Reassembler::push`]; `data` is valid until the next push.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CompleteFrame<'r> {
@@ -241,6 +294,19 @@ impl Reassembler {
     #[must_use]
     pub fn stats(&self) -> ReassemblyStats {
         self.stats
+    }
+
+    /// This session's `VIDEO_REPORT` totals (vcp.md §6.6) with the caller's sequence number and
+    /// motion-to-photon p95 (0 = not measured).
+    #[must_use]
+    pub fn report(&self, report_seq: u32, m2p_p95_ms: u16) -> VideoReport {
+        VideoReport {
+            report_seq,
+            newest_frame_id: self.newest,
+            // Every completed frame has a distinct id ≤ newest, so this never saturates.
+            frames_complete: u32::try_from(self.stats.complete).unwrap_or(self.newest),
+            m2p_p95_ms,
+        }
     }
 
     /// Feeds one validated fragment (from [`crate::Endpoint::open`] or [`VideoFragment::decode`]).

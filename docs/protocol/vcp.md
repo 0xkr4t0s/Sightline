@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft 1 (2026-09-24). Covers T1: tracking, T1 controls, clock sync, status, pairing, and session setup; plus the Stage A `VIDEO_FRAGMENT` (2026-09-26). |
-| Implements | SRS v3 PR-001..004, PR-006, DM-001..003, NET-002/003, NET-VID-001/004, NFR-SEC-001, FR-UX-002, FR-TRK-002/003, FR-CTL-004/009 |
-| Golden vectors | `testdata/vcp/` (task 1.1.2) and `testdata/video/` (§6.5). If this document and the vectors disagree, fix whichever is wrong; neither wins by default. |
+| Status | Draft 1 (2026-09-24). Covers T1: tracking, T1 controls, clock sync, status, pairing, and session setup; plus the Stage A `VIDEO_FRAGMENT` and the device's `VIDEO_REPORT` (2026-09-26). |
+| Implements | SRS v3 PR-001..004, PR-006, DM-001..003, NET-002/003, NET-VID-001/004/005, NFR-SEC-001, FR-UX-002, FR-TRK-002/003, FR-CTL-004/009 |
+| Golden vectors | `testdata/vcp/` (task 1.1.2) and `testdata/video/` (§6.5, §6.6). If this document and the vectors disagree, fix whichever is wrong; neither wins by default. |
 | Implementations | Rust `native/vcam-protocol` (Blender side), Swift `SightlineIOS` (iPhone side) |
 
 The keywords MUST, SHOULD, and MAY are used as in RFC 2119.
@@ -14,18 +14,18 @@ The keywords MUST, SHOULD, and MAY are used as in RFC 2119.
 VCP connects one iPhone (the **device**) to one Blender session (the **host**).
 
 ```
-device (iPhone)                                  host (Blender + vcam_native)
-      |------- TCP: HELLO / pairing / session setup ------->|   control channel, stays open
-      |<------------------------------------------------------|
-      |======= UDP: POSE (60 Hz), CONTROL_STATE, CLOCK reply =>|   authenticated (HMAC trailer)
-      |<====== UDP: CLOCK request (1 Hz), STATUS (2 Hz) =======|
+device (iPhone)                                                    host (Blender + vcam_native)
+      |------- TCP: HELLO / pairing / session setup ----------------------->|   control channel, stays open
+      |<----------------------------------------------------------------------|
+      |======= UDP: POSE (60 Hz), CONTROL_STATE, CLOCK reply, VIDEO_REPORT ==>|   authenticated (HMAC trailer)
+      |<====== UDP: CLOCK request (1 Hz), STATUS (2 Hz), VIDEO_FRAGMENT =======|
 ```
 
 - The device finds the host over DNS-SD (NET-001; §3), opens the TCP control channel, pairs once with a 6-digit code (§9), and then sets up a **session** on every connection (§10).
 - A session has a random non-zero `session_id` and two directional 256-bit keys. Every UDP datagram carries both.
 - Closing the TCP connection ends the session. Reconnecting starts a new session without re-pairing (NET-004).
 
-Reserved for Phase 2 and later (not specified in v1): `ACK_KEYFRAME_REQ`, lens/focus/aperture/record/transport fields in `CONTROL_STATE`, take-list TCP messages. `VIDEO_FRAGMENT` is specified in §6.5.
+Reserved for Phase 2 and later (not specified in v1): `ACK_KEYFRAME_REQ`, lens/focus/aperture/record/transport fields in `CONTROL_STATE`, take-list TCP messages. `VIDEO_FRAGMENT` is specified in §6.5 and `VIDEO_REPORT` in §6.6.
 
 ## 2. Conventions
 
@@ -42,7 +42,7 @@ Reserved for Phase 2 and later (not specified in v1): `ACK_KEYFRAME_REQ`, lens/f
 | Channel | Carries | Notes |
 |---|---|---|
 | TCP (host listens; port advertised) | `HELLO`, pairing, session setup, `ERROR` | One connection per device. It stays open for the session. |
-| UDP (host listens; port given in `SESSION_CHALLENGE`) | `POSE`, `CONTROL_STATE`, `CLOCK`, `STATUS`, `VIDEO_FRAGMENT` | Every datagram is authenticated (§4.2). |
+| UDP (host listens; port given in `SESSION_CHALLENGE`) | `POSE`, `CONTROL_STATE`, `CLOCK`, `STATUS`, `VIDEO_FRAGMENT`, `VIDEO_REPORT` | Every datagram is authenticated (§4.2). |
 
 - **DNS-SD** (NET-001): the host advertises `_vcam-ctl._tcp` for the control port and `_vcam._udp` for the UDP port while the host session is enabled/listening, including before a device pairs. Both TXT records contain `vcp=1` (highest supported protocol version), `blend=<.blend file name>` (empty for an unsaved file), `host=<machine name>`, `tcp=<decimal TCP port>` and `udp=<decimal UDP port>`. SRV and TXT ports are the actual bound ports. Each TXT key/value entry must fit the DNS-SD 255-byte limit, including `=`. The device uses the UDP port from authenticated `SESSION_CHALLENGE`, not from DNS-SD. Disabling the host session withdraws both services.
 - **Addresses:** the device sends UDP to the host's TCP peer address and the `udp_port` from `SESSION_CHALLENGE`. The host sends UDP to the source address and port of the **most recent authenticated** datagram from the device, so it follows Wi-Fi roaming (NET-004).
@@ -94,6 +94,7 @@ A receiver processes a datagram in this order and **silently drops** it at the f
 | `0x04` | `STATUS` | UDP | host → device | 2 Hz and on change |
 | `0x05` | `VIDEO_FRAGMENT` | UDP | host → device | every fragment of every encoded viewfinder frame (§6.5) |
 | `0x06` | `ACK_KEYFRAME_REQ` | UDP | device → host | reserved (Phase 3) |
+| `0x07` | `VIDEO_REPORT` | UDP | device → host | every 500 ms once viewfinder frames arrive (§6.6) |
 | `0x40` | `HELLO` | TCP | device → host | first message on every connection |
 | `0x41` | `PAIR_CHALLENGE` | TCP | host → device | |
 | `0x42` | `PAIR_PROOF` | TCP | device → host | |
@@ -277,6 +278,34 @@ payload  01 00 00 00 04 00 00 00 00 00 01 00 7c 04 01 00
 tag      19 3f 56 71 ad a7 04 08
 ```
 
+### 6.6 `VIDEO_REPORT` (0x07), 16 bytes (NET-VID-005)
+
+The device tells the host how the viewfinder stream is arriving, so the host can lower the stream's quality or resolution when frames are lost or motion-to-photon rises (NET-VID-005). The counters are totals for the session rather than deltas, so a lost report loses nothing: the next one carries the same information.
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `report_seq` | u32 | +1 per report, starting at 1. The host ignores lower or equal values |
+| 4 | `newest_frame_id` | u32 | `newest` of the device's reassembly (§6.5): the highest `frame_id` of any valid fragment this session (0 = none) |
+| 8 | `frames_complete` | u32 | frames completed this session (§6.5 reassembly step 4) |
+| 12 | `m2p_p95_ms` | u16 | 95th percentile motion-to-photon (NFR-LAT-003) over the frames shown since the previous report, in ms. 0 = not measured; 65535 = 65535 ms or more |
+| 14 | reserved | u16 | 0 |
+
+**Validation.** After §4.3 steps 1–7, the host drops the report (§4.3 step 8) if the payload is shorter than 16 bytes, or if `frames_complete` > `newest_frame_id`: each completed frame has its own `frame_id` between 1 and `newest_frame_id`.
+
+**Sending (device).** Every 500 ms while the session is active, starting once the first valid `VIDEO_FRAGMENT` has arrived. Reports are never retransmitted. `report_seq` and both counters start again with each session (§8).
+
+**Loss (host).** Between two accepted reports `a` and `b`, the frames lost are the frames the host finished sending with `frame_id` in (`a.newest_frame_id`, `b.newest_frame_id`] minus (`b.frames_complete` − `a.frames_complete`). Unlike the device's own count, this includes frames none of whose fragments arrived. The frame still in progress when a report is sent counts as lost until a later report shows it complete, so one interval can be off by one frame; over several reports the count is exact. How the host adapts to loss and motion-to-photon is NET-VID-005's policy, not part of the wire format.
+
+Reference: Rust `VideoReport`, vectors `testdata/video/report.json`.
+
+Example: `report_seq=3`, `newest_frame_id=120`, `frames_complete=117`, `m2p_p95_ms=95`:
+
+```
+header   56 43 50 31 01 07 cd ab 34 12 10 00
+payload  03 00 00 00 78 00 00 00 75 00 00 00 5f 00 00 00
+tag      c9 15 61 3b bd 77 46 c1
+```
+
 ## 7. Canonical pose and coordinates (DM-001..003)
 
 - **Canonical axes = Blender's:** right-handed, Z up, metres. A camera with the identity orientation looks down its local **−Z**, with local **+Y** up (DM-002).
@@ -457,3 +486,4 @@ Example session keys used in the §6 examples (test values only, never used for 
 | 2026-09-24 | Draft 1: header, `POSE`, `CONTROL_STATE` (T1 subset), `CLOCK`, `STATUS`, SRP-6a pairing, session setup, HMAC trailer. |
 | 2026-09-25 | O-3 closed: the Swift client (`swift-srp` 2.4.0) matches RFC 5054 App. B, `pairing.json` and `session.json`. No wire change. |
 | 2026-09-26 | `VIDEO_FRAGMENT` (0x05) specified (§6.5): 32-byte fragment header, 1148-byte data limit, newest-frame-wins reassembly. Vectors in `testdata/video/`. Existing messages unchanged. |
+| 2026-09-26 | `VIDEO_REPORT` (0x07) specified (§6.6): device → host every 500 ms, session totals of the viewfinder frames received and completed plus motion-to-photon p95, for NET-VID-005. Vectors in `testdata/video/report.json`. Existing messages unchanged. |

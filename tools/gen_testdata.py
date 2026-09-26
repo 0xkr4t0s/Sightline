@@ -49,6 +49,9 @@ testdata/video/reassembly.json   newest-frame-wins reassembly (vcp.md §6.5): se
                              datagrams fed to a fresh receiver, each step's outcome
                              (pending|complete|stale|duplicate|done|inconsistent; complete steps
                              carry the frame), and the frames completed and lost at the end.
+testdata/video/report.json   VIDEO_REPORT datagrams (vcp.md §6.6), device -> host under the §11
+                             example keys. Each case: name, hex, direction, accept, rule; accepted
+                             cases carry fields, rejected ones the reason (too_short|counts|direction).
 
 Big integers are big-endian hex strings. Floats are JSON numbers; compare with the stated
 tolerance. Quaternions are [x, y, z, w] with w >= 0 (q and -q are the same rotation).
@@ -250,6 +253,14 @@ def video_fields(payload: bytes) -> dict:
             "frag_size": size, "codec": codec, "color": color, "render_time_ns": rt,
             "pose_seq": pose_seq, "quality": quality, "flags": flags,
             "data": hx(payload[32:32 + data_len])}
+
+
+REPORT = struct.Struct("<IIIHH")  # vcp.md §6.6, 16 bytes
+assert REPORT.size == 16
+
+
+def report_payload(report_seq, newest_frame_id, frames_complete, m2p_p95_ms, reserved=0) -> bytes:
+    return REPORT.pack(report_seq, newest_frame_id, frames_complete, m2p_p95_ms, reserved)
 
 # --------------------------------------------------------------------------------------------
 # Vector builders
@@ -530,6 +541,38 @@ def build_reassembly() -> dict:
     return {"note": "Each sequence starts a new session (fresh receiver). Datagrams use the vcp.md §11 "
                     "example keys, host -> device; frag_size is 4 to keep the vectors short.",
             "session_id": SID, "k_h2d": hx(K_H2D), "sequences": out}
+
+
+def build_video_report() -> dict:
+    cases = []
+
+    def case(name, payload, accept, rule, direction="d2h", reason=None):
+        c = {"name": name, "hex": hx(udp(0x07, SID, payload, KEYS[direction])), "direction": direction,
+             "accept": accept, "rule": rule}
+        if accept:
+            seq, newest, complete, m2p, _ = REPORT.unpack_from(payload)
+            c["fields"] = {"report_seq": seq, "newest_frame_id": newest, "frames_complete": complete,
+                           "m2p_p95_ms": m2p}
+        else:
+            c["reason"] = reason
+        cases.append(c)
+
+    example = report_payload(3, 120, 117, 95)
+    case("report_example", example, True, "vcp.md §6.6 example")
+    case("report_nothing_complete", report_payload(1, 5, 0, 0), True,
+         "§6.6 a fragment arrived but no frame completed; m2p not measured")
+    case("report_all_complete", report_payload(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFF), True,
+         "§6.6 frames_complete = newest_frame_id is allowed; u32/u16 maxima")
+    case("report_reserved_ignored", report_payload(4, 9, 8, 30, reserved=0xBEEF), True, "§2 reserved ignored")
+    case("report_payload_longer_accepted", example + b"\xee" * 4, True, "§2 (extra bytes ignored)")
+    case("report_short", example[:15], False, "§6.6 shorter than 16 bytes", reason="too_short")
+    case("report_complete_above_newest", report_payload(2, 7, 8, 0), False,
+         "§6.6 frames_complete > newest_frame_id", reason="counts")
+    case("report_from_host", example, False, "4.3.7 (device → host only)", direction="h2d",
+         reason="direction")
+    return {"receiver": {"session_id": SID, "k_d2h": hx(K_D2H), "k_h2d": hx(K_H2D),
+                         "role": "host for direction d2h, device for h2d"},
+            "len": REPORT.size, "cases": cases}
 
 
 def build_clock_sync() -> dict:
@@ -1096,7 +1139,7 @@ def self_check_hkdf():
         raise SystemExit("SELF-CHECK FAILED: HKDF vs RFC 5869 A.1")
 
 
-def self_check_spec(messages: dict, video: dict):
+def self_check_spec(messages: dict, video: dict, report: dict):
     """Every example block in vcp.md must equal the corresponding generated message."""
     text = SPEC.read_text(encoding="utf-8")
     blocks = re.findall(r"```\n(header .*?)```", text, re.S)
@@ -1104,9 +1147,10 @@ def self_check_spec(messages: dict, video: dict):
     for block in blocks:
         joined = re.sub(r"\b(header|payload|tag)\b", " ", block)
         wanted.append(bytes.fromhex(re.sub(r"\s+", "", joined)))
-    generated = {bytes.fromhex(c["hex"]) for c in messages["cases"] + video["cases"] if c.get("accept", True)}
+    generated = {bytes.fromhex(c["hex"]) for c in messages["cases"] + video["cases"] + report["cases"]
+                 if c.get("accept", True)}
     missing = [w.hex() for w in wanted if w not in generated]
-    if len(wanted) != 7 or missing:
+    if len(wanted) != 8 or missing:
         raise SystemExit(f"SELF-CHECK FAILED: vcp.md examples ({len(wanted)} found) not generated: {missing}")
 
 
@@ -1122,7 +1166,8 @@ def build_all() -> dict[str, bytes]:
     rfc = build_rfc5054()
     messages, bins = build_messages()
     video = build_video_fragments()
-    self_check_spec(messages, video)
+    report = build_video_report()
+    self_check_spec(messages, video, report)
     pairing, ctx = build_pairing()
     motion, motion_bin = build_motion()
     files = {
@@ -1139,6 +1184,7 @@ def build_all() -> dict[str, bytes]:
         "rig/hold.json": dumps(build_hold(motion)).encode(),
         "video/fragments.json": dumps(video).encode(),
         "video/reassembly.json": dumps(build_reassembly()).encode(),
+        "video/report.json": dumps(report).encode(),
         "motion/scripted.bin": motion_bin,
     }
     files.update({f"vcp/{name}": data for name, data in bins.items()})
