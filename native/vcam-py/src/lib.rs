@@ -44,11 +44,12 @@ mod vcam_native {
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
     use vcam_net::{
-        ControlEvent, ControlServer, FileStore, HostStatus, OneEuro, ServerConfig, Smoothing,
+        AdaptReason, ControlEvent, ControlServer, FileStore, HostStatus, OneEuro, ServerConfig,
+        Smoothing,
     };
 
     use super::guard;
-    use super::video::VideoPipeline;
+    use super::video::{AdaptInfo, VideoPipeline};
 
     #[pymodule_export]
     use super::NativeError;
@@ -168,6 +169,70 @@ mod vcam_native {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
     }
 
+    /// `Session.video_stats()["adapt"]` (NET-VID-005).
+    fn adapt_dict<'py>(py: Python<'py>, a: &AdaptInfo) -> PyResult<Bound<'py, PyDict>> {
+        let s = &a.stats;
+        let d = PyDict::new(py);
+        d.set_item("session_id", a.session_id)?;
+        d.set_item("quality", s.level.quality)?;
+        d.set_item("resolution_drop", s.level.resolution_drop)?;
+        d.set_item("expected", s.expected)?;
+        d.set_item("lost", s.lost)?;
+        d.set_item("changes", s.changes)?;
+        let report = match &a.report {
+            Some(r) => {
+                let r_dict = PyDict::new(py);
+                r_dict.set_item("report_seq", r.report_seq)?;
+                r_dict.set_item("newest_frame_id", r.newest_frame_id)?;
+                r_dict.set_item("frames_complete", r.frames_complete)?;
+                r_dict.set_item("m2p_p95_ms", r.m2p_p95_ms)?;
+                Some(r_dict)
+            }
+            None => None,
+        };
+        d.set_item("report", report)?;
+        let interval = match &s.last_interval {
+            Some(i) => {
+                let i_dict = PyDict::new(py);
+                i_dict.set_item("report_seq", i.report_seq)?;
+                i_dict.set_item("expected", i.expected)?;
+                i_dict.set_item("lost", i.lost)?;
+                i_dict.set_item("m2p_p95_ms", i.m2p_p95_ms)?;
+                Some(i_dict)
+            }
+            None => None,
+        };
+        d.set_item("last_interval", interval)?;
+        let change = match &s.last_change {
+            Some(c) => {
+                let c_dict = PyDict::new(py);
+                c_dict.set_item("report_seq", c.report_seq)?;
+                c_dict.set_item("from_quality", c.from.quality)?;
+                c_dict.set_item("from_resolution_drop", c.from.resolution_drop)?;
+                c_dict.set_item("to_quality", c.to.quality)?;
+                c_dict.set_item("to_resolution_drop", c.to.resolution_drop)?;
+                // Figures of the reason, None where they don't apply.
+                let (reason, lost, expected, m2p) = match c.reason {
+                    AdaptReason::Loss { lost, expected } => {
+                        ("loss", Some(lost), Some(expected), None)
+                    }
+                    AdaptReason::MotionToPhoton { m2p_p95_ms } => {
+                        ("m2p", None, None, Some(m2p_p95_ms))
+                    }
+                    AdaptReason::Recovered => ("recovered", None, None, None),
+                };
+                c_dict.set_item("reason", reason)?;
+                c_dict.set_item("lost", lost)?;
+                c_dict.set_item("expected", expected)?;
+                c_dict.set_item("m2p_p95_ms", m2p)?;
+                Some(c_dict)
+            }
+            None => None,
+        };
+        d.set_item("last_change", change)?;
+        Ok(d)
+    }
+
     impl Session {
         fn lock(&self) -> MutexGuard<'_, Option<ControlServer>> {
             self.server.lock().unwrap_or_else(PoisonError::into_inner)
@@ -243,22 +308,30 @@ mod vcam_native {
         /// Starts the viewfinder stream (task 2.2c2a; NET-VID-001, NET-VID-004): a worker
         /// thread encodes the newest frame of `slot` as JPEG at `quality` (1–100) and a sender
         /// thread sends it as `VIDEO_FRAGMENT`s to the current device session. Frames are
-        /// dropped (counted as `unsent`) while no device is connected. Replaces (stops) a
-        /// running stream. Raises `ValueError` for a bad quality.
-        #[pyo3(signature = (slot, quality = vcam_video::DEFAULT_QUALITY))]
+        /// dropped (counted as `unsent`) while no device is connected. The quality adapts to
+        /// the device's `VIDEO_REPORT`s (NET-VID-005, task 2.2d2b); the adapter may also ask
+        /// for up to `max_resolution_drop` lower resolution steps, which the caller applies.
+        /// Replaces (stops) a running stream. Raises `ValueError` for a bad quality.
+        #[pyo3(signature = (slot, quality = vcam_video::DEFAULT_QUALITY, max_resolution_drop = 0))]
         fn start_video(
             &self,
             py: Python<'_>,
             slot: &Bound<'_, FrameSlot>,
             quality: u8,
+            max_resolution_drop: u8,
         ) -> PyResult<()> {
             let old = guard(|| {
                 let sender = self.with(|s| Ok(s.video_sender()))?;
-                let pipeline = VideoPipeline::start(slot.get().slot.clone(), quality, sender)
-                    .map_err(|e| match e {
-                        vcam_video::EncodeError::Quality(_) => PyValueError::new_err(e.to_string()),
-                        e => PyRuntimeError::new_err(e.to_string()),
-                    })?;
+                let pipeline = VideoPipeline::start(
+                    slot.get().slot.clone(),
+                    quality,
+                    max_resolution_drop,
+                    sender,
+                )
+                .map_err(|e| match e {
+                    vcam_video::EncodeError::Quality(_) => PyValueError::new_err(e.to_string()),
+                    e => PyRuntimeError::new_err(e.to_string()),
+                })?;
                 Ok(self.lock_video().replace(pipeline))
             })?;
             py.detach(move || drop(old));
@@ -271,8 +344,10 @@ mod vcam_native {
             py.detach(move || drop(old));
         }
 
-        /// Sets the JPEG quality (1–100) from the next frame on. Raises `ValueError` outside
-        /// 1–100 and `RuntimeError` when no stream is running.
+        /// Sets the user's JPEG quality (1–100). The stream follows it from the next frame
+        /// unless it adapted to a poor link; then it stays lower and recovers towards the new
+        /// quality. Raises `ValueError` outside 1–100 and `RuntimeError` when no stream is
+        /// running.
         fn set_video_quality(&self, quality: u8) -> PyResult<()> {
             guard(|| {
                 self.lock_video()
@@ -283,9 +358,14 @@ mod vcam_native {
             })
         }
 
-        /// Viewfinder counters as a dict, or None when no stream is running. `last_sent` is
-        /// the newest frame handed to the socket in full (source and wire `frame_id`, pose,
-        /// size, JPEG bytes, fragments, encode and send time), or None.
+        /// Viewfinder counters as a dict, or None when no stream is running. `quality` is the
+        /// quality the encoder uses now, `user_quality` the one asked for. `last_sent` is the
+        /// newest frame handed to the socket in full (source and wire `frame_id`, pose, size,
+        /// JPEG bytes, fragments, encode and send time), or None. `adapt` (NET-VID-005) is None
+        /// until a frame reaches a device session: its level (`quality`, `resolution_drop`),
+        /// the session's loss totals (`expected`, `lost`), `changes`, the device's newest
+        /// `report`, the loss of the `last_interval` and the `last_change` (levels and reason:
+        /// `loss`, `m2p` or `recovered`), each None until there is one.
         fn video_stats<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
             let Some(s) = guard(|| Ok(self.lock_video().as_ref().map(VideoPipeline::stats)))?
             else {
@@ -299,6 +379,8 @@ mod vcam_native {
             d.set_item("unsent", s.unsent)?;
             d.set_item("send_failed", s.send_failed)?;
             d.set_item("quality", s.quality)?;
+            d.set_item("user_quality", s.user_quality)?;
+            d.set_item("adapt", s.adapt.map(|a| adapt_dict(py, &a)).transpose()?)?;
             d.set_item("last_error", s.last_error)?;
             let last = match s.last_sent {
                 Some(l) => {

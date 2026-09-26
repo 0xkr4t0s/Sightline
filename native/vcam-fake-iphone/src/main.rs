@@ -4,13 +4,14 @@
 //! answers `CLOCK` requests from its own monotonic clock, and reports the host's `STATUS`.
 //! Host `VIDEO_FRAGMENT`s are reassembled newest-frame-wins like the viewfinder (vcp.md §6.5,
 //! task 2.2c1); `--video-out` keeps the newest complete frame in a file. Once frames arrive, it
-//! sends `VIDEO_REPORT` every 500 ms (§6.6, task 2.2d1) without a motion-to-photon figure.
+//! sends `VIDEO_REPORT` every 500 ms (§6.6, task 2.2d1), stating `--m2p` as the motion-to-photon
+//! p95 (default 0, not measured) so tests can drive the host's adaptation (task 2.2d2b).
 //!
 //! ```text
 //! vcam-fake-iphone --host 127.0.0.1:47000 --state DIR/fake-iphone.key [--code 123456]
 //!                  --motion testdata/motion/scripted.bin [--rate HZ] [--linger SECONDS]
 //!                  [--name NAME] [--scale S] [--locks FLAGS] [--set-origin-at FRAME]
-//!                  [--limited FROM-TO] [--video-out PATH]
+//!                  [--limited FROM-TO] [--video-out PATH] [--m2p MS]
 //! ```
 //! Prints `FAKE_IPHONE_PAIRED`, `FAKE_IPHONE_SESSION ...` and a final `FAKE_IPHONE_DONE ...`
 //! line on stdout. Any failure exits 1 with the reason on stderr.
@@ -72,6 +73,8 @@ struct Args {
     limited: std::ops::Range<usize>,
     /// Where each newly completed video frame is written (replacing the previous one).
     video_out: Option<PathBuf>,
+    /// `VIDEO_REPORT.m2p_p95_ms` (0 = not measured).
+    m2p: u16,
 }
 
 fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
@@ -85,7 +88,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
         "Fake iPhone".to_owned(),
     );
     let (mut scale, mut locks, mut set_origin_at, mut limited) = (1.0f32, 0u8, None, 0..0);
-    let mut video_out = None;
+    let (mut video_out, mut m2p) = (None, 0u16);
     while let Some(flag) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("{flag} needs a value"));
         match flag.as_str() {
@@ -126,6 +129,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
                 }
             }
             "--video-out" => video_out = Some(PathBuf::from(value()?)),
+            "--m2p" => m2p = value()?.parse()?,
             other => return Err(format!("unknown argument {other}").into()),
         }
     }
@@ -142,6 +146,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
         set_origin_at,
         limited,
         video_out,
+        m2p,
     })
 }
 
@@ -309,6 +314,7 @@ struct Stream {
     /// Fields and length of the newest complete video frame.
     last_video: Option<(VideoFrameInfo, usize)>,
     video_out: Option<PathBuf>,
+    m2p: u16,
     /// `report_seq` of the last `VIDEO_REPORT` sent (0 = none yet).
     report_seq: u32,
     last_report: Option<Instant>,
@@ -340,7 +346,7 @@ impl Stream {
 
     /// Sends this session's `VIDEO_REPORT` every 500 ms once a valid fragment has arrived.
     fn report_due(&mut self) -> Result<()> {
-        let report = self.video.report(self.report_seq + 1, 0);
+        let report = self.video.report(self.report_seq + 1, self.m2p);
         if report.newest_frame_id == 0
             || self
                 .last_report
@@ -462,6 +468,7 @@ fn run(args: &Args) -> Result<String> {
         video: Reassembler::new(),
         last_video: None,
         video_out: args.video_out.clone(),
+        m2p: args.m2p,
         report_seq: 0,
         last_report: None,
     };
