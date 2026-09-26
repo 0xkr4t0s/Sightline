@@ -425,7 +425,9 @@ actor TrackingPipeline {
                 cancelControlTimer()
             }
         default:
-            break  // VCPEndpoint rejects every other host-to-device message in v1.
+            // VIDEO_FRAGMENT still refreshes liveness above; the viewfinder that shows it comes
+            // later (FR-VF-001). VCPEndpoint rejects every other host-to-device message in v1.
+            break
         }
     }
 }

@@ -64,6 +64,96 @@ final class VCPGoldenTests: XCTestCase {
             XCTAssertEqual(UInt64(s.errorCode), uint(f["error_code"]), name)
             XCTAssertEqual(UInt64(s.flags), uint(f["flags"]), name)
             XCTAssertEqual(s.cameraName, f["camera_name"] as? String, name)
+        case let .videoFragment(v):
+            let got: [UInt64] = [UInt64(v.frame.frameID), UInt64(v.frameLength), UInt64(v.fragIndex), UInt64(v.fragCount),
+                                 UInt64(v.fragSize), UInt64(v.frame.codec), UInt64(v.frame.color), v.frame.renderTimeNs,
+                                 UInt64(v.frame.poseSeq), UInt64(v.frame.quality), UInt64(v.frame.flags)]
+            let keys = ["frame_id", "frame_len", "frag_index", "frag_count", "frag_size", "codec", "color",
+                        "render_time_ns", "pose_seq", "quality", "flags"]
+            XCTAssertEqual(got, keys.map { uint(f[$0]) }, name)
+            XCTAssertEqual(Array(v.data), hex(f["data"] as! String), name)
+        case let .videoReport(r):
+            XCTAssertEqual([UInt64(r.reportSeq), UInt64(r.newestFrameID), UInt64(r.framesComplete), UInt64(r.m2pP95Ms)],
+                           ["report_seq", "newest_frame_id", "frames_complete", "m2p_p95_ms"].map { uint(f[$0]) }, name)
+        }
+    }
+
+    /// The `reason` names the video vectors use (testdata/video/*.json).
+    private func videoReason(_ reason: String) -> VCPDropReason? {
+        switch reason {
+        case "too_short": .payload(.tooShort)
+        case "layout": .payload(.fragmentLayout)
+        case "format": .payload(.videoFormat)
+        case "counts": .payload(.reportCounts)
+        case "direction": .unknownType
+        default: nil
+        }
+    }
+
+    /// `VIDEO_FRAGMENT` and `VIDEO_REPORT` (§6.5, §6.6): every accepted vector decodes to its
+    /// fields and re-encodes byte-exact; every rejected one fails for its stated reason.
+    func testVideoMessagesMatchVectors() throws {
+        for (file, count) in [("video/fragments.json", 16), ("video/report.json", 8)] {
+            let vectors = try load(file)
+            let e = endpoints(vectors["receiver"] as! [String: Any])
+            let cases = vectors["cases"] as! [[String: Any]]
+            XCTAssertEqual(cases.count, count, file)
+            for c in cases {
+                let name = c["name"] as! String
+                let bytes = hex(c["hex"] as! String)
+                let (rx, tx) = pair(c["direction"] as! String, e)
+                switch (rx.open(bytes), c["fields"] as? [String: Any], c["reason"] as? String) {
+                case let (.success(message), fields?, nil):
+                    check(message, fields, name)
+                    // Extra payload bytes and reserved fields are ignored on receive (§2) and
+                    // re-encoded as absent / 0, so those cases can't round-trip.
+                    if !name.hasSuffix("_longer_accepted"), !name.hasSuffix("_reserved_ignored") {
+                        XCTAssertEqual(try tx.seal(message), bytes, "\(name): re-encoding differs")
+                    }
+                case let (.failure(got), nil, want?):
+                    XCTAssertEqual(got, videoReason(want), name)
+                case let (result, _, want):
+                    XCTFail("\(name): got \(result), vector says \(want.map { "rejected (\($0))" } ?? "accepted")")
+                }
+            }
+        }
+    }
+
+    /// Newest-frame-wins reassembly (§6.5 NET-VID-001): outcomes, frames and totals per sequence.
+    func testVideoReassemblyMatchesVectors() throws {
+        let vectors = try load("video/reassembly.json")
+        let sid = UInt32(vectors["session_id"] as! Int)
+        let device = try XCTUnwrap(VCPEndpoint(role: .device, sessionID: sid, kD2H: [UInt8](repeating: 0, count: 32),
+                                               kH2D: hex(vectors["k_h2d"] as! String)))
+        let sequences = vectors["sequences"] as! [[String: Any]]
+        XCTAssertEqual(sequences.count, 6)
+        for s in sequences {
+            let name = s["name"] as! String
+            var reassembler = VCPVideoReassembler()
+            var highest: UInt32 = 0
+            for (i, step) in (s["steps"] as! [[String: Any]]).enumerated() {
+                let at = "\(name) step \(i)"
+                guard case let .videoFragment(fragment) = try device.open(hex(step["hex"] as! String)).get()
+                else { return XCTFail("\(at): not a VIDEO_FRAGMENT") }
+                highest = max(highest, fragment.frame.frameID)
+                let outcome = reassembler.push(fragment)
+                XCTAssertEqual("\(outcome)", step["outcome"] as! String, at)
+                if let want = step["frame"] as? [String: Any] {
+                    let frame = try XCTUnwrap(reassembler.frame, at)
+                    XCTAssertEqual(UInt64(frame.info.frameID), uint(want["frame_id"]), at)
+                    XCTAssertEqual(frame.info.renderTimeNs, uint(want["render_time_ns"]), at)
+                    XCTAssertEqual(UInt64(frame.info.poseSeq), uint(want["pose_seq"]), at)
+                    XCTAssertEqual(Array(frame.data), hex(want["data"] as! String), at)
+                }
+                if outcome == .pending || outcome == .inconsistent {
+                    XCTAssertNil(reassembler.frame, "\(at): an incomplete or abandoned frame is never exposed")
+                }
+            }
+            XCTAssertEqual(reassembler.stats.complete, uint(s["complete"]), name)
+            XCTAssertEqual(reassembler.stats.lost, uint(s["lost"]), name)
+            let report = reassembler.report(seq: 1, m2pP95Ms: 0)
+            XCTAssertEqual(report.newestFrameID, highest, name)
+            XCTAssertEqual(UInt64(report.framesComplete), uint(s["complete"]), name)
         }
     }
 
@@ -162,7 +252,12 @@ final class VCPGoldenTests: XCTestCase {
     /// PR-005: every prefix and every single-byte flip of every vector is rejected without crashing.
     func testMalformedInputIsRejected() throws {
         let e = endpoints(try load("vcp/receive.json")["receiver"] as! [String: Any])
-        for case let c as [String: Any] in try load("vcp/messages.json")["cases"] as! [Any] where c["channel"] as? String == "udp" {
+        var cases = (try load("vcp/messages.json")["cases"] as! [[String: Any]]).filter { $0["channel"] as? String == "udp" }
+        for file in ["video/fragments.json", "video/report.json"] {
+            cases += (try load(file)["cases"] as! [[String: Any]]).filter { $0["accept"] as! Bool }
+        }
+        XCTAssertEqual(cases.count, 8 + 4 + 5)
+        for c in cases {
             let bytes = hex(c["hex"] as! String)
             let (rx, _) = pair(c["direction"] as! String, e)
             for n in 0..<bytes.count {

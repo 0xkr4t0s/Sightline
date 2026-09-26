@@ -7,6 +7,8 @@ nonisolated enum VCPMessageType {
     static let controlState: UInt8 = 0x02
     static let clock: UInt8 = 0x03
     static let status: UInt8 = 0x04
+    static let videoFragment: UInt8 = 0x05
+    static let videoReport: UInt8 = 0x07
 }
 
 /// Why a payload was rejected after the frame checks passed (§4.3 step 8, §6).
@@ -16,6 +18,12 @@ nonisolated enum VCPPayloadError: Error, Equatable, Sendable {
     case quaternionNorm
     case motionScaleRange
     case badName
+    /// `VIDEO_FRAGMENT` sizes, counts or index out of range (§6.5).
+    case fragmentLayout
+    /// `VIDEO_FRAGMENT` codec or colour the device doesn't know (§6.5).
+    case videoFormat
+    /// `VIDEO_REPORT` with more frames complete than its newest frame id (§6.6).
+    case reportCounts
 }
 
 /// `POSE` (0x01), 42 bytes (§6.1). Position and orientation are in canonical axes (§7).
@@ -170,6 +178,8 @@ nonisolated enum VCPMessage: Equatable, Sendable {
     case controlState(VCPControlState)
     case clock(VCPClock)
     case status(VCPStatus)
+    case videoFragment(VCPVideoFragment)
+    case videoReport(VCPVideoReport)
 
     var type: UInt8 {
         switch self {
@@ -177,6 +187,8 @@ nonisolated enum VCPMessage: Equatable, Sendable {
         case .controlState: VCPMessageType.controlState
         case .clock: VCPMessageType.clock
         case .status: VCPMessageType.status
+        case .videoFragment: VCPMessageType.videoFragment
+        case .videoReport: VCPMessageType.videoReport
         }
     }
 }
