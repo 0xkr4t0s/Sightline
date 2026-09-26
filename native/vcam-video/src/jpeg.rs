@@ -160,6 +160,8 @@ struct EncodedState {
     latest: Option<EncodedFrame>,
     spare: Option<Vec<u8>>,
     replaced: u64,
+    /// Set by [`EncodedSlot::wake`]; consumed by the next [`EncodedSlot::wait_take`].
+    woken: bool,
 }
 
 /// Holds the newest encoded frame until the sender takes it. Shared between threads.
@@ -194,14 +196,22 @@ impl EncodedSlot {
         self.lock().latest.take()
     }
 
-    /// Like [`EncodedSlot::take`], but waits up to `timeout` for a frame.
+    /// Like [`EncodedSlot::take`], but waits up to `timeout` for a frame. Returns `None` on
+    /// timeout, or early after [`EncodedSlot::wake`] (the sender thread's stop signal).
     #[must_use]
     pub fn wait_take(&self, timeout: Duration) -> Option<EncodedFrame> {
         let (mut state, _) = self
             .ready
-            .wait_timeout_while(self.lock(), timeout, |s| s.latest.is_none())
+            .wait_timeout_while(self.lock(), timeout, |s| s.latest.is_none() && !s.woken)
             .unwrap_or_else(PoisonError::into_inner);
+        state.woken = false;
         state.latest.take()
+    }
+
+    /// Makes a current or the next [`EncodedSlot::wait_take`] return at once.
+    pub fn wake(&self) {
+        self.lock().woken = true;
+        self.ready.notify_all();
     }
 
     /// Hands a taken frame's JPEG buffer back for reuse.

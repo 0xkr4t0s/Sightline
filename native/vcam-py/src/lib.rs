@@ -8,6 +8,8 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+mod video;
+
 use pyo3::prelude::*;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -36,7 +38,7 @@ fn guard<T>(f: impl FnOnce() -> PyResult<T>) -> PyResult<T> {
 mod vcam_native {
     use std::net::{IpAddr, SocketAddr};
     use std::path::PathBuf;
-    use std::sync::{Mutex, MutexGuard, PoisonError};
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
     use pyo3::exceptions::{PyRuntimeError, PyValueError};
     use pyo3::prelude::*;
@@ -46,6 +48,7 @@ mod vcam_native {
     };
 
     use super::guard;
+    use super::video::VideoPipeline;
 
     #[pymodule_export]
     use super::NativeError;
@@ -58,11 +61,12 @@ mod vcam_native {
 
     /// Latest-frame hand-off from the stream renderer to the encoder (task 2.1a, FR-REN-003).
     ///
-    /// `submit` copies a read-back frame once into a buffer Rust owns; the encoder (task 2.2)
-    /// takes the newest frame on its own thread, and a frame nobody took is replaced.
+    /// `submit` copies a read-back frame once into a buffer Rust owns; the encoder
+    /// (`Session.start_video`) takes the newest frame on its own thread, and a frame nobody took
+    /// is replaced.
     #[pyclass(module = "vcam_native", frozen)]
     struct FrameSlot {
-        slot: vcam_video::FrameSlot,
+        slot: Arc<vcam_video::FrameSlot>,
     }
 
     #[pymethods]
@@ -70,7 +74,7 @@ mod vcam_native {
         #[new]
         fn new() -> Self {
             Self {
-                slot: vcam_video::FrameSlot::new(),
+                slot: Arc::new(vcam_video::FrameSlot::new()),
             }
         }
 
@@ -135,13 +139,15 @@ mod vcam_native {
         guard(|| panic!("panic probe"))
     }
 
-    /// One host session: TCP control server, UDP pose receiver and (optionally) DNS-SD.
+    /// One host session: TCP control server, UDP pose receiver and (optionally) DNS-SD, plus
+    /// the viewfinder video stream while one is started.
     ///
     /// Create with `Session.start(...)`; call `stop()` from `unregister()`. Every method other
     /// than `stop()`/`running()` raises `RuntimeError` after stop.
     #[pyclass(module = "vcam_native", frozen)]
     struct Session {
         server: Mutex<Option<ControlServer>>,
+        video: Mutex<Option<VideoPipeline>>,
     }
 
     /// Like PyO3's `io::Error` conversion, except caller mistakes (`InvalidInput`) are
@@ -165,6 +171,10 @@ mod vcam_native {
     impl Session {
         fn lock(&self) -> MutexGuard<'_, Option<ControlServer>> {
             self.server.lock().unwrap_or_else(PoisonError::into_inner)
+        }
+
+        fn lock_video(&self) -> MutexGuard<'_, Option<VideoPipeline>> {
+            self.video.lock().unwrap_or_else(PoisonError::into_inner)
         }
 
         fn with<T>(&self, f: impl FnOnce(&mut ControlServer) -> PyResult<T>) -> PyResult<T> {
@@ -206,21 +216,111 @@ mod vcam_native {
                     .map_err(io_err)?;
                 Ok(Self {
                     server: Mutex::new(Some(server)),
+                    video: Mutex::new(None),
                 })
             })
         }
 
-        /// Stops every thread, closes both sockets and withdraws DNS-SD (NFR-REL-002).
-        /// Idempotent. Raises `OSError` only if DNS-SD withdrawal failed; the sockets are
-        /// closed and the threads joined either way.
+        /// Stops the video stream, every thread, closes both sockets and withdraws DNS-SD
+        /// (NFR-REL-002). Idempotent. Raises `OSError` only if DNS-SD withdrawal failed; the
+        /// sockets are closed and the threads joined either way.
         fn stop(&self, py: Python<'_>) -> PyResult<()> {
             guard(|| {
+                let video = self.lock_video().take();
                 let Some(mut server) = self.lock().take() else {
+                    py.detach(move || drop(video));
                     return Ok(());
                 };
-                py.detach(move || server.stop()).map_err(io_err)?;
+                py.detach(move || {
+                    drop(video); // joins the encoder and sender before the socket closes
+                    server.stop()
+                })
+                .map_err(io_err)?;
                 Ok(())
             })
+        }
+
+        /// Starts the viewfinder stream (task 2.2c2a; NET-VID-001, NET-VID-004): a worker
+        /// thread encodes the newest frame of `slot` as JPEG at `quality` (1–100) and a sender
+        /// thread sends it as `VIDEO_FRAGMENT`s to the current device session. Frames are
+        /// dropped (counted as `unsent`) while no device is connected. Replaces (stops) a
+        /// running stream. Raises `ValueError` for a bad quality.
+        #[pyo3(signature = (slot, quality = vcam_video::DEFAULT_QUALITY))]
+        fn start_video(
+            &self,
+            py: Python<'_>,
+            slot: &Bound<'_, FrameSlot>,
+            quality: u8,
+        ) -> PyResult<()> {
+            let old = guard(|| {
+                let sender = self.with(|s| Ok(s.video_sender()))?;
+                let pipeline = VideoPipeline::start(slot.get().slot.clone(), quality, sender)
+                    .map_err(|e| match e {
+                        vcam_video::EncodeError::Quality(_) => PyValueError::new_err(e.to_string()),
+                        e => PyRuntimeError::new_err(e.to_string()),
+                    })?;
+                Ok(self.lock_video().replace(pipeline))
+            })?;
+            py.detach(move || drop(old));
+            Ok(())
+        }
+
+        /// Stops the viewfinder stream and joins its threads. Idempotent.
+        fn stop_video(&self, py: Python<'_>) {
+            let old = self.lock_video().take();
+            py.detach(move || drop(old));
+        }
+
+        /// Sets the JPEG quality (1–100) from the next frame on. Raises `ValueError` outside
+        /// 1–100 and `RuntimeError` when no stream is running.
+        fn set_video_quality(&self, quality: u8) -> PyResult<()> {
+            guard(|| {
+                self.lock_video()
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("video stream is not running"))?
+                    .set_quality(quality)
+                    .map_err(|e| PyValueError::new_err(e.to_string()))
+            })
+        }
+
+        /// Viewfinder counters as a dict, or None when no stream is running. `last_sent` is
+        /// the newest frame handed to the socket in full (source and wire `frame_id`, pose,
+        /// size, JPEG bytes, fragments, encode and send time), or None.
+        fn video_stats<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+            let Some(s) = guard(|| Ok(self.lock_video().as_ref().map(VideoPipeline::stats)))?
+            else {
+                return Ok(None);
+            };
+            let d = PyDict::new(py);
+            d.set_item("encoded", s.encoded)?;
+            d.set_item("encode_failed", s.encode_failed)?;
+            d.set_item("encoded_skipped", s.encoded_skipped)?;
+            d.set_item("sent", s.sent)?;
+            d.set_item("unsent", s.unsent)?;
+            d.set_item("send_failed", s.send_failed)?;
+            d.set_item("quality", s.quality)?;
+            d.set_item("last_error", s.last_error)?;
+            let last = match s.last_sent {
+                Some(l) => {
+                    let l_dict = PyDict::new(py);
+                    l_dict.set_item("source_frame_id", l.source_frame_id)?;
+                    l_dict.set_item("wire_frame_id", l.wire_frame_id)?;
+                    l_dict.set_item("session_id", l.session_id)?;
+                    l_dict.set_item("pose_seq", l.pose_seq)?;
+                    l_dict.set_item("render_time_ns", l.render_time_ns)?;
+                    l_dict.set_item("width", l.width)?;
+                    l_dict.set_item("height", l.height)?;
+                    l_dict.set_item("quality", l.quality)?;
+                    l_dict.set_item("jpeg_bytes", l.jpeg_bytes)?;
+                    l_dict.set_item("fragments", l.fragments)?;
+                    l_dict.set_item("encode_ns", l.encode_ns)?;
+                    l_dict.set_item("send_ns", l.send_ns)?;
+                    Some(l_dict)
+                }
+                None => None,
+            };
+            d.set_item("last_sent", last)?;
+            Ok(Some(d))
         }
 
         fn running(&self) -> bool {
