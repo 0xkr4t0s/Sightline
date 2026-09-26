@@ -37,3 +37,10 @@ path = "fuzz_targets/pairing_inputs.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "video_reassembly"
+path = "fuzz_targets/video_reassembly.rs"
+test = false
+doc = false
+bench = false
