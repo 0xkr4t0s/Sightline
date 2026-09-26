@@ -6,8 +6,9 @@ import Synchronization
 import UniformTypeIdentifiers
 import XCTest
 
-/// The viewfinder (task 2.3c; FR-VF-001/002): completed JPEG frames are decoded off the tracking
-/// queue, only the newest waiting frame is decoded, and it is drawn letterboxed.
+/// The viewfinder (tasks 2.3c/d; FR-VF-001/002/005): completed JPEG frames are decoded off the
+/// tracking queue, only the newest waiting frame is decoded, it is drawn letterboxed, and a run
+/// without a new frame for more than 250 ms is marked stalled.
 final class ViewfinderTests: XCTestCase {
     private static let red: [UInt8] = [255, 0, 0]
     private static let blue: [UInt8] = [0, 0, 255]
@@ -194,5 +195,60 @@ final class ViewfinderTests: XCTestCase {
         bytes = try render(nil, width: 8, height: 8)
         XCTAssertTrue(stride(from: 0, to: bytes.count, by: 4).allSatisfy { bytes[$0..<$0 + 3].allSatisfy { $0 == 0 } },
                       "no frame yet: black")
+    }
+
+    /// FR-VF-005: stalled only after more than 250 ms without a frame (from the run's start, then
+    /// from the newest frame), cleared by the next frame at once, and never while no run is watched.
+    @MainActor
+    func testVideoStalledAfter250MillisecondsWithoutANewFrame() async throws {
+        var changes: [(stalled: Bool, at: ContinuousClock.Instant)] = []
+        let watch = VideoStallWatch()
+        watch.onChange = { changes.append(($0, .now)) }
+        func delay(_ change: Int, after start: ContinuousClock.Instant) -> Double {
+            let elapsed = changes[change].at - start
+            return Double(elapsed.components.attoseconds) * 1e-15 + Double(elapsed.components.seconds) * 1e3
+        }
+
+        // No frame since the run started.
+        let started = ContinuousClock.now
+        watch.start()
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertEqual(changes.map(\.stalled), [true], "stalled once, with no frame this run")
+        XCTAssertGreaterThan(delay(0, after: started), 250, "not before the threshold")
+        XCTAssertLessThan(delay(0, after: started), 400, "soon after the threshold")
+
+        // Frames every 50 ms: the first clears the stall at once, and it doesn't come back.
+        watch.frameShown()
+        XCTAssertEqual(changes.map(\.stalled), [true, false], "a new frame clears the stall immediately")
+        XCTAssertFalse(watch.isStalled)
+        for _ in 0..<10 {
+            try await Task.sleep(for: .milliseconds(50))
+            watch.frameShown()
+        }
+        let lastFrame = ContinuousClock.now
+        XCTAssertEqual(changes.count, 2, "frames 50 ms apart never stall")
+
+        // The stream stops: stalled again, timed from the newest frame.
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertEqual(changes.map(\.stalled), [true, false, true])
+        XCTAssertGreaterThan(delay(2, after: lastFrame), 250, "not before the threshold after the last frame")
+        XCTAssertLessThan(delay(2, after: lastFrame), 400, "soon after the threshold after the last frame")
+
+        // A new run starts unstalled and counts from its own start.
+        let restarted = ContinuousClock.now
+        watch.start()
+        XCTAssertEqual(changes.map(\.stalled), [true, false, true, false], "a new run starts unstalled")
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertEqual(changes.map(\.stalled), [true, false, true, false, true])
+        XCTAssertGreaterThan(delay(4, after: restarted), 250, "counted from the new run's start")
+
+        // Stopped: unstalled, and neither time nor frames change that.
+        watch.stop()
+        XCTAssertEqual(changes.count, 6)
+        XCTAssertEqual(changes.last?.stalled, false, "stopping clears the stall")
+        try await Task.sleep(for: .milliseconds(450))
+        watch.frameShown()
+        XCTAssertEqual(changes.count, 6, "no run, no stall")
+        XCTAssertFalse(watch.isStalled)
     }
 }

@@ -46,6 +46,9 @@ final class TrackingSessionController {
     @ObservationIgnored let viewfinder: ViewfinderRenderer?
     /// Decodes the pipeline's completed frames for `viewfinder`, off the tracking queue.
     @ObservationIgnored private let decoder: ViewfinderDecoder?
+    /// No new viewfinder frame for more than 250 ms during a run (FR-VF-005).
+    private(set) var videoStalled = false
+    @ObservationIgnored private let stallWatch = VideoStallWatch()
     // ARSession.delegate is weak: this keeps the receiver alive.
     @ObservationIgnored private var receiver: ARFrameReceiver?
     @ObservationIgnored private var rateMeter = PoseRateMeter()
@@ -92,6 +95,8 @@ final class TrackingSessionController {
         session.delegate = receiver
         session.delegateQueue = pipeline.queue
         reloadPairing()
+        stallWatch.onChange = { [weak self] in self?.videoStalled = $0 }
+        viewfinder?.onShown = { [weak self] in self?.stallWatch.frameShown() }
         Task { [weak self] in
             for await snapshot in snapshots {
                 guard let self else {
@@ -284,6 +289,7 @@ final class TrackingSessionController {
             lastReconnectSeconds = nil
             sceneUnderstanding = understanding
             isTracking = true
+            stallWatch.start()
             sessionStatus = "Starting"
             session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         } catch {
@@ -377,6 +383,7 @@ final class TrackingSessionController {
         liveSession = nil
         sessionEndpoint = nil
         isTracking = false
+        stallWatch.stop()
         sceneUnderstanding = nil
         poseRate = nil
         if let reason {
