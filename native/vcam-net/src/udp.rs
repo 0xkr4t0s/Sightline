@@ -683,6 +683,17 @@ impl VideoSender {
         }
     }
 
+    /// The active session's ID with the device's newest `VIDEO_REPORT` in it (vcp.md §6.6;
+    /// NET-VID-005), read under one lock so a report is never credited to another session.
+    /// None without a session, before its first report, or once the receiver stopped.
+    #[must_use]
+    pub fn video_report(&self) -> Option<(u32, VideoReport)> {
+        let shared = self.state.upgrade()?;
+        let state = lock(&shared);
+        let session_id = state.active.as_ref()?.endpoint.session_id();
+        state.stats.video_report.map(|report| (session_id, report))
+    }
+
     /// Counts a frame given up part-way, if its session is still the active one.
     fn fail(&self, session_id: u32, e: io::Error) -> io::Error {
         if let Some(shared) = self.state.upgrade() {

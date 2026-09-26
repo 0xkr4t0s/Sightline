@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Headless Blender: `vcam_native` viewfinder frames reach the fake iPhone (task 2.2c2a;
-NET-VID-001, NET-VID-004).
+NET-VID-001, NET-VID-004) and adapt to its reports (task 2.2d2b; NET-VID-005).
 
 Install the extension as for `smoke_native.py`, then:
 
@@ -11,7 +11,8 @@ Submits a known frame (red above blue, rows bottom-up as `GPUOffScreen` reads th
 `FrameSlot` while `Session.start_video` encodes and sends it. Checks that frames before a device
 connects are counted as unsent, that the newest frame the host sent is the newest complete frame
 the fake iPhone reassembled (wire id, JPEG length, pose seq), that a quality change reaches the
-stream, and that Blender decodes the received JPEG upright at the right size and colours.
+stream, and that Blender decodes the received JPEG upright at the right size and colours. A
+second session whose device reports a motion-to-photon p95 of 150 ms must lower the quality.
 """
 
 import os
@@ -85,7 +86,7 @@ with tempfile.TemporaryDirectory() as tmp:
         deadline = time.monotonic() + 20
         while session.video_stats()["sent"] < 40:
             assert time.monotonic() < deadline and child.poll() is None, session.video_stats()
-            if session.video_stats()["sent"] >= 20 and session.video_stats()["quality"] == 85:
+            if session.video_stats()["sent"] >= 20 and session.video_stats()["user_quality"] == 85:
                 session.set_video_quality(40)
             pose = session.latest_pose()
             last_id = slot.submit(frame, pose["seq"] if pose else 0, session.host_clock_ns())
@@ -103,6 +104,7 @@ with tempfile.TemporaryDirectory() as tmp:
     done = dict(re.findall(r"(\w+)=(\d+)", out.splitlines()[-1].split(" camera=")[0]))
     last = stats["last_sent"]
     assert stats["send_failed"] == 0 and stats["last_error"] is None, stats
+    assert (stats["adapt"]["session_id"], stats["adapt"]["report"] is not None) == (last["session_id"], True), stats
     assert last["quality"] == 40 and last["pose_seq"] > 0, last
     assert (last["width"], last["height"]) == (WIDTH, HEIGHT), last
     assert int(done["session_id"]) == last["session_id"], (done, last)
@@ -120,6 +122,53 @@ with tempfile.TemporaryDirectory() as tmp:
     top, bottom = pixels[HEIGHT * 3 // 4, WIDTH // 2, :3], pixels[HEIGHT // 4, WIDTH // 2, :3]
     assert np.abs(top - RED[:3]).max() <= 16 and np.abs(bottom - BLUE[:3]).max() <= 16, (top, bottom)
 
+    # NET-VID-005 end to end (task 2.2d2b): a device reporting a motion-to-photon p95 above
+    # 120 ms makes the host lower the quality in steps of 10 (after 2 bad reports, then 2
+    # settling ones), and frames go out at the lowered quality. Same pairing, new session.
+    session.start_video(slot, quality=80, max_resolution_drop=1)
+    assert session.video_stats()["adapt"] is None
+    child = subprocess.Popen(
+        [FAKE, "--host", f"127.0.0.1:{session.port()}", "--state", os.path.join(tmp, "fake-iphone.key"),
+         "--motion", os.path.join(ROOT, "testdata", "motion", "scripted.bin"),
+         "--rate", "60", "--linger", "20", "--m2p", "150"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + 20
+        while (session.video_stats()["adapt"] or {}).get("changes", 0) < 2:
+            assert time.monotonic() < deadline and child.poll() is None, session.video_stats()
+            slot.submit(frame, 0, session.host_clock_ns())
+            time.sleep(1 / 30)
+        adapted = session.video_stats()
+        # A higher user quality doesn't undo the adaptation; the stream recovers towards it.
+        session.set_video_quality(90)
+        raised = session.video_stats()
+        deadline = time.monotonic() + 10
+        while (session.video_stats()["last_sent"] or {}).get("quality") != 60:
+            assert time.monotonic() < deadline and child.poll() is None, session.video_stats()
+            slot.submit(frame, 0, session.host_clock_ns())
+            time.sleep(1 / 30)
+    finally:
+        child.kill()
+        child.communicate()
+    adapt, change = adapted["adapt"], adapted["adapt"]["last_change"]
+    assert (change["from_quality"], change["to_quality"], change["to_resolution_drop"]) == (70, 60, 0), adapted
+    assert (change["reason"], change["m2p_p95_ms"], change["lost"]) == ("m2p", 150, None), adapted
+    assert (adapted["quality"], adapted["user_quality"], adapt["quality"], adapt["resolution_drop"]) == (
+        60, 80, 60, 0), adapted
+    assert adapt["session_id"] not in (0, last["session_id"]), (adapt, last)
+    report = adapt["report"]
+    assert report["m2p_p95_ms"] == 150 and 0 < report["frames_complete"] <= report["newest_frame_id"], adapt
+    assert adapt["last_interval"]["report_seq"] == report["report_seq"] and adapt["lost"] <= adapt["expected"], adapt
+    assert (raised["quality"], raised["user_quality"], raised["adapt"]["changes"]) == (60, 90, 2), raised
+    # The device left: the adapter goes with its session and the stream is back at the user's
+    # quality for the next device.
+    deadline = time.monotonic() + 10
+    while session.video_stats()["adapt"] is not None:
+        assert time.monotonic() < deadline, session.video_stats()
+        slot.submit(frame, 0, session.host_clock_ns())
+        time.sleep(1 / 30)
+    assert session.video_stats()["quality"] == 90, session.video_stats()
+
     started = time.perf_counter()
     session.stop()  # stops the running video stream too
     stop_ms = (time.perf_counter() - started) * 1e3
@@ -132,4 +181,5 @@ print(f"VCAM_VIDEO_OK sent={stats['sent']} received={received} lost={lost} unsen
       f"skipped={stats['encoded_skipped']} last_id={last['wire_frame_id']} jpeg_bytes={last['jpeg_bytes']} "
       f"fragments={last['fragments']} encode_ms={last['encode_ns'] / 1e6:.2f} send_ms={last['send_ns'] / 1e6:.2f} "
       f"quality={last['quality']} decoded={WIDTH}x{HEIGHT} top={top.astype(int).tolist()} "
-      f"bottom={bottom.astype(int).tolist()} stop_ms={stop_ms:.0f}")
+      f"bottom={bottom.astype(int).tolist()} stop_ms={stop_ms:.0f} adapt_changes={adapt['changes']} "
+      f"adapt_quality={adapted['quality']} adapt_report_seq={report['report_seq']}")

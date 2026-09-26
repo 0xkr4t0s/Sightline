@@ -116,6 +116,17 @@ pub struct VideoAdapter {
     last_change: Option<AdaptChange>,
 }
 
+fn checked_quality(quality: u8) -> io::Result<u8> {
+    if (1..=100).contains(&quality) {
+        Ok(quality)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("JPEG quality must be 1-100, got {quality}"),
+        ))
+    }
+}
+
 impl VideoAdapter {
     /// Starts at the user's `quality` (1–100) and resolution; the resolution may drop by up to
     /// `max_resolution_drop` steps (0 = never lower it).
@@ -123,12 +134,7 @@ impl VideoAdapter {
     /// # Errors
     /// `InvalidInput` for a quality outside 1–100.
     pub fn new(quality: u8, max_resolution_drop: u8) -> io::Result<Self> {
-        if !(1..=100).contains(&quality) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("JPEG quality must be 1-100, got {quality}"),
-            ));
-        }
+        let quality = checked_quality(quality)?;
         Ok(Self {
             quality,
             max_resolution_drop,
@@ -166,6 +172,29 @@ impl VideoAdapter {
             changes: self.changes,
             last_change: self.last_change,
         }
+    }
+
+    /// The user changed the quality (1–100) mid-session. A stream the adapter hasn't lowered
+    /// follows it at once; a lowered one keeps its level (at most the new quality) and recovers
+    /// towards the new quality. Not counted as a change: [`AdaptStats::changes`] counts the
+    /// adapter's own decisions.
+    ///
+    /// # Errors
+    /// `InvalidInput` for a quality outside 1–100; nothing changes.
+    pub fn set_quality(&mut self, quality: u8) -> io::Result<()> {
+        let quality = checked_quality(quality)?;
+        let unadapted = self.level
+            == StreamLevel {
+                quality: self.quality,
+                resolution_drop: 0,
+            };
+        self.level.quality = if unadapted {
+            quality
+        } else {
+            self.level.quality.min(quality)
+        };
+        self.quality = quality;
+        Ok(())
     }
 
     /// Records a frame the sender handed to the socket in full (`VideoSent::frame_id`). Frames
@@ -571,6 +600,55 @@ mod tests {
             assert_eq!(still.interval(15, 5, 0), None);
         }
         assert_eq!(still.level(), (40, 0));
+    }
+
+    #[test]
+    fn a_user_quality_change_is_followed_unless_the_adapter_lowered_the_stream() {
+        let mut link = Link::new(80, 1);
+        link.adapter.set_quality(60).unwrap();
+        assert_eq!(
+            link.level(),
+            (60, 0),
+            "an unadapted stream follows the user"
+        );
+        link.adapter.set_quality(90).unwrap();
+        assert_eq!(link.level(), (90, 0));
+        link.interval(15, 5, 0);
+        link.interval(15, 5, 0);
+        assert_eq!(link.level(), (80, 0));
+        // Raised while lowered: the stream stays lowered and recovers up to the new quality.
+        link.adapter.set_quality(95).unwrap();
+        assert_eq!(link.level(), (80, 0));
+        let raised: Vec<_> = (0..24)
+            .filter_map(|_| link.interval(15, 0, 0))
+            .map(|c| c.to.quality)
+            .collect();
+        assert_eq!(raised, [90, 95]);
+        // Lowered below a lowered level: capped at the new quality at once, and never above.
+        link.interval(15, 0, 0); // the two settling reports after the last change
+        link.interval(15, 0, 0);
+        link.interval(15, 5, 0);
+        link.interval(15, 5, 0);
+        assert_eq!(link.level(), (85, 0));
+        link.adapter.set_quality(70).unwrap();
+        assert_eq!(link.level(), (70, 0));
+        for _ in 0..30 {
+            assert_eq!(link.interval(15, 0, 0), None);
+        }
+        assert_eq!(
+            link.adapter.stats().changes,
+            4,
+            "user changes aren't the adapter's"
+        );
+        // A resolution drop is a lowered stream too, even at the user's quality.
+        let mut low = Link::new(40, 1);
+        low.interval(15, 5, 0);
+        low.interval(15, 5, 0);
+        low.adapter.set_quality(85).unwrap();
+        assert_eq!(low.level(), (40, 1));
+        let e = low.adapter.set_quality(0).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(low.level(), (40, 1));
     }
 
     #[test]
