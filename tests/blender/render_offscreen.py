@@ -157,19 +157,31 @@ try:
     scene.view_settings.view_transform = 'Standard'
     scene.view_settings.look = 'Medium Low Contrast'
     low = stream_color(21)
-    assert np.array_equal(low, reference(0.0, 'MATERIAL'))
+    # EEVEE sampling/8-bit quantization can differ by two codes on repeated draws.
+    assert max_rgb_diff(low, reference(0.0, 'MATERIAL')) <= 2
     unmanaged_diff = max_rgb_diff(low, reference(0.0, 'MATERIAL', color_management=False))
     assert unmanaged_diff > 10, unmanaged_diff
 
     scene.view_settings.look = 'Medium High Contrast'
     high = stream_color(23)
     look_diff = max_rgb_diff(low, high)
-    assert look_diff > 5 and np.array_equal(high, reference(0.0, 'MATERIAL')), look_diff
+    assert look_diff > 5 and max_rgb_diff(high, reference(0.0, 'MATERIAL')) <= 2, look_diff
 
     scene.view_settings.view_transform = 'AgX'
+    scene.view_settings.look = 'AgX - Medium High Contrast'
     agx = stream_color(25)
     view_diff = max_rgb_diff(high, agx)
-    assert view_diff > 5 and np.array_equal(agx, reference(0.0, 'MATERIAL')), view_diff
+    assert view_diff > 5 and max_rgb_diff(agx, reference(0.0, 'MATERIAL')) <= 2, view_diff
+
+    # A wide-gamut monitor setting must not change the meaning of tagged stream bytes
+    # or be overwritten in the user's scene after the draw.
+    scene.display_settings.display_device = 'Display P3'
+    wide = stream_color(27)
+    assert max_rgb_diff(wide, agx) <= 2, max_rgb_diff(wide, agx)
+    assert (scene.display_settings.display_device, scene.view_settings.view_transform,
+            scene.view_settings.look) == ('Display P3', 'AgX', 'AgX - Medium High Contrast')
+    gamut_diff = max_rgb_diff(wide, reference(0.0, 'MATERIAL'))
+    assert gamut_diff > 5, gamut_diff
 finally:
     (scene.display_settings.display_device, scene.view_settings.view_transform,
      scene.view_settings.look) = saved_color
@@ -188,4 +200,5 @@ for bad in (np.zeros((H, W, 3), np.uint8), np.zeros(W * H * 4, np.uint8), np.zer
         raise AssertionError(f"shape {bad.shape} accepted")
 
 print(f"VCAM_RENDER_OK size={W}x{H} frames=7 modes=Solid/Material/EEVEE colours={colours} views_checked={len(spaces)}")
-print(f"VCAM_COLOR_OK unmanaged_max={unmanaged_diff} look_max={look_diff} view_max={view_diff} tag=sRGB/Rec.709")
+print(f"VCAM_COLOR_OK unmanaged_max={unmanaged_diff} look_max={look_diff} view_max={view_diff} "
+      f"gamut_max={gamut_diff} display_restored=true tag=sRGB/Rec.709")

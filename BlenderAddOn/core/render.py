@@ -139,6 +139,7 @@ class StreamRenderer:
         try:
             if saved_device != 'sRGB':
                 display.display_device = 'sRGB'  # the frame is tagged sRGB, not the user's monitor gamut
+                depsgraph.update()  # draw_view3d uses the evaluated scene's display settings
             view_matrix = camera.evaluated_get(depsgraph).matrix_world.inverted()
             projection = camera.calc_matrix_camera(depsgraph, x=self.width, y=self.height)
             self._offscreen.draw_view3d(
@@ -148,6 +149,7 @@ class StreamRenderer:
             try:
                 if saved_device != 'sRGB':
                     display.display_device = saved_device
+                    depsgraph.update()
             finally:
                 shading.type, overlay.show_overlays = saved
 
