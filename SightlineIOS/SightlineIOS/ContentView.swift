@@ -5,8 +5,8 @@
 
 import SwiftUI
 
-/// The landscape status screen (task 1.4.5; FR-UX-003/004). The black frame area is where the
-/// viewfinder video goes once Blender streams it (Phase 2). Status runs along the top edge, the
+/// The landscape status screen (task 1.4.5; FR-UX-003/004) over the viewfinder, which shows the
+/// newest frame Blender streams, letterboxed (FR-VF-001/002). Status runs along the top edge, the
 /// controls sit in a rail under the right thumb and hide after a few seconds while tracking;
 /// `HUDLayout` keeps both out of the centre of the frame.
 struct ContentView: View {
@@ -20,7 +20,7 @@ struct ContentView: View {
             let layout = HUDLayout(size: proxy.size)
             let controlsShown = chrome.isShown(at: now, tracking: controller.isTracking)
             ZStack(alignment: .topLeading) {
-                Color.black
+                Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
                         now = .now
@@ -38,7 +38,7 @@ struct ContentView: View {
             }
             .animation(.easeInOut(duration: 0.25), value: controlsShown)
         }
-        .background(Color.black.ignoresSafeArea())
+        .background(ViewfinderView(renderer: controller.viewfinder).ignoresSafeArea())
         .preferredColorScheme(.dark)
         // Re-check visibility once the hide delay has passed since the last change.
         .task(id: chrome) {

@@ -42,6 +42,10 @@ final class TrackingSessionController {
 
     @ObservationIgnored private let session = ARSession()
     @ObservationIgnored private let pipeline: TrackingPipeline
+    /// Draws the newest decoded viewfinder frame (FR-VF-001/002); nil without Metal.
+    @ObservationIgnored let viewfinder: ViewfinderRenderer?
+    /// Decodes the pipeline's completed frames for `viewfinder`, off the tracking queue.
+    @ObservationIgnored private let decoder: ViewfinderDecoder?
     // ARSession.delegate is weak: this keeps the receiver alive.
     @ObservationIgnored private var receiver: ARFrameReceiver?
     @ObservationIgnored private var rateMeter = PoseRateMeter()
@@ -73,7 +77,14 @@ final class TrackingSessionController {
         // Newest snapshot wins: the UI never queues stale frames.
         let (snapshots, continuation) = AsyncStream.makeStream(
             of: TrackingSnapshot.self, bufferingPolicy: .bufferingNewest(1))
-        pipeline = TrackingPipeline(publish: { _ = continuation.yield($0) })
+        let viewfinder = ViewfinderRenderer()
+        self.viewfinder = viewfinder
+        let decoder = viewfinder.flatMap { renderer in
+            ViewfinderDecoder(device: renderer.device) { renderer.show($0) }
+        }
+        self.decoder = decoder
+        pipeline = TrackingPipeline(publish: { _ = continuation.yield($0) },
+                                    videoFrame: { decoder?.submit($0, jpeg: $1) })
         let receiver = ARFrameReceiver(pipeline: pipeline) { [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }

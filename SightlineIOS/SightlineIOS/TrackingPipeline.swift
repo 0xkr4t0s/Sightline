@@ -156,8 +156,8 @@ nonisolated struct SendLegMeter: Sendable {
 /// The per-frame path, off the main actor (ARC-005): ARKit frame → VCP `POSE` → sealed datagram →
 /// UDP send, on one serial queue (FR-TRK-001/002, PR-FD-001). The same path sends the rig controls
 /// as `CONTROL_STATE` and reads the host's `STATUS` for their acknowledgement (vcp.md §6.2), and
-/// reassembles the viewfinder's `VIDEO_FRAGMENT`s, reporting how they arrive in `VIDEO_REPORT`
-/// (§6.5, §6.6).
+/// reassembles the viewfinder's `VIDEO_FRAGMENT`s, handing each completed frame to the decoder and
+/// reporting how they arrive in `VIDEO_REPORT` (§6.5, §6.6).
 ///
 /// That queue is the actor's executor, the `ARSession` delegate queue, and the UDP socket's read
 /// queue, so ARKit callbacks, received datagrams and the retransmit timer run inside the actor with
@@ -172,6 +172,8 @@ actor TrackingPipeline {
     }
 
     private let publish: @Sendable (TrackingSnapshot) -> Void
+    /// Receives each completed viewfinder frame (a copy of its bytes), in `frame_id` order.
+    private let videoFrame: @Sendable (VCPVideoFrameInfo, Data) -> Void
     private let sender: UDPSender
     private var destination: TrackingDestination?
     private var seq: UInt32 = 0
@@ -197,8 +199,10 @@ actor TrackingPipeline {
     /// vcp.md §6.2: the latest state is repeated this often until the host acknowledges it.
     static let controlRepeatInterval: DispatchTimeInterval = .milliseconds(500)
 
-    init(publish: @escaping @Sendable (TrackingSnapshot) -> Void) {
+    init(publish: @escaping @Sendable (TrackingSnapshot) -> Void,
+         videoFrame: @escaping @Sendable (VCPVideoFrameInfo, Data) -> Void = { _, _ in }) {
         self.publish = publish
+        self.videoFrame = videoFrame
         sender = UDPSender(queue: queue)
         datagram.reserveCapacity(VCPEndpoint.maxDatagram)
     }
@@ -462,9 +466,11 @@ actor TrackingPipeline {
                 cancelControlTimer()
             }
         case let .videoFragment(fragment):
-            // Stale, duplicate and inconsistent fragments still count as the stream arriving. The
-            // viewfinder that decodes `video.frame` comes later (FR-VF-001).
-            _ = video.push(fragment)
+            // Stale, duplicate and inconsistent fragments still count as the stream arriving.
+            // A completed frame is copied out, as the reassembler reuses its buffer (FR-VF-001).
+            if video.push(fragment) == .complete, let frame = video.frame {
+                videoFrame(frame.info, Data(frame.data))
+            }
             if reportTimer == nil { startReportTimer() }
         default:
             // VCPEndpoint rejects every other host-to-device message in v1.
