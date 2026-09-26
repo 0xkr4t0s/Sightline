@@ -259,7 +259,8 @@ jobs:
         run: |
           # addon_apply: matrix_world of the driven camera at every scripted keypose.
           # pose_leg_latency: the NFR-LAT-001 report over loopback (task 1.5.1).
-          for t in addon_apply addon_panel addon_robust pose_leg_latency; do
+          # video_native: JPEG VIDEO_FRAGMENTs from vcam_native reach the fake iPhone (task 2.2c2a).
+          for t in addon_apply addon_panel addon_robust pose_leg_latency video_native; do
             echo "::group::${t}"
             "${BLENDER}" --background --factory-startup --python-exit-code 1 \
               --python "tests/blender/${t}.py"
