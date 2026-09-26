@@ -1794,3 +1794,16 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** nothing new; device checks (1.5.1c, O-1, NET-004) remain owner-only.
 - **Next task:** 2.2d2, the host quality/resolution controller driven by `VIDEO_REPORT`, shown in the N-panel. No second task started.
 - **Owner actions:** decide whether to commit or remove the untracked `docs/AGENT_LOOP_PROMPT_WINDOWS.md`. PR #13 set ready with squash auto-merge.
+
+## 2026-09-26 — Iteration 72 — 2.2d1 CI fix (NET-VID-001, NET-VID-004) — done
+
+- **Orientation:** no LOOP_STOP. Tree clean apart from the owner's untracked `docs/AGENT_LOOP_PROMPT_WINDOWS.md` (left alone, not staged). On `loop/2.2d1`; ready PR #13 (the other open PR, #2, isn't `loop/*` and wasn't touched).
+- **CI failure on PR #13** (run `36221905121`, job `rust (ubuntu-latest)`): `jpeg::tests::worker_encodes_with_the_source_metadata_and_current_quality ... FAILED`, `left: JpegWorkerStats { encoded: 1, failed: 0 }` / `right: JpegWorkerStats { encoded: 2, failed: 0 }` at `vcam-video/src/jpeg.rs:503`. This is a race in the 2.2a encoder, not the 2.2d1 change: the worker published the frame and only then incremented `encoded`, so a consumer woken by `wait_take` could read the stats first. Fixing it on the same branch is this iteration's task (§1b).
+- **Change:** `native/vcam-video/src/jpeg.rs:344`: `JpegWorker`'s loop increments `encoded` before `EncodedSlot::publish`. The slot's mutex (release in `publish`, acquire in `take`/`wait_take`) now orders the increment before any consumer sees the frame. No API or behaviour change beyond the ordering.
+- **Commands and observed results:**
+  - Repro (sequential perl, pattern hit `1`, restored, `cmp` identical): a 5 ms sleep between `publish` and the increment → `cargo test -p vcam-video --lib worker_encodes`: `test result: FAILED. 0 passed; 1 failed` with the CI's `encoded: 1` vs `2`. With the fix, the same 5 ms sleep placed after `publish` → `test result: ok. 1 passed; 0 failed`.
+  - In `native/`: `cargo fmt --check` exit 0; `cargo clippy --all-targets -- -D warnings` exit 0; `cargo test`: 85 passed, 0 failed (15 suites; `vcam_video` lib `test result: ok. 13 passed; 0 failed`).
+- **Not verified:** Windows/macOS/Linux CI (runs on the push).
+- **Blocked:** nothing new.
+- **Next task:** after PR #13 merges, 2.2d2 (host quality/resolution controller driven by `VIDEO_REPORT`, shown in the N-panel). No second task started.
+- **Owner actions:** decide whether to commit or remove the untracked `docs/AGENT_LOOP_PROMPT_WINDOWS.md`. PR #13 stays ready with squash auto-merge armed.

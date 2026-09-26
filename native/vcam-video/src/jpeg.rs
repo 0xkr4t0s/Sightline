@@ -340,6 +340,8 @@ fn run(frames: &FrameSlot, shared: &Shared, mut encoder: JpegEncoder) {
         let encode_ns = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
         match result {
             Ok(()) => {
+                // Count before publishing: a consumer woken by the frame must see it counted.
+                shared.encoded.fetch_add(1, Ordering::Relaxed);
                 shared.output.publish(EncodedFrame {
                     frame_id: frame.frame_id,
                     meta: frame.meta,
@@ -347,7 +349,6 @@ fn run(frames: &FrameSlot, shared: &Shared, mut encoder: JpegEncoder) {
                     encode_ns,
                     jpeg,
                 });
-                shared.encoded.fetch_add(1, Ordering::Relaxed);
             }
             Err(_) => {
                 shared.output.recycle(jpeg);
