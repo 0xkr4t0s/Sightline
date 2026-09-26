@@ -50,7 +50,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: native -> target.nosync
-      # turbojpeg-sys (vcam-video dev-dependency) builds libjpeg-turbo's x86-64 SIMD with NASM.
+      # turbojpeg-sys (vcam-video's JPEG encoder) builds libjpeg-turbo's x86-64 SIMD with NASM.
       - name: Install NASM (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nasm
@@ -126,11 +126,22 @@ jobs:
         id: python
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      # turbojpeg-sys (vcam-video's JPEG encoder, a dependency of vcam_native) needs NASM on
+      # x86-64; the manylinux container installs it in before-script-linux below.
+      - name: Install NASM (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install nasm --no-progress -y
+          "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
       - name: maturin build
         uses: PyO3/maturin-action@v1
         with:
           maturin-version: ${{ env.MATURIN_VERSION }}
           manylinux: ${{ matrix.manylinux }}
+          before-script-linux: |
+            dnf install -y nasm || dnf install -y --enablerepo=powertools nasm
+            nasm -v
+            cmake --version
           # Inside the Linux manylinux container, python3.13 is on PATH; elsewhere use setup-python's.
           args: >-
             --release -m native/vcam-py/Cargo.toml -o dist
