@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Headless Blender: live stream settings change without carrying pending frames across modes, and
-the video stream (task 2.2c2b) runs exactly while the add-on's stream loop does.
+"""Headless Blender: live stream settings change without carrying pending frames across modes, the
+video stream (task 2.2c2b) runs exactly while the add-on's stream loop does, and the stream loop
+renders at the resolution step the adaptive quality controller asks for (task 2.2d2c).
 
 Requires an installed extension, a GPU (gpu.init()), and FAKE_IPHONE built in native/.
 """
@@ -21,6 +22,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 gpu.init()
 addon_utils.enable(MODULE, default_set=True, handle_error=None)
 session = importlib.import_module(MODULE + ".core.session")
+status = importlib.import_module(MODULE + ".core.status")
 
 
 class Recorder:
@@ -153,6 +155,58 @@ try:
     assert session.state.stream_error is None
     restarted = live.video_stats()
     assert restarted is not None and restarted["sent"] == 0 and restarted["last_sent"] is None, restarted
+
+    # NET-VID-005 through the add-on (task 2.2d2c): a device reporting a motion-to-photon p95
+    # above 120 ms lowers the quality to the floor (80 → 50), then the stream loop renders one
+    # size below the user's. Same pairing, new device session.
+    def poll_until(what, done, timeout=30):
+        deadline = time.monotonic() + timeout
+        while not done():
+            assert time.monotonic() < deadline and child.poll() is None, (what, live.video_stats())
+            assert session._poll() == session.POLL_INTERVAL
+            assert session.state.stream_error is None, session.state.stream_error
+            time.sleep(0.003)
+
+    def adapt():
+        stats = live.video_stats()
+        return (stats or {}).get("adapt") or {}
+
+    child.kill()
+    child.communicate()
+    scene.vcam_props.stream_resolution = '540p'
+    old_session = session.state.session_id
+    child = subprocess.Popen(
+        [os.environ["FAKE_IPHONE"], "--host", f"127.0.0.1:{live.port()}",
+         "--state", os.path.join(session.config_dir(), "stream-test.key"),
+         "--motion", os.path.join(ROOT, "testdata/motion/scripted.bin"),
+         "--rate", "60", "--linger", "40", "--m2p", "150"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    poll_until("resolution drop", lambda: adapt().get("resolution_drop") == 1)
+    assert session.state.session_id not in (None, old_session)
+    stream = session._stream
+    assert stream.max_resolution_drop == 1
+    change = adapt()["last_change"]
+    assert (change["from_quality"], change["to_quality"], change["from_resolution_drop"],
+            change["to_resolution_drop"], change["reason"]) == (50, 50, 0, 1, "m2p"), change
+    poll_until("frame at the lowered size", lambda: (live.video_stats()["last_sent"] or {}).get("width") == 640)
+    assert (stream.renderer.width, stream.renderer.height) == (640, 360)
+    labels = status.video_labels(live.video_stats(), '540p')
+    assert "Adaptive: lowered to q50 640×360" in labels, labels
+    assert "Last change: q50 960×540 → q50 640×360 (M2P 150 ms)" in labels, labels
+    # The user picks the smallest size: no step below it, so the drop is cut back at once and
+    # the stream keeps running at 640×360.
+    scene.vcam_props.stream_resolution = '360p'
+    poll_until("drop cut back", lambda: adapt().get("resolution_drop") == 0, timeout=1)
+    assert session._stream is stream and stream.max_resolution_drop == 0
+    changes = adapt()["changes"]
+    # A larger size allows steps again; the still-slow link takes one at once.
+    scene.vcam_props.stream_resolution = '1080p'
+    poll_until("drop below 1080p", lambda: adapt().get("resolution_drop") == 1)
+    poll_until("frame one size below 1080p",
+               lambda: (live.video_stats()["last_sent"] or {}).get("width") == 1280)
+    assert session._stream is stream and stream.max_resolution_drop == 3
+    assert adapt()["changes"] == changes + 1, adapt()
     session.stop()
     assert live.video_stats() is None
     with tempfile.TemporaryDirectory() as tmp:
@@ -175,4 +229,5 @@ finally:
 print(f"VCAM_RENDER_SESSION_OK frames={frames} modes=Material/EEVEE/Solid "
       f"sizes=720p/360p/1080p saved=true budget_ms=2 stopped=true "
       f"video_sent={video['sent']} video_skipped={video['encoded_skipped']} "
-      f"video_1080p_jpeg={video['last_sent']['jpeg_bytes']} video_restarted_with_camera=true")
+      f"video_1080p_jpeg={video['last_sent']['jpeg_bytes']} video_restarted_with_camera=true "
+      f"adapt_sizes=960x540>640x360,cap@360p,1920x1080>1280x720 adapt_changes={changes + 1}")

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from .render import adapted_resolution
 from .rig import LOCK_HEIGHT, LOCK_ROLL, PAN_ONLY
 
 # vcp.md §6.1 tracking_state.
@@ -58,8 +59,43 @@ def code_label(code: str) -> str:
     return f"{code[:3]} {code[3:]}" if len(code) == 6 else code
 
 
-def video_labels(stats: dict | None) -> list[str]:
-    """Viewfinder stream counters (`Session.video_stats()`, NET-VID-001) as N-panel lines."""
+def _level_label(quality: int, resolution_key: str, drop: int) -> str:
+    width, height = adapted_resolution(resolution_key, drop)
+    return f"q{quality} {width}×{height}"
+
+
+def adapt_labels(stats: dict, resolution_key: str) -> list[str]:
+    """NET-VID-005: the level the stream adapted to, the link's loss and the last change, with
+    resolution steps shown as sizes below the user's `resolution_key`."""
+    adapt = stats["adapt"]
+    if adapt is None:
+        return []
+    level = _level_label(adapt["quality"], resolution_key, adapt["resolution_drop"])
+    if (adapt["quality"], adapt["resolution_drop"]) == (stats["user_quality"], 0):
+        lines = [f"Adaptive: full, {level}"]
+    else:
+        lines = [f"Adaptive: lowered to {level}"]
+    link = f"Link: {adapt['lost']} of {adapt['expected']} frames lost"
+    report = adapt["report"]
+    if report is not None and report["m2p_p95_ms"]:
+        link += f", M2P p95 {report['m2p_p95_ms']} ms"
+    lines.append(link)
+    change = adapt["last_change"]
+    if change is not None:
+        reason = {
+            "loss": f"{change['lost']}/{change['expected']} lost",
+            "m2p": f"M2P {change['m2p_p95_ms']} ms",
+            "recovered": "link clear",
+        }[change["reason"]]
+        lines.append(
+            f"Last change: {_level_label(change['from_quality'], resolution_key, change['from_resolution_drop'])}"
+            f" → {_level_label(change['to_quality'], resolution_key, change['to_resolution_drop'])} ({reason})"
+        )
+    return lines
+
+
+def video_labels(stats: dict | None, resolution_key: str) -> list[str]:
+    """Viewfinder stream counters (`Session.video_stats()`, NET-VID-001/005) as N-panel lines."""
     if stats is None:
         return ["Video: not streaming"]
     lines = [f"Video: {stats['sent']} sent, {stats['encoded_skipped']} skipped, q{stats['quality']}"]
@@ -67,6 +103,7 @@ def video_labels(stats: dict | None) -> list[str]:
     if last is not None:
         lines.append(f"Last: {last['width']}×{last['height']}, {last['jpeg_bytes'] / 1024:.0f} KB, "
                      f"encode {last['encode_ns'] / 1e6:.1f} ms, send {last['send_ns'] / 1e6:.1f} ms")
+    lines += adapt_labels(stats, resolution_key)
     failed = stats["send_failed"] + stats["encode_failed"]
     if failed:
         error = stats["last_error"]

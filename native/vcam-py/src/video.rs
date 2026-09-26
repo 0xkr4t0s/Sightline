@@ -144,6 +144,13 @@ impl Adaptation {
         Ok(())
     }
 
+    fn set_max_resolution_drop(&mut self, max_resolution_drop: u8) {
+        if let Some((_, adapter)) = &mut self.session {
+            adapter.set_max_resolution_drop(max_resolution_drop);
+        }
+        self.max_resolution_drop = max_resolution_drop;
+    }
+
     fn info(&self) -> Option<AdaptInfo> {
         self.session
             .as_ref()
@@ -232,6 +239,12 @@ impl VideoPipeline {
             Some(worker) => worker.set_quality(adapt.level().quality),
             None => Ok(()),
         }
+    }
+
+    /// The user's resolution changed: the adapter may now lower it by up to
+    /// `max_resolution_drop` steps; a current drop beyond that is cut back at once.
+    pub fn set_max_resolution_drop(&self, max_resolution_drop: u8) {
+        lock(&self.shared.adapt).set_max_resolution_drop(max_resolution_drop);
     }
 
     #[must_use]
@@ -510,5 +523,42 @@ mod tests {
         a.sent(sent(12, 1)).unwrap();
         assert!(matches!(a.set_quality(101), Err(EncodeError::Quality(101))));
         assert_eq!((a.quality, level(&a)), (90, (90, 0)));
+    }
+
+    #[test]
+    fn a_new_resolution_limit_applies_now_and_to_later_sessions() {
+        let mut a = Adaptation {
+            quality: 40,
+            max_resolution_drop: 1,
+            session: None,
+            report: None,
+        };
+        // Two lossy intervals of 15 frames; at a quality below the floor that drops resolution.
+        let lossy = |a: &mut Adaptation, session_id: u32| {
+            for seq in 1..=2 {
+                for id in seq * 15 - 14..=seq * 15 {
+                    a.sent(sent(session_id, id)).unwrap();
+                }
+                let report = VideoReport {
+                    report_seq: seq,
+                    newest_frame_id: seq * 15,
+                    frames_complete: seq * 10,
+                    m2p_p95_ms: 0,
+                };
+                a.report(session_id, report).unwrap();
+            }
+            a.level().resolution_drop
+        };
+        assert_eq!(lossy(&mut a, 7), 1);
+        a.set_max_resolution_drop(0);
+        assert_eq!(a.level().resolution_drop, 0, "cut back at once");
+        assert_eq!(
+            lossy(&mut a, 8),
+            0,
+            "the next session's adapter keeps the limit"
+        );
+        a.set_max_resolution_drop(1);
+        a.end_session();
+        assert_eq!(lossy(&mut a, 9), 1);
     }
 }

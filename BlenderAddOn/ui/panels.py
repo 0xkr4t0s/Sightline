@@ -90,7 +90,7 @@ class VCAM_PT_main_panel(bpy.types.Panel):
                 col.label(text="Latency: waiting for clock sync")
             else:
                 col.label(text=f"Latency: {state.latency_ms:.1f} ms (clock jitter {state.clock_jitter_ms:.2f} ms)")
-            for line in video_labels(live.video_stats()):
+            for line in video_labels(live.video_stats(), props.stream_resolution):
                 col.label(text=line)
         samples = len(session.latency_log().pose_leg_ms)
         if samples:  # kept after the device leaves, until the next device session
