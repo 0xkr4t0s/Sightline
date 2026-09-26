@@ -156,9 +156,8 @@ fn session_setup_matches_vector_and_keys_open_first_pose() {
 
     // The derived keys authenticate the session's first datagram.
     let host = Endpoint::new(Role::Host, keys.session_id, &keys.k_d2h, &keys.k_h2d).unwrap();
-    let pose = host
-        .open(&hex(msgs["first_POSE_udp"].as_str().unwrap()))
-        .unwrap();
+    let first_pose = hex(msgs["first_POSE_udp"].as_str().unwrap());
+    let pose = host.open(&first_pose).unwrap();
     assert!(matches!(pose, Message::Pose(p) if p.seq == 1));
     // A different pairing key yields keys that don't.
     let other = SessionHandshake::new(&[0u8; 32], &hello, &challenge)

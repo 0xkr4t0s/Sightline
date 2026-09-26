@@ -41,6 +41,14 @@ testdata/motion/scripted.json   fake-iPhone motion (task 1.2.7): canonical frame
                              named keyposes (frame index, position, orientation, matrix_world).
 testdata/motion/scripted.bin    the same frames for vcam-fake-iphone: "VCMO", u16 version 1,
                              u16 rate_hz, u32 count, then count x (3 f32 position, 4 f32 x,y,z,w), LE.
+testdata/video/fragments.json   VIDEO_FRAGMENT datagrams (vcp.md §6.5), host -> device under the §11
+                             example keys. Each case: name, hex, direction, accept, rule; accepted
+                             cases carry fields (data as hex, excluding ignored tail bytes),
+                             rejected ones the reason (too_short|layout|format|direction).
+testdata/video/reassembly.json   newest-frame-wins reassembly (vcp.md §6.5): sequences of
+                             datagrams fed to a fresh receiver, each step's outcome
+                             (pending|complete|stale|duplicate|done|inconsistent; complete steps
+                             carry the frame), and the frames completed and lost at the end.
 
 Big integers are big-endian hex strings. Floats are JSON numbers; compare with the stated
 tolerance. Quaternions are [x, y, z, w] with w >= 0 (q and -q are the same rotation).
@@ -215,6 +223,34 @@ def error_payload(code, message) -> bytes:
     return struct.pack("<HH", code, 0) + str8(message)
 
 
+VIDEO_HEADER = struct.Struct("<IIHHHBBQIBBH")  # vcp.md §6.5, 32 bytes
+VIDEO_MAX_DATA = 1200 - 12 - 8 - VIDEO_HEADER.size
+VIDEO_MAX_FRAME = 4 * 1024 * 1024
+assert VIDEO_HEADER.size == 32 and VIDEO_MAX_DATA == 1148
+
+
+def video_payload(frame_id, frame_len, index, count, size, data, render_time_ns=2_000_000_000,
+                  pose_seq=1, quality=80, codec=1, color=0, flags=0) -> bytes:
+    return VIDEO_HEADER.pack(frame_id, frame_len, index, count, size, codec, color, render_time_ns,
+                             pose_seq, quality, flags, 0) + data
+
+
+def video_fragments(frame_id, frame: bytes, size=VIDEO_MAX_DATA, **meta) -> list[bytes]:
+    """The host's split (§6.5 Sending): fragments of `size` data bytes in index order."""
+    count = -(-len(frame) // size)
+    return [video_payload(frame_id, len(frame), i, count, size, frame[i * size:(i + 1) * size], **meta)
+            for i in range(count)]
+
+
+def video_fields(payload: bytes) -> dict:
+    (frame_id, frame_len, index, count, size, codec, color, rt, pose_seq, quality, flags,
+     _) = VIDEO_HEADER.unpack_from(payload)
+    data_len = min(size, frame_len - index * size)
+    return {"frame_id": frame_id, "frame_len": frame_len, "frag_index": index, "frag_count": count,
+            "frag_size": size, "codec": codec, "color": color, "render_time_ns": rt,
+            "pose_seq": pose_seq, "quality": quality, "flags": flags,
+            "data": hx(payload[32:32 + data_len])}
+
 # --------------------------------------------------------------------------------------------
 # Vector builders
 
@@ -369,6 +405,131 @@ def build_freshness() -> dict:
              "input": [3, 3, 4, 65535, 0, 0], "resets_at_index": [2, 3, 4]},
         ],
     }
+
+
+def build_video_fragments() -> dict:
+    frame = bytes((i * 7 + 3) & 0xFF for i in range(2600))
+    first, _, last = video_fragments(9, frame, render_time_ns=123_456_789_012, pose_seq=4_000_000_000,
+                                     quality=100)
+    cases = []
+
+    def case(name, payload, accept, rule, direction="h2d", reason=None):
+        c = {"name": name, "hex": hx(udp(0x05, SID, payload, KEYS[direction])), "direction": direction,
+             "accept": accept, "rule": rule}
+        if accept:
+            c["fields"] = video_fields(payload)
+        else:
+            c["reason"] = reason
+        cases.append(c)
+
+    example = video_payload(1, 4, 0, 1, VIDEO_MAX_DATA, bytes.fromhex("ffd8ffd9"))
+    case("video_single", example, True, "vcp.md §6.5 example")
+    case("video_first_of_three", first, True, "full 1148-byte data: a 1200-byte datagram")
+    case("video_last_of_three", last, True, "last fragment carries the remaining 304 bytes")
+    case("video_payload_longer_accepted", last + b"\xee" * 3, True, "§2 (bytes after data ignored)")
+    case("video_header_short", example[:31], False, "§6.5 shorter than 32 bytes", reason="too_short")
+    case("video_data_short", last[:-1], False, "§6.5 data shorter than its fragment", reason="too_short")
+    case("video_frame_id_zero", video_payload(0, 4, 0, 1, 4, b"abcd"), False, "§6.5 frame_id", reason="layout")
+    case("video_frame_len_zero", video_payload(1, 0, 0, 0, 4, b""), False, "§6.5 frame_len", reason="layout")
+    case("video_frame_len_over_4mib", video_payload(1, VIDEO_MAX_FRAME + 1, 0, 3654, VIDEO_MAX_DATA,
+                                                    frame[:VIDEO_MAX_DATA]),
+         False, "§6.5 frame_len", reason="layout")
+    case("video_frag_size_zero", video_payload(1, 4, 0, 1, 0, b"abcd"), False, "§6.5 frag_size",
+         reason="layout")
+    case("video_frag_size_1149", video_payload(1, 10, 0, 1, 1149, bytes(10)), False, "§6.5 frag_size",
+         reason="layout")
+    case("video_frag_count_wrong", video_payload(1, 4, 0, 2, 4, b"abcd"), False, "§6.5 frag_count",
+         reason="layout")
+    case("video_frag_index_past_end", video_payload(1, 8, 2, 2, 4, b""), False, "§6.5 frag_index",
+         reason="layout")
+    case("video_codec_h264_reserved", video_payload(1, 4, 0, 1, 4, b"abcd", codec=2), False,
+         "§6.5 codec", reason="format")
+    case("video_color_unknown", video_payload(1, 4, 0, 1, 4, b"abcd", color=1), False, "§6.5 color",
+         reason="format")
+    case("video_from_device", example, False, "4.3.7 (host → device only)", direction="d2h",
+         reason="direction")
+    return {"receiver": {"session_id": SID, "k_d2h": hx(K_D2H), "k_h2d": hx(K_H2D),
+                         "role": "device for direction h2d, host for d2h"},
+            "limits": {"header_len": VIDEO_HEADER.size, "max_data": VIDEO_MAX_DATA,
+                       "max_frame_len": VIDEO_MAX_FRAME},
+            "cases": cases}
+
+
+class Reassembler:
+    """Reference for vcp.md §6.5 Reassembly; the Rust Reassembler must match it."""
+
+    def __init__(self):
+        self.newest, self.frame, self.parts, self.state = 0, None, {}, None
+        self.complete = self.lost = 0
+
+    def push(self, payload: bytes):
+        f = video_fields(payload)
+        key = {k: v for k, v in f.items() if k not in ("frag_index", "data")}
+        if f["frame_id"] < self.newest:
+            return "stale"
+        if f["frame_id"] > self.newest:
+            if self.state == "open":
+                self.lost += 1
+            self.newest, self.frame, self.parts, self.state = f["frame_id"], key, {}, "open"
+        elif self.state != "open":
+            return "done"
+        elif f["frag_index"] in self.parts:
+            return "duplicate"
+        elif key != self.frame:
+            self.state = "abandoned"
+            self.lost += 1
+            return "inconsistent"
+        self.parts[f["frag_index"]] = bytes.fromhex(f["data"])
+        if len(self.parts) < key["frag_count"]:
+            return "pending"
+        self.state = "complete"
+        self.complete += 1
+        return "complete"
+
+    def frame_bytes(self) -> bytes:
+        return b"".join(self.parts[i] for i in range(self.frame["frag_count"]))
+
+
+def build_reassembly() -> dict:
+    def frame(frame_id, n=10):
+        return bytes((frame_id * 16 + i) & 0xFF for i in range(n))
+
+    def frags(frame_id, n=10, **meta):
+        meta.setdefault("pose_seq", frame_id * 10)
+        meta.setdefault("render_time_ns", frame_id * 33_333_333)
+        return video_fragments(frame_id, frame(frame_id, n), size=4, **meta)
+
+    f1, f2, f3, f4, f5 = (frags(i) for i in range(1, 6))
+    odd = frags(1, pose_seq=11)
+    sequences = {
+        "in_order": ("fragments in order complete the frame", [f1[0], f1[1], f1[2]]),
+        "reordered_and_repeated": ("any order; a repeated index and a late copy are dropped",
+                                   [f1[2], f1[0], f1[2], f1[1], f1[0]]),
+        "newer_frame_wins": ("frame 2 starts before frame 1 is complete: frame 1 is lost and its "
+                             "last fragment is stale", [f1[0], f1[1], f2[0], f1[2], f2[1], f2[2]]),
+        "gaps_in_frame_id": ("frame ids may skip; an older id after a newer one is stale",
+                             [f3[0], f3[1], f3[2], f5[0], f5[1], f5[2], f4[0]]),
+        "inconsistent_fields": ("a fragment whose frame fields differ abandons the frame",
+                                [f1[0], odd[1], f1[1], f1[2], f2[0], f2[1], f2[2]]),
+        "single_fragment_frames": ("a frame no larger than frag_size completes at once",
+                                   [frags(1, 4)[0], frags(2, 3)[0]]),
+    }
+    out = []
+    for name, (description, payloads) in sequences.items():
+        r, steps = Reassembler(), []
+        for p in payloads:
+            outcome = r.push(p)
+            step = {"hex": hx(udp(0x05, SID, p, K_H2D)), "outcome": outcome}
+            if outcome == "complete":
+                step["frame"] = {"frame_id": r.newest, "data": hx(r.frame_bytes()),
+                                 "render_time_ns": r.frame["render_time_ns"],
+                                 "pose_seq": r.frame["pose_seq"]}
+            steps.append(step)
+        out.append({"name": name, "description": description, "steps": steps,
+                    "complete": r.complete, "lost": r.lost})
+    return {"note": "Each sequence starts a new session (fresh receiver). Datagrams use the vcp.md §11 "
+                    "example keys, host -> device; frag_size is 4 to keep the vectors short.",
+            "session_id": SID, "k_h2d": hx(K_H2D), "sequences": out}
 
 
 def build_clock_sync() -> dict:
@@ -935,7 +1096,7 @@ def self_check_hkdf():
         raise SystemExit("SELF-CHECK FAILED: HKDF vs RFC 5869 A.1")
 
 
-def self_check_spec(messages: dict):
+def self_check_spec(messages: dict, video: dict):
     """Every example block in vcp.md must equal the corresponding generated message."""
     text = SPEC.read_text(encoding="utf-8")
     blocks = re.findall(r"```\n(header .*?)```", text, re.S)
@@ -943,9 +1104,9 @@ def self_check_spec(messages: dict):
     for block in blocks:
         joined = re.sub(r"\b(header|payload|tag)\b", " ", block)
         wanted.append(bytes.fromhex(re.sub(r"\s+", "", joined)))
-    generated = {bytes.fromhex(c["hex"]) for c in messages["cases"]}
+    generated = {bytes.fromhex(c["hex"]) for c in messages["cases"] + video["cases"] if c.get("accept", True)}
     missing = [w.hex() for w in wanted if w not in generated]
-    if len(wanted) != 6 or missing:
+    if len(wanted) != 7 or missing:
         raise SystemExit(f"SELF-CHECK FAILED: vcp.md examples ({len(wanted)} found) not generated: {missing}")
 
 
@@ -960,7 +1121,8 @@ def build_all() -> dict[str, bytes]:
     self_check_hkdf()
     rfc = build_rfc5054()
     messages, bins = build_messages()
-    self_check_spec(messages)
+    video = build_video_fragments()
+    self_check_spec(messages, video)
     pairing, ctx = build_pairing()
     motion, motion_bin = build_motion()
     files = {
@@ -975,6 +1137,8 @@ def build_all() -> dict[str, bytes]:
         "motion/scripted.json": dumps(motion).encode(),
         "rig/rig_cases.json": dumps(build_rig(motion)).encode(),
         "rig/hold.json": dumps(build_hold(motion)).encode(),
+        "video/fragments.json": dumps(video).encode(),
+        "video/reassembly.json": dumps(build_reassembly()).encode(),
         "motion/scripted.bin": motion_bin,
     }
     files.update({f"vcp/{name}": data for name, data in bins.items()})
@@ -988,7 +1152,7 @@ def main():
     files = build_all()
     if args.check:
         stale = [p for p, data in files.items() if not (OUT / p).exists() or (OUT / p).read_bytes() != data]
-        extra = [str(p.relative_to(OUT)) for d in ("vcp", "coords", "motion", "rig") for p in (OUT / d).glob("*")
+        extra = [str(p.relative_to(OUT)) for d in ("vcp", "coords", "motion", "rig", "video") for p in (OUT / d).glob("*")
                  if str(p.relative_to(OUT)) not in files]
         if stale or extra:
             print(f"testdata/ is out of date. stale={stale} extra={extra}. Run tools/gen_testdata.py")

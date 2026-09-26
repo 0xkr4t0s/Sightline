@@ -5,6 +5,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 use crate::message::{Clock, ControlState, Message, PayloadError, Pose, Status, msg_type};
+use crate::video::VideoFragment;
 use crate::wire::Reader;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -90,7 +91,7 @@ impl Endpoint {
     }
 
     /// Appends one complete datagram (header ‖ payload ‖ tag) for `msg` to `out`.
-    pub fn seal(&self, msg: &Message, out: &mut Vec<u8>) -> Result<(), SealError> {
+    pub fn seal(&self, msg: &Message<'_>, out: &mut Vec<u8>) -> Result<(), SealError> {
         if !may_send(self.role, msg) {
             return Err(SealError::WrongDirection);
         }
@@ -114,6 +115,7 @@ impl Endpoint {
                 Ok(())
             }
             Message::Status(m) => m.encode(out),
+            Message::VideoFragment(m) => m.encode(out),
         };
         let fail = |out: &mut Vec<u8>, e| {
             out.truncate(start);
@@ -138,9 +140,10 @@ impl Endpoint {
         Ok(())
     }
 
-    /// Checks one received datagram against vcp.md §4.3 in order and decodes it.
+    /// Checks one received datagram against vcp.md §4.3 in order and decodes it. A
+    /// `VIDEO_FRAGMENT`'s data borrows from `datagram`.
     /// Freshness (§6 sequence rules) is the caller's job; see [`crate::SeqFilter`].
-    pub fn open(&self, datagram: &[u8]) -> Result<Message, DropReason> {
+    pub fn open<'a>(&self, datagram: &'a [u8]) -> Result<Message<'a>, DropReason> {
         if !(HEADER_LEN + TAG_LEN..=MAX_DATAGRAM).contains(&datagram.len()) {
             return Err(DropReason::Size);
         }
@@ -184,7 +187,7 @@ impl Endpoint {
     }
 }
 
-fn decode(msg_type: u8, payload: &[u8]) -> Result<Message, DropReason> {
+fn decode(msg_type: u8, payload: &[u8]) -> Result<Message<'_>, DropReason> {
     let p = DropReason::Payload;
     Ok(match msg_type {
         msg_type::POSE => Message::Pose(Pose::decode(payload).map_err(p)?),
@@ -195,12 +198,15 @@ fn decode(msg_type: u8, payload: &[u8]) -> Result<Message, DropReason> {
                 .ok_or(DropReason::UnknownType)?,
         ),
         msg_type::STATUS => Message::Status(Status::decode(payload).map_err(p)?),
+        msg_type::VIDEO_FRAGMENT => {
+            Message::VideoFragment(VideoFragment::decode(payload).map_err(p)?)
+        }
         _ => return Err(DropReason::UnknownType),
     })
 }
 
 /// Who may send what (vcp.md §5).
-fn may_send(role: Role, msg: &Message) -> bool {
+fn may_send(role: Role, msg: &Message<'_>) -> bool {
     matches!(
         (role, msg),
         (
@@ -208,7 +214,7 @@ fn may_send(role: Role, msg: &Message) -> bool {
             Message::Pose(_) | Message::ControlState(_) | Message::Clock(Clock::Reply { .. }),
         ) | (
             Role::Host,
-            Message::Status(_) | Message::Clock(Clock::Request { .. })
+            Message::Status(_) | Message::Clock(Clock::Request { .. }) | Message::VideoFragment(_)
         )
     )
 }

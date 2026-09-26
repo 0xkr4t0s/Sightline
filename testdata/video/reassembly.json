@@ -1,0 +1,223 @@
+{
+  "k_h2d": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+  "note": "Each sequence starts a new session (fresh receiver). Datagrams use the vcp.md §11 example keys, host -> device; frag_size is 4 to keep the vectors short.",
+  "sequences": [
+    {
+      "complete": 1,
+      "description": "fragments in order complete the frame",
+      "lost": 0,
+      "name": "in_order",
+      "steps": [
+        {
+          "hex": "564350310105cdab34122400010000000a000000000003000400010055a0fc01000000000a0000005000000010111213b7dc51e28552aad9",
+          "outcome": "pending"
+        },
+        {
+          "hex": "564350310105cdab34122400010000000a000000010003000400010055a0fc01000000000a000000500000001415161702b84e70f919a4c0",
+          "outcome": "pending"
+        },
+        {
+          "frame": {
+            "data": "10111213141516171819",
+            "frame_id": 1,
+            "pose_seq": 10,
+            "render_time_ns": 33333333
+          },
+          "hex": "564350310105cdab34122200010000000a000000020003000400010055a0fc01000000000a000000500000001819650bf9474b650f27",
+          "outcome": "complete"
+        }
+      ]
+    },
+    {
+      "complete": 1,
+      "description": "any order; a repeated index and a late copy are dropped",
+      "lost": 0,
+      "name": "reordered_and_repeated",
+      "steps": [
+        {
+          "hex": "564350310105cdab34122200010000000a000000020003000400010055a0fc01000000000a000000500000001819650bf9474b650f27",
+          "outcome": "pending"
+        },
+        {
+          "hex": "564350310105cdab34122400010000000a000000000003000400010055a0fc01000000000a0000005000000010111213b7dc51e28552aad9",
+          "outcome": "pending"
+        },
+        {
+          "hex": "564350310105cdab34122200010000000a000000020003000400010055a0fc01000000000a000000500000001819650bf9474b650f27",
+          "outcome": "duplicate"
+        },
+        {
+          "frame": {
+            "data": "10111213141516171819",
+            "frame_id": 1,
+            "pose_seq": 10,
+            "render_time_ns": 33333333
+          },
+          "hex": "564350310105cdab34122400010000000a000000010003000400010055a0fc01000000000a000000500000001415161702b84e70f919a4c0",
+          "outcome": "complete"
+        },
+        {
+          "hex": "564350310105cdab34122400010000000a000000000003000400010055a0fc01000000000a0000005000000010111213b7dc51e28552aad9",
+          "outcome": "done"
+        }
+      ]
+    },
+    {
+      "complete": 1,
+      "description": "frame 2 starts before frame 1 is complete: frame 1 is lost and its last fragment is stale",
+      "lost": 1,
+      "name": "newer_frame_wins",
+      "steps": [
+        {
+          "hex": "564350310105cdab34122400010000000a000000000003000400010055a0fc01000000000a0000005000000010111213b7dc51e28552aad9",
+          "outcome": "pending"
+        },
+        {
+          "hex": "564350310105cdab34122400010000000a000000010003000400010055a0fc01000000000a000000500000001415161702b84e70f919a4c0",
+          "outcome": "pending"
+        },
+        {
+          "hex": "564350310105cdab34122400020000000a0000000000030004000100aa40f9030000000014000000500000002021222377ef288ba2452ff6",
+          "outcome": "pending"
+        },
+        {
+          "hex": "564350310105cdab34122200010000000a000000020003000400010055a0fc01000000000a000000500000001819650bf9474b650f27",
+          "outcome": "stale"
+        },
+        {
+          "hex": "564350310105cdab34122400020000000a0000000100030004000100aa40f903000000001400000050000000242526279e9425478176581f",
+          "outcome": "pending"
+        },
+        {
+          "frame": {
+            "data": "20212223242526272829",
+            "frame_id": 2,
+            "pose_seq": 20,
+            "render_time_ns": 66666666
+          },
+          "hex": "564350310105cdab34122200020000000a0000000200030004000100aa40f90300000000140000005000000028296fe6d30770229a14",
+          "outcome": "complete"
+        }
+      ]
+    },
+    {
+      "complete": 2,
+      "description": "frame ids may skip; an older id after a newer one is stale",
+      "lost": 0,
+      "name": "gaps_in_frame_id",
+      "steps": [
+        {
+          "hex": "564350310105cdab34122400030000000a0000000000030004000100ffe0f505000000001e0000005000000030313233828c263948f15aeb",
+          "outcome": "pending"
+        },
+        {
+          "hex": "564350310105cdab34122400030000000a0000000100030004000100ffe0f505000000001e000000500000003435363707e1a7c0041f402b",
+          "outcome": "pending"
+        },
+        {
+          "frame": {
+            "data": "30313233343536373839",
+            "frame_id": 3,
+            "pose_seq": 30,
+            "render_time_ns": 99999999
+          },
+          "hex": "564350310105cdab34122200030000000a0000000200030004000100ffe0f505000000001e000000500000003839be215c7582d61734",
+          "outcome": "complete"
+        },
+        {
+          "hex": "564350310105cdab34122400050000000a0000000000030004000100a921ef0900000000320000005000000050515253ef2860d45c816bc1",
+          "outcome": "pending"
+        },
+        {
+          "hex": "564350310105cdab34122400050000000a0000000100030004000100a921ef0900000000320000005000000054555657ba97a08df8abff4e",
+          "outcome": "pending"
+        },
+        {
+          "frame": {
+            "data": "50515253545556575859",
+            "frame_id": 5,
+            "pose_seq": 50,
+            "render_time_ns": 166666665
+          },
+          "hex": "564350310105cdab34122200050000000a0000000200030004000100a921ef090000000032000000500000005859897ad39d34eefe7f",
+          "outcome": "complete"
+        },
+        {
+          "hex": "564350310105cdab34122400040000000a00000000000300040001005481f207000000002800000050000000404142430cd3356781e4b8d6",
+          "outcome": "stale"
+        }
+      ]
+    },
+    {
+      "complete": 1,
+      "description": "a fragment whose frame fields differ abandons the frame",
+      "lost": 1,
+      "name": "inconsistent_fields",
+      "steps": [
+        {
+          "hex": "564350310105cdab34122400010000000a000000000003000400010055a0fc01000000000a0000005000000010111213b7dc51e28552aad9",
+          "outcome": "pending"
+        },
+        {
+          "hex": "564350310105cdab34122400010000000a000000010003000400010055a0fc01000000000b0000005000000014151617a1536bbfe3592ace",
+          "outcome": "inconsistent"
+        },
+        {
+          "hex": "564350310105cdab34122400010000000a000000010003000400010055a0fc01000000000a000000500000001415161702b84e70f919a4c0",
+          "outcome": "done"
+        },
+        {
+          "hex": "564350310105cdab34122200010000000a000000020003000400010055a0fc01000000000a000000500000001819650bf9474b650f27",
+          "outcome": "done"
+        },
+        {
+          "hex": "564350310105cdab34122400020000000a0000000000030004000100aa40f9030000000014000000500000002021222377ef288ba2452ff6",
+          "outcome": "pending"
+        },
+        {
+          "hex": "564350310105cdab34122400020000000a0000000100030004000100aa40f903000000001400000050000000242526279e9425478176581f",
+          "outcome": "pending"
+        },
+        {
+          "frame": {
+            "data": "20212223242526272829",
+            "frame_id": 2,
+            "pose_seq": 20,
+            "render_time_ns": 66666666
+          },
+          "hex": "564350310105cdab34122200020000000a0000000200030004000100aa40f90300000000140000005000000028296fe6d30770229a14",
+          "outcome": "complete"
+        }
+      ]
+    },
+    {
+      "complete": 2,
+      "description": "a frame no larger than frag_size completes at once",
+      "lost": 0,
+      "name": "single_fragment_frames",
+      "steps": [
+        {
+          "frame": {
+            "data": "10111213",
+            "frame_id": 1,
+            "pose_seq": 10,
+            "render_time_ns": 33333333
+          },
+          "hex": "564350310105cdab341224000100000004000000000001000400010055a0fc01000000000a0000005000000010111213890b98e3ed9ffb7b",
+          "outcome": "complete"
+        },
+        {
+          "frame": {
+            "data": "202122",
+            "frame_id": 2,
+            "pose_seq": 20,
+            "render_time_ns": 66666666
+          },
+          "hex": "564350310105cdab3412230002000000030000000000010004000100aa40f903000000001400000050000000202122718745083e437d83",
+          "outcome": "complete"
+        }
+      ]
+    }
+  ],
+  "session_id": 305441741
+}

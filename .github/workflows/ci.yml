@@ -79,7 +79,7 @@ jobs:
       - name: Seed corpora from testdata/
         working-directory: native/fuzz
         run: |
-          mkdir -p corpus/udp_open corpus/control_decode corpus/pairing_inputs
+          mkdir -p corpus/udp_open corpus/control_decode corpus/pairing_inputs corpus/video_reassembly
           for f in ../../testdata/vcp/*.bin; do
             case "$(basename "$f")" in
               hello_pair.bin|error_not_paired.bin) cp "$f" corpus/control_decode/ ;;
@@ -96,11 +96,17 @@ jobs:
           pairing = json.load(open("../../testdata/vcp/pairing.json"))["messages"]
           open("corpus/pairing_inputs/proof.bin", "wb").write(b"\x00" + bytes.fromhex(pairing["PAIR_PROOF"])[12:])
           open("corpus/pairing_inputs/challenge.bin", "wb").write(b"\x01" + bytes.fromhex(pairing["PAIR_CHALLENGE"])[12:] + bytes(32))
+          # video_reassembly input: payloads (datagram minus header and tag), each after a length byte.
+          for seq in json.load(open("../../testdata/video/reassembly.json"))["sequences"]:
+              payloads = [bytes.fromhex(s["hex"])[12:-8] for s in seq["steps"]]
+              open(f"corpus/video_reassembly/{seq['name']}.bin", "wb").write(b"".join(bytes([len(p)]) + p for p in payloads))
+          for case in json.load(open("../../testdata/video/fragments.json"))["cases"]:
+              open(f"corpus/udp_open/{case['name']}.bin", "wb").write(bytes.fromhex(case["hex"]))
           EOF
       - name: cargo fuzz run (60 s per target)
         working-directory: native
         run: |
-          for target in udp_open control_decode pairing_inputs; do
+          for target in udp_open control_decode pairing_inputs video_reassembly; do
             cargo +nightly fuzz run "$target" -- -max_total_time=60 -rss_limit_mb=2048
           done
       - uses: actions/upload-artifact@v7

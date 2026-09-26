@@ -25,7 +25,7 @@ fn start() -> UdpReceiver {
     rx
 }
 
-fn pose(seq: u32) -> Message {
+fn pose(seq: u32) -> Message<'static> {
     Message::Pose(Pose {
         seq,
         capture_time_ns: u64::from(seq) * 16_666_667,
@@ -154,7 +154,7 @@ fn reply_address_follows_the_latest_authenticated_source() {
 }
 
 /// A pose at 60 Hz capture time `seq` with x position `x`.
-fn pose_at(seq: u32, x: f32) -> Message {
+fn pose_at(seq: u32, x: f32) -> Message<'static> {
     Message::Pose(Pose {
         seq,
         capture_time_ns: 1_000_000_000 + u64::from(seq) * 16_666_667,
@@ -241,11 +241,16 @@ fn stop_is_prompt_and_releases_the_port() {
     assert_eq!(again.local_addr(), addr);
 }
 
-fn receive(tx: &UdpSocket, endpoint: &Endpoint) -> Message {
+/// The next host datagram. These tests never stream video, so the message owns its data.
+fn receive(tx: &UdpSocket, endpoint: &Endpoint) -> Message<'static> {
     tx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     let mut bytes = [0; 1200];
     let n = tx.recv(&mut bytes).unwrap();
-    endpoint.open(&bytes[..n]).unwrap()
+    match endpoint.open(&bytes[..n]).unwrap() {
+        Message::Status(s) => Message::Status(s),
+        Message::Clock(c) => Message::Clock(c),
+        other => panic!("unexpected host message: {other:?}"),
+    }
 }
 
 fn receive_status(tx: &UdpSocket, endpoint: &Endpoint) -> Status {

@@ -56,7 +56,7 @@ impl Default for HostStatus {
 }
 
 impl HostStatus {
-    fn into_message(self, status_seq: u32) -> Message {
+    fn into_message(self, status_seq: u32) -> Message<'static> {
         Message::Status(Status {
             status_seq,
             applied_pose_seq: self.applied_pose_seq,
@@ -159,7 +159,7 @@ struct ActiveSession {
     endpoint: Endpoint,
     started_at: Instant,
     last_received: Option<Instant>,
-    status: Message,
+    status: Message<'static>,
     status_dirty: bool,
     last_status: Option<Instant>,
     last_clock: Option<Instant>,
@@ -247,8 +247,10 @@ impl State {
                     self.stats.clock_rejected += 1;
                 }
             }
-            // The endpoint drops device requests (§4.3.7); a host never receives STATUS.
-            Message::Clock(Clock::Request { .. }) | Message::Status(_) => {}
+            // The endpoint drops device requests and host-only types (§4.3.7).
+            Message::Clock(Clock::Request { .. })
+            | Message::Status(_)
+            | Message::VideoFragment(_) => {}
         }
     }
 

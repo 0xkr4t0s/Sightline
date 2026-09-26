@@ -146,7 +146,7 @@ fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
     }
 }
 
-fn pose(seq: u32) -> Message {
+fn pose(seq: u32) -> Message<'static> {
     Message::Pose(Pose {
         seq,
         capture_time_ns: 1,
