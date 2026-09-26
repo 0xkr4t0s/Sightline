@@ -1807,3 +1807,25 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** nothing new.
 - **Next task:** after PR #13 merges, 2.2d2 (host quality/resolution controller driven by `VIDEO_REPORT`, shown in the N-panel). No second task started.
 - **Owner actions:** decide whether to commit or remove the untracked `docs/AGENT_LOOP_PROMPT_WINDOWS.md`. PR #13 stays ready with squash auto-merge armed.
+
+## 2026-09-26 — Iteration 73 — 2.2d2a (NET-VID-005) — done
+
+- **Orientation:** no LOOP_STOP, and the tree was clean on the merged branch `docs/windows-loop-prompt` (the owner's Windows loop prompt went in as PR #14, so it isn't untracked any more). No open `loop/*` PR: PR #13 (2.2d1) merged as `b5dc8a8`. Switched to `main`, fast-forwarded to `f71e00d`, deleted the local merged branch, published `loop/2.2d2a` with draft PR https://github.com/0xkr4t0s/Sightline/pull/15.
+- **Split of 2.2d2** (one sub-step per iteration):
+  - **2.2d2a** (this one): the host's adaptation controller as pure Rust in `vcam-net`, with unit tests.
+  - **2.2d2b**: run it in `vcam-py`'s `VideoPipeline` (the sender records finished frames, the newest `ReceiverStats::video_report` is fed in, quality is applied in Rust); expose the report, loss, level and changes through `Session.video_stats()`.
+  - **2.2d2c**: the add-on applies the resolution step to the stream loop and shows the level and the last change in the N-panel.
+- **Change:** `native/vcam-net/src/adapt.rs` (new), exported from `lib.rs`. `VideoAdapter::new(quality, max_resolution_drop)`, `frame_sent(frame_id)`, `report(&VideoReport) -> Option<AdaptChange>`, `level()`, `stats()`.
+  - Loss per vcp.md §6.6: expected = finished frames with ids up to the report's `newest_frame_id` that no earlier interval counted, found from the last 64 finished ids. Loss is kept as a session total (`counted − frames_complete`), so a frame still arriving at a report is lost once and taken back, not counted twice. A frame finished after the device already reported it counts in the next interval. Reports with an old or repeated `report_seq` are ignored, so the pipeline can pass the newest report on every poll.
+  - Policy (NET-VID-005): bad = > 10 % of ≥ 5 frames lost, or M2P p95 > 120 ms (NFR-LAT-003 Stage A); clean = ≤ 2 % lost and M2P ≤ 96 ms or unmeasured. 2 bad reports in a row (1 s) lower quality by 10 down to 50, then resolution by one step up to the caller's limit; 10 clean in a row (5 s) raise resolution first, then quality back to the user's. Anything else breaks both runs. The 2 reports after a change are ignored while old-level frames are in flight. Each change keeps its report, from/to levels and reason (loss figures or M2P) for both UIs.
+  - The thresholds are starting values, not yet tuned on real Wi-Fi (S-4, owner).
+  - No dependency, wire-format, vector, Python, workflow or iOS change.
+- **Commands and observed results:**
+  - In `native/`: `cargo fmt --check`: `FMT_EXIT=0`; `cargo clippy --all-targets -- -D warnings`: ``Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.28s``; `cargo test`: `cargo test: 96 passed, 0 failed (15 suites)` (85 before + 11 in `adapt`); `cargo test -p vcam-net --lib adapt`: `test result: ok. 11 passed; 0 failed`.
+  - **Smoke** (throwaway example, deleted): 60 s at 30 fps, reports every 500 ms with the newest frame still arriving, 20 % loss from 10 to 25 s and M2P 140 ms from 40 to 44 s. Output: `t= 11.0s (80, 0) -> (70, 0) Loss { lost: 3, expected: 15 }`, then 60, 50, `(50, 0) -> (50, 1)` at 17 s; `Recovered` to `(50, 0)` at 30 s and `(60, 0)` at 36 s; `MotionToPhoton { m2p_p95_ms: 140 }` to `(50, 0)` at 41 s and `(50, 1)` at 43 s; recovered to `(60, 0)` by 55 s; `END level=(60, 0) expected=1800 lost=91 changes=10`: the 90 frames dropped plus the one still arriving at the last report, as §6.6 says.
+  - **Mutation proof** (sequential script, each pattern hit checked, restored, `cmp` identical: `RESTORED_IDENTICAL`): 16 caught, including `id >=` newest, no take-back of the arriving frame, 1 bad report enough, 9 clean enough, no settling, resolution before quality, quality before resolution on the way up, repeated `report_seq` accepted, M2P `>=` the limit (first survived; the test now sends consecutive at-limit reports), neutral reports not breaking a clean run, 10 % exactly counted as bad, no minimum frame count, raising past the user's quality, late-finished frames dropped, floor 40. One equivalent mutant removed from the code instead: `QUALITY_FLOOR.min(user quality)` gave the same result as `QUALITY_FLOOR`, because the level never exceeds the user's quality.
+  - Not run: pytest, headless Blender, `xcodebuild` (no Python, add-on, vector or iOS file changed; the adapter isn't wired into the pipeline yet).
+- **Not verified:** Windows/Linux (CI on the ready PR); behaviour on real Wi-Fi.
+- **Blocked:** nothing new; device checks (1.5.1c, O-1, NET-004) remain owner-only.
+- **Next task:** 2.2d2b, running `VideoAdapter` in the video pipeline and exposing it through `vcam_native`. No second task started.
+- **Owner actions:** none. PR #15 set ready with squash auto-merge.
