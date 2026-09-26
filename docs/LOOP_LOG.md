@@ -1545,3 +1545,16 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
   - Uncommitted Xcode changes appeared in the working tree during this iteration (`SightlineIOS/Info.plist`, `project.pbxproj`: `NSLocalNetworkUsageDescription` moved to `INFOPLIST_KEY_*` build settings, reformatting, **and `DEVELOPMENT_TEAM` added**). The loop didn't stage them. Remove `DEVELOPMENT_TEAM` before committing (AGENTS.md privacy rules).
   - Local release wheels may fail to import on macOS 27 with CLT `ld-27037` (see Toolchain finding). If it recurs, try a newer CLT/Xcode linker.
   - Existing device checks (1.5.1c, O-1, NET-004) are unchanged.
+
+## 2026-09-26 — Iteration 59 — PR #4 CI repair (NET-004) — done
+
+- **Orientation:** no LOOP_STOP; clean tree on `loop/2.1a`. Ready PR https://github.com/0xkr4t0s/Sightline/pull/4 failed iOS and therefore ci-ok in run 36157748175. The reconnect test measured 4.257 s from host return to session (limit 3 s), with a 4.948 s gap between attempts (limit 0.65 s). Fixing this PR's CI is this iteration's only task; 2.1b was not started.
+- **Cause and fix:** `VCPControlChannel.withDeadline` scheduled its timeout on the same serial queue as Network callbacks. A delayed callback also delayed the timeout and the next retry. The watchdog now runs on a separate global queue; cancelling completes the one pending bridge continuation directly, while its once-guard ignores any late Network callback. The deadline still cancels the connection, and a timeout wins if it races a successful callback. Injected callback queue enables a regression test that blocks Network callbacks for six seconds without slowing the 100 ms deadline.
+- **Files changed:** `SightlineIOS/SightlineIOS/VCP/VCPSessionClient.swift`, `SightlineIOS/SightlineIOSTests/VCPSessionClientTests.swift`, `docs/LOOP_LOG.md`. NET-004 remains Partial pending the existing real-device/Wi-Fi check; no status change in `IMPLEMENTATION_PROGRESS.md`.
+- **Commands run (Xcode 27, iPhone 17 simulator):**
+  - Focused stalled-callback test: `Executed 1 test, with 0 failures (0 unexpected) in 0.114 (0.115) seconds`; `** TEST SUCCEEDED **`. After the mutation was restored: `Executed 1 test, with 0 failures (0 unexpected) in 0.111 (0.113) seconds`; `** TEST SUCCEEDED **`.
+  - Full `xcodebuild test -project SightlineIOS/SightlineIOS.xcodeproj -scheme SightlineIOS -destination 'platform=iOS Simulator,name=iPhone 17'`: `Executed 60 tests, with 4 tests skipped and 0 failures (0 unexpected) in 29.496 (29.515) seconds`; `** TEST SUCCEEDED **`. `NET004_RECONNECT host_back_to_session_ms=308 attempts=4`.
+  - Mutation: scheduling the watchdog back on the blocked Network queue gave `Test Case '-[SightlineIOSTests.VCPSessionClientTests testDeadlineDoesNotWaitForStalledConnectionCallbacks]' failed (6.266 seconds).`, with two assertions (network refusal instead of timeout, and 6.005 s instead of <3 s). Restored the original global-queue line; the source hash returned to its pre-mutation value.
+- **Blocked:** none new. Existing physical-device NET-004 verification remains owner-dependent.
+- **Next task:** after CI merges PR #4, 2.1b (session timer, frame budget and adaptive skipping). No second task started.
+- **Owner actions:** none for this PR (auto-merge is already armed).
