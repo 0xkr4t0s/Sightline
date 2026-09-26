@@ -67,6 +67,10 @@ nonisolated struct VCPEndpoint: Sendable {
         case let .clock(m): m.encode(into: &out)
         case let .status(m):
             do { try m.encode(into: &out) } catch { throw .payload(error) }
+        case let .videoFragment(m):
+            do { try m.encode(into: &out) } catch { throw .payload(error) }
+        case let .videoReport(m):
+            do { try m.encode(into: &out) } catch { throw .payload(error) }
         }
         let length = out.count - Self.headerLength
         guard out.count + Self.tagLength <= Self.maxDatagram else { throw .tooLarge }
@@ -101,6 +105,8 @@ nonisolated struct VCPEndpoint: Sendable {
                 guard let clock = try VCPClock.decode(payload) else { return .failure(.unknownType) }
                 message = .clock(clock)
             case VCPMessageType.status: message = .status(try VCPStatus.decode(payload))
+            case VCPMessageType.videoFragment: message = .videoFragment(try VCPVideoFragment.decode(payload))
+            case VCPMessageType.videoReport: message = .videoReport(try VCPVideoReport.decode(payload))
             default: return .failure(.unknownType)
             }
         } catch {
@@ -131,8 +137,8 @@ nonisolated struct VCPEndpoint: Sendable {
     /// Who may send what (§5).
     private static func maySend(_ role: VCPRole, _ message: VCPMessage) -> Bool {
         switch (role, message) {
-        case (.device, .pose), (.device, .controlState), (.device, .clock(.reply)),
-             (.host, .status), (.host, .clock(.request)):
+        case (.device, .pose), (.device, .controlState), (.device, .clock(.reply)), (.device, .videoReport),
+             (.host, .status), (.host, .clock(.request)), (.host, .videoFragment):
             true
         default:
             false
