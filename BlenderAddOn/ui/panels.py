@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""N-panel (tasks 1.3.3, 1.3.6; FR-BL-004, FR-TRK-002): session on/off, pairing code, connected
-device, pose rate, loss, latency, tracking state and hold, camera selection, and
-origin/scale/lock settings.
+"""N-panel (tasks 1.3.3, 1.3.6, 2.2c2b; FR-BL-004, FR-TRK-002, NET-VID-001): session on/off,
+pairing code, connected device, pose rate, loss, latency, video stream counters, tracking state
+and hold, camera selection, and origin/scale/lock settings.
 
 Scale and locks come from the iPhone (`CONTROL_STATE` is the device's idempotent state,
 FR-CTL-009), so they are shown, not edited, here. Set/Clear origin act on the host-side zero.
@@ -14,7 +14,7 @@ import bpy
 
 from ..core import session
 from ..core.apply import camera_status, find_origin
-from ..core.status import code_label, hold_label, locks_label, scale_label, tracking_label
+from ..core.status import code_label, hold_label, locks_label, scale_label, tracking_label, video_labels
 
 
 class VCAM_PT_main_panel(bpy.types.Panel):
@@ -90,6 +90,8 @@ class VCAM_PT_main_panel(bpy.types.Panel):
                 col.label(text="Latency: waiting for clock sync")
             else:
                 col.label(text=f"Latency: {state.latency_ms:.1f} ms (clock jitter {state.clock_jitter_ms:.2f} ms)")
+            for line in video_labels(live.video_stats()):
+                col.label(text=line)
         samples = len(session.latency_log().pose_leg_ms)
         if samples:  # kept after the device leaves, until the next device session
             box.operator("vcam.latency_report_save", text=f"Save Latency Report ({samples} poses)", icon='EXPORT')

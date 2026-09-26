@@ -56,3 +56,19 @@ def pose_latency_ms(capture_time_ns: int, offset_ns: int, host_now_ns: int) -> f
 def code_label(code: str) -> str:
     """A 6-digit pairing code in two groups of three, as the iPhone shows it."""
     return f"{code[:3]} {code[3:]}" if len(code) == 6 else code
+
+
+def video_labels(stats: dict | None) -> list[str]:
+    """Viewfinder stream counters (`Session.video_stats()`, NET-VID-001) as N-panel lines."""
+    if stats is None:
+        return ["Video: not streaming"]
+    lines = [f"Video: {stats['sent']} sent, {stats['encoded_skipped']} skipped, q{stats['quality']}"]
+    last = stats["last_sent"]
+    if last is not None:
+        lines.append(f"Last: {last['width']}×{last['height']}, {last['jpeg_bytes'] / 1024:.0f} KB, "
+                     f"encode {last['encode_ns'] / 1e6:.1f} ms, send {last['send_ns'] / 1e6:.1f} ms")
+    failed = stats["send_failed"] + stats["encode_failed"]
+    if failed:
+        error = stats["last_error"]
+        lines.append(f"Video failures: {failed}" + (f" ({error})" if error else ""))
+    return lines

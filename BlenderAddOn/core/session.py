@@ -118,11 +118,16 @@ def current():
 
 
 def _close_stream() -> None:
+    """Ends the device's stream: joins the video threads (dropping their queued frames), frees the GPU."""
     global _stream
     stream, _stream = _stream, None
     if stream is not None:
         try:
-            stream.free()
+            try:
+                if _session is not None:
+                    _session.stop_video()
+            finally:
+                stream.free()
         except Exception as e:  # noqa: BLE001 - cleanup must not prevent session shutdown
             state.stream_error = f"Stream cleanup: {e}"
 
@@ -251,7 +256,12 @@ def _render_frame(session, context) -> None:
         if _stream is None:
             import vcam_native
 
-            _stream = StreamLoop(vcam_native.FrameSlot())
+            # Encoder + sender live exactly as long as this StreamLoop (NET-VID-001, task 2.2c2b),
+            # so no frame of an earlier device session or camera reaches the next one.
+            slot = vcam_native.FrameSlot()
+            stream = StreamLoop(slot)
+            session.start_video(slot)
+            _stream = stream
         _stream.tick(context, camera, _applier.applied_seq, session.host_clock_ns,
                      budget_ms, fps, resolution, shading)
     except Exception as e:  # noqa: BLE001 - a broken GPU must not interrupt pose tracking
