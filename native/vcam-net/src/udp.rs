@@ -20,7 +20,7 @@ use mio::{Events, Interest, Poll, Token};
 
 use vcam_protocol::{
     Clock, ClockEstimate, ClockEstimator, ControlState, DropReason, Endpoint, MAX_DATAGRAM,
-    Message, Pose, SeqFilter, Status, VideoFragment, VideoFrameInfo, fragment_frame,
+    Message, Pose, SeqFilter, Status, VideoFragment, VideoFrameInfo, VideoReport, fragment_frame,
 };
 
 use crate::smooth::{PoseFilter, Smoothing};
@@ -165,6 +165,8 @@ pub struct ReceiverStats {
     pub video_fragments_sent: u64,
     /// Frames given up part-way this session: a socket error, or not sent within 50 ms.
     pub video_frames_failed: u64,
+    /// The device's newest `VIDEO_REPORT` this session (vcp.md §6.6; NET-VID-005).
+    pub video_report: Option<VideoReport>,
 }
 
 struct ActiveSession {
@@ -187,6 +189,7 @@ struct State {
     control: Option<ControlSample>,
     pose_filter: SeqFilter,
     control_filter: SeqFilter,
+    report_filter: SeqFilter,
     /// Per-receiver setting; survives session changes (see `reset`).
     smoothing: Option<Smoothing>,
     /// Per-session filter state.
@@ -259,6 +262,11 @@ impl State {
             Message::Clock(Clock::Reply { t1, t2, t3 }) => {
                 if active.clock.reply(t1, t2, t3, host_ns).is_err() {
                     self.stats.clock_rejected += 1;
+                }
+            }
+            Message::VideoReport(report) => {
+                if self.report_filter.accept(report.report_seq) {
+                    self.stats.video_report = Some(report);
                 }
             }
             // The endpoint drops device requests and host-only types (§4.3.7).

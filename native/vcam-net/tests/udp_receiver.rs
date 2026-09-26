@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use vcam_net::{HostStatus, OneEuro, Smoothing, UdpReceiver, VideoFrameMeta};
 use vcam_protocol::{
     Clock, ControlState, Endpoint, Message, Pose, Pushed, Reassembler, Role, Status, VideoFragment,
-    VideoFrameInfo,
+    VideoFrameInfo, VideoReport,
 };
 
 const SID: u32 = 0x1234_ABCD;
@@ -139,6 +139,54 @@ fn control_state_newest_wins() {
     wait_until("marker pose", || rx.latest_pose().is_some());
     let c = rx.latest_control().unwrap();
     assert_eq!((c.state.state_seq, c.state.origin_epoch), (2, Some(5)));
+}
+
+fn report(report_seq: u32, newest_frame_id: u32) -> Message<'static> {
+    Message::VideoReport(VideoReport {
+        report_seq,
+        newest_frame_id,
+        frames_complete: newest_frame_id - 1,
+        m2p_p95_ms: 90,
+    })
+}
+
+#[test]
+fn video_reports_newest_wins_per_session() {
+    let rx = start();
+    let tx = sender();
+    let send_then_marker = |msgs: &[Message], marker: u32| {
+        for m in msgs {
+            tx.send_to(&datagram(m), rx.local_addr()).unwrap();
+        }
+        tx.send_to(&datagram(&pose(marker)), rx.local_addr())
+            .unwrap();
+        wait_until("marker pose", || {
+            rx.latest_pose().is_some_and(|p| p.pose.seq == marker)
+        });
+    };
+    send_then_marker(&[report(2, 40), report(1, 90), report(2, 99)], 1);
+    assert_eq!(
+        rx.stats()
+            .video_report
+            .map(|r| (r.report_seq, r.newest_frame_id)),
+        Some((2, 40)),
+        "an older or repeated report_seq must not replace the newest report"
+    );
+    send_then_marker(&[report(3, 60)], 2);
+    assert_eq!(rx.stats().video_report.map(|r| r.report_seq), Some(3));
+    // A new session starts without a report, and its report_seq starts again at 1.
+    rx.set_session(host()).unwrap();
+    assert_eq!(rx.stats().video_report, None);
+    send_then_marker(&[report(1, 5)], 1);
+    assert_eq!(
+        rx.stats().video_report,
+        Some(VideoReport {
+            report_seq: 1,
+            newest_frame_id: 5,
+            frames_complete: 4,
+            m2p_p95_ms: 90,
+        })
+    );
 }
 
 #[test]

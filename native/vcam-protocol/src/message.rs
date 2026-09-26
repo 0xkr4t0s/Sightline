@@ -1,7 +1,7 @@
 //! UDP message payloads (`docs/protocol/vcp.md` §6). Decoding is exact: the values are the
 //! binary32/integers on the wire. Validation follows §6 and rejects rather than clamps.
 
-use crate::video::VideoFragment;
+use crate::video::{VideoFragment, VideoReport};
 use crate::wire::{Reader, put_f32s};
 
 /// Wire type codes (vcp.md §5). Only the UDP types this version specifies.
@@ -11,6 +11,7 @@ pub mod msg_type {
     pub const CLOCK: u8 = 0x03;
     pub const STATUS: u8 = 0x04;
     pub const VIDEO_FRAGMENT: u8 = 0x05;
+    pub const VIDEO_REPORT: u8 = 0x07;
 }
 
 /// Why a payload was rejected after the frame checks passed (vcp.md §4.3 steps 8 and §6).
@@ -30,6 +31,8 @@ pub enum PayloadError {
     FragmentLayout,
     /// `VIDEO_FRAGMENT` codec or colour value this version doesn't know (§6.5).
     VideoFormat,
+    /// `VIDEO_REPORT.frames_complete` above `newest_frame_id` (§6.6).
+    ReportCounts,
 }
 
 /// `POSE` (0x01), 42 bytes (vcp.md §6.1).
@@ -265,6 +268,7 @@ pub enum Message<'a> {
     Clock(Clock),
     Status(Status),
     VideoFragment(VideoFragment<'a>),
+    VideoReport(VideoReport),
 }
 
 impl Message<'_> {
@@ -276,6 +280,7 @@ impl Message<'_> {
             Self::Clock(_) => msg_type::CLOCK,
             Self::Status(_) => msg_type::STATUS,
             Self::VideoFragment(_) => msg_type::VIDEO_FRAGMENT,
+            Self::VideoReport(_) => msg_type::VIDEO_REPORT,
         }
     }
 }

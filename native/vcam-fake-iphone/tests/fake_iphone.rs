@@ -298,10 +298,12 @@ fn viewfinder_frames_reach_the_device_whole_over_the_paired_session() {
         ],
     );
     let mut video = server.video_sender();
-    let (mut sent, mut last) = (Vec::new(), Vec::new());
+    let (mut sent, mut last, mut report) = (Vec::new(), Vec::new(), None);
     let out = drive(child, || {
+        let stats = server.stats();
+        report = stats.video_report.or(report);
         // Frames of 1 to 5 fragments, sent once the device's UDP source is known.
-        if sent.len() < SENT as usize && server.stats().source.is_some() {
+        if sent.len() < SENT as usize && stats.source.is_some() {
             let n = sent.len() as u32 + 1;
             last = (0..n as usize * 1000 + 17)
                 .map(|i| (i % 253) as u8 ^ n as u8)
@@ -335,4 +337,20 @@ fn viewfinder_frames_reach_the_device_whole_over_the_paired_session() {
     );
     assert_eq!(field(&stdout, "video_last_len"), last.len() as u64);
     assert_eq!(std::fs::read(&video_out).unwrap(), last);
+    // The device's VIDEO_REPORTs (vcp.md §6.6) reached the host: the newest one seen covers
+    // every frame and carries no motion-to-photon figure.
+    let report = report.expect("no VIDEO_REPORT reached the host");
+    assert_eq!(
+        (
+            report.newest_frame_id,
+            report.frames_complete,
+            report.m2p_p95_ms
+        ),
+        (SENT, SENT, 0),
+        "{stdout}"
+    );
+    assert!(
+        (1..=field(&stdout, "video_reports")).contains(&u64::from(report.report_seq)),
+        "{stdout}"
+    );
 }

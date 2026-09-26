@@ -5,7 +5,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 use crate::message::{Clock, ControlState, Message, PayloadError, Pose, Status, msg_type};
-use crate::video::VideoFragment;
+use crate::video::{VideoFragment, VideoReport};
 use crate::wire::Reader;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -116,6 +116,7 @@ impl Endpoint {
             }
             Message::Status(m) => m.encode(out),
             Message::VideoFragment(m) => m.encode(out),
+            Message::VideoReport(m) => m.encode(out),
         };
         let fail = |out: &mut Vec<u8>, e| {
             out.truncate(start);
@@ -201,6 +202,7 @@ fn decode(msg_type: u8, payload: &[u8]) -> Result<Message<'_>, DropReason> {
         msg_type::VIDEO_FRAGMENT => {
             Message::VideoFragment(VideoFragment::decode(payload).map_err(p)?)
         }
+        msg_type::VIDEO_REPORT => Message::VideoReport(VideoReport::decode(payload).map_err(p)?),
         _ => return Err(DropReason::UnknownType),
     })
 }
@@ -211,7 +213,10 @@ fn may_send(role: Role, msg: &Message<'_>) -> bool {
         (role, msg),
         (
             Role::Device,
-            Message::Pose(_) | Message::ControlState(_) | Message::Clock(Clock::Reply { .. }),
+            Message::Pose(_)
+                | Message::ControlState(_)
+                | Message::Clock(Clock::Reply { .. })
+                | Message::VideoReport(_),
         ) | (
             Role::Host,
             Message::Status(_) | Message::Clock(Clock::Request { .. }) | Message::VideoFragment(_)

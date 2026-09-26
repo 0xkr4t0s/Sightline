@@ -3,7 +3,8 @@
 //! `testdata/motion/*.bin` over authenticated UDP. It sends a complete `CONTROL_STATE` at 2 Hz,
 //! answers `CLOCK` requests from its own monotonic clock, and reports the host's `STATUS`.
 //! Host `VIDEO_FRAGMENT`s are reassembled newest-frame-wins like the viewfinder (vcp.md §6.5,
-//! task 2.2c1); `--video-out` keeps the newest complete frame in a file.
+//! task 2.2c1); `--video-out` keeps the newest complete frame in a file. Once frames arrive, it
+//! sends `VIDEO_REPORT` every 500 ms (§6.6, task 2.2d1) without a motion-to-photon figure.
 //!
 //! ```text
 //! vcam-fake-iphone --host 127.0.0.1:47000 --state DIR/fake-iphone.key [--code 123456]
@@ -32,6 +33,8 @@ type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
 
 /// The device resends `CONTROL_STATE` at 2 Hz (vcp.md §6.2).
 const CONTROL_INTERVAL: Duration = Duration::from_millis(500);
+/// The device sends `VIDEO_REPORT` every 500 ms once frames arrive (vcp.md §6.6).
+const REPORT_INTERVAL: Duration = Duration::from_millis(500);
 const TCP_TIMEOUT: Duration = Duration::from_secs(5);
 /// Offset of the fake device clock, so host and device clocks visibly differ (NET-003).
 const DEVICE_CLOCK_OFFSET_NS: u64 = 1_000_000_000_000;
@@ -306,6 +309,9 @@ struct Stream {
     /// Fields and length of the newest complete video frame.
     last_video: Option<(VideoFrameInfo, usize)>,
     video_out: Option<PathBuf>,
+    /// `report_seq` of the last `VIDEO_REPORT` sent (0 = none yet).
+    report_seq: u32,
+    last_report: Option<Instant>,
 }
 
 impl Stream {
@@ -329,6 +335,22 @@ impl Stream {
             self.send(&Message::ControlState(self.control))?;
             self.last_control = Some(Instant::now());
         }
+        Ok(())
+    }
+
+    /// Sends this session's `VIDEO_REPORT` every 500 ms once a valid fragment has arrived.
+    fn report_due(&mut self) -> Result<()> {
+        let report = self.video.report(self.report_seq + 1, 0);
+        if report.newest_frame_id == 0
+            || self
+                .last_report
+                .is_some_and(|t| t.elapsed() < REPORT_INTERVAL)
+        {
+            return Ok(());
+        }
+        self.send(&Message::VideoReport(report))?;
+        self.report_seq = report.report_seq;
+        self.last_report = Some(Instant::now());
         Ok(())
     }
 
@@ -440,6 +462,8 @@ fn run(args: &Args) -> Result<String> {
         video: Reassembler::new(),
         last_video: None,
         video_out: args.video_out.clone(),
+        report_seq: 0,
+        last_report: None,
     };
     let period = Duration::from_secs_f64(1.0 / rate);
     let mut next = Instant::now();
@@ -452,6 +476,7 @@ fn run(args: &Args) -> Result<String> {
             s.last_control = None;
         }
         s.control_due()?;
+        s.report_due()?;
         let pose = Pose {
             seq: u32::try_from(i + 1)?,
             capture_time_ns: s.device_ns(),
@@ -472,6 +497,7 @@ fn run(args: &Args) -> Result<String> {
     while Instant::now() < end {
         s.service(end.min(Instant::now() + CONTROL_INTERVAL))?;
         s.control_due()?;
+        s.report_due()?;
     }
     drop(tcp); // closing TCP ends the session on the host
     let status = s.status.unwrap_or(Status {
@@ -485,7 +511,7 @@ fn run(args: &Args) -> Result<String> {
     let video = s.video.stats();
     let (last, last_len) = s.last_video.unzip();
     Ok(format!(
-        "FAKE_IPHONE_DONE session_id={} poses={} clock_replies={} status_seq={} applied_pose_seq={} control_ack={} video_frames={} video_lost={} video_last_id={} video_last_len={} video_last_pose_seq={} camera={}",
+        "FAKE_IPHONE_DONE session_id={} poses={} clock_replies={} status_seq={} applied_pose_seq={} control_ack={} video_frames={} video_lost={} video_last_id={} video_last_len={} video_last_pose_seq={} video_reports={} camera={}",
         keys.session_id,
         s.poses,
         s.clock_replies,
@@ -497,6 +523,7 @@ fn run(args: &Args) -> Result<String> {
         last.map_or(0, |f| f.frame_id),
         last_len.unwrap_or(0),
         last.map_or(0, |f| f.pose_seq),
+        s.report_seq,
         status.camera_name
     ))
 }
