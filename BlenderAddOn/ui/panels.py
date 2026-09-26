@@ -66,10 +66,10 @@ class VCAM_PT_main_panel(bpy.types.Panel):
 
         box = layout.box()
         if state.session_id is None:
-            box.label(text="Waiting for the iPhone", icon='INFO')
+            box.label(text="Waiting for a device", icon='INFO')
         else:
             stats = live.stats()
-            box.label(text=state.device_name or "iPhone", icon='CAMERA_DATA')
+            box.label(text=state.device_name or "Device", icon='CAMERA_DATA')
             col = box.column(align=True)
             col.label(text=f"Tracking: {tracking_label(state.tracking_state)}")
             applier = session.applier()

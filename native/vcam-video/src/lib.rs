@@ -1,5 +1,10 @@
-//! JPEG and H.264 encoders behind one trait (ARC-002). Platform encoder
-//! backends are the only modules here allowed to opt in to `unsafe` (NFR-QA-004).
+//! JPEG and H.264 encoders behind one trait (ARC-002), and the latest-frame slot that feeds
+//! them ([`frame`]). Platform encoder backends are the only modules here allowed to opt in to
+//! `unsafe` (NFR-QA-004).
+
+pub mod frame;
+
+pub use frame::{Frame, FrameError, FrameMeta, FrameSlot};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

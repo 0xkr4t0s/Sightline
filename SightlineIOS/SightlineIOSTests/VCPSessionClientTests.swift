@@ -280,6 +280,34 @@ final class VCPSessionClientTests: XCTestCase {
         XCTAssertNil(host.result())
     }
 
+    /// A blocked Network callback queue must not delay a handshake timeout or the next retry.
+    func testDeadlineDoesNotWaitForStalledConnectionCallbacks() async throws {
+        let callbackQueue = DispatchQueue(label: "Sightline.Tests.stalledConnection")
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        callbackQueue.async {
+            entered.signal()
+            _ = release.wait(timeout: .now() + 6)
+        }
+        defer { release.signal() }
+        guard await Task.detached(operation: { Self.block(on: entered, seconds: 2) }).value == .success else {
+            XCTFail("callback queue did not start")
+            return
+        }
+
+        let channel = try VCPControlChannel(host: "127.0.0.1", port: freePort(), callbackQueue: callbackQueue)
+        let started = ContinuousClock.now
+        do throws(VCPLinkError) {
+            try await channel.withDeadline(0.1) { () async throws(VCPLinkError) -> Void in
+                try await channel.open()
+            }
+            XCTFail("connection opened while its callbacks were blocked")
+        } catch {
+            XCTAssertEqual(error, .timeout)
+        }
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(3))
+    }
+
     /// Nothing listening: the start fails at once instead of waiting for the network to change.
     func testRefusedConnectionFailsFast() async throws {
         let host = try ScriptedHost { _ in }

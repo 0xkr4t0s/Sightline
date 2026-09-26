@@ -1513,3 +1513,55 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none new.
 - **Next task:** Phase 2, 2.1 offscreen render (FR-REN-001..005, NFR-PERF-002), split into sub-steps. No second task started.
 - **Owner actions:** none for this PR (auto-merge). Existing device checks (1.5.1c, O-1, NET-004) unchanged.
+
+## 2026-09-26 — Iteration 58 — 2.1a (FR-REN-001, FR-REN-003) — done
+
+- **Orientation:** no LOOP_STOP; clean tree on `loop/1.3.6`. PR #3 was ready. Its first `ci-ok` failure was the draft run (every job `skipped`); the ready run 36152220111 passed all 15 jobs, and PR #3 auto-merged (`13a2a5e`). Switched to `main`, pulled, and deleted `loop/1.3.6`. Task: "Immediate next steps" 4 → Phase 2 in table order → 2.1. Branch `loop/2.1a`, PR https://github.com/0xkr4t0s/Sightline/pull/4.
+- **Split of 2.1 (offscreen render)** into sub-steps, one per iteration:
+  - **2.1a** (this one): the pipelined offscreen renderer for the VCam camera, and the one-copy hand-off to Rust (FR-REN-001, FR-REN-003).
+  - **2.1b**: drive it from the session timer with the host clock and the applied pose seq; main-thread budget (default 12 ms) with frame skipping that adapts to the measured draw and `read()` times (FR-REN-004, NFR-PERF-002). Also decide how CI covers GPU tests (runners have no GPU).
+  - **2.1c**: stream settings — resolution, fps cap and shading (Solid default, Material Preview, EEVEE with the lag warning) (FR-REN-002).
+  - **2.1d**: colour management matching the viewport, tagged sRGB/Rec.709 (FR-REN-005).
+- **Change:**
+  - `native/vcam-video/src/frame.rs` (new): `FrameMeta` (size checked, pose seq, draw time) and `FrameSlot`, a latest-frame slot. `submit(meta, fill)` copies into a reused buffer outside the lock; the newest frame replaces one nobody took (`replaced()` counts them); a failed `fill` publishes nothing and keeps the previous frame; `take`/`recycle` are for the encoder (2.2). Pixels are RGBA8, rows bottom-up, as `GPUTexture.read()` returns them. 6 unit tests, including a producer/consumer thread test that checks for torn frames.
+  - `native/vcam-py/src/lib.rs:59-123`: `vcam_native.FrameSlot` with `submit(buffer, pose_seq, render_time_ns) -> frame_id`. It reads the shape `(height, width, 4)` from the buffer (`ValueError` otherwise) and copies once with `PyBuffer::copy_to_slice` while holding the GIL (S-1 recommendation, SRS §13.1). Also `replaced()` and the `_take()` test hook. This replaces the S-1 `_frame_probe` (its docstring said task 2.1 would). `tests/bench_render.py` now times `FrameSlot.submit` as its `handoff` column.
+  - `BlenderAddOn/core/render.py` (new): `StreamRenderer.tick(scene, view_layer, depsgraph, camera, pose_seq, now_ns)` first submits the frame drawn on the previous tick with the pose seq and time captured when it was drawn, then draws the camera (evaluated `matrix_world`, `calc_matrix_camera` at the stream size) into one `GPUOffScreen`. `stream_view()` prefers a `VIEW_3D` on a screen no window shows. Solid with overlays off is set on that space only for the draw and restored afterwards, so no user viewport changes. Not wired into the add-on yet (2.1b).
+- **Commands run:**
+  - `cargo fmt --check` OK; `cargo clippy --all-targets -- -D warnings` clean; `cargo test`: 66 passed, 0 failed (60 before + 6 new).
+  - `.venv.nosync/bin/pytest -q -p no:cacheprovider BlenderAddOn/tests`: `29 passed in 0.06s`. `tools/gen_testdata.py --check`: `testdata/ up to date (22 files)`.
+  - Headless Blender 5.2.2 (extension built and installed into a temp user dir, fake iPhone debug build), all exit 0:
+    - `VCAM_RENDER_OK size=320x180 frames=5 colours=219 views_checked=10` (new `tests/blender/render_offscreen.py`: every submitted frame is pixel-identical (max diff 0) to an independent synchronous Solid draw at the pose it carries, and differs from the other poses; the metadata is the draw tick's; with no camera, the pending frame is still submitted and nothing new is drawn; newest frame wins; all 10 3D views are unchanged although the borrowed hidden one was set to Wireframe with overlays on; wrong shapes raise `ValueError`).
+    - `VCAM_NATIVE_OK 0.1.0`, `VCAM_SESSION_OK`, `VCAM_ADDON_SESSION_OK`, `VCAM_ADDON_APPLY_OK keyposes=5 … held_ticks=298`, `VCAM_ADDON_PANEL_OK`, `VCAM_ADDON_ROBUST_OK`, `VCAM_POSE_LEG_OK … pose_leg_p95=12.90`.
+    - `tests/bench_render.py -- --frames 5 --warmup 1`: exit 0, `vcam_native` loaded; `handoff` median 0.048 ms (Solid 540p) to 0.267 ms (Solid 1080p), in line with S-1's memcpy figures. The p95s (7–30 ms from 5 frames, debug build, run beside cargo and pytest) are noise and not a result.
+  - **Mutation check** (sequential; mutations were made in the installed add-on copy or with `sed` on `frame.rs`, then restored and `cmp`-verified identical):
+    - Caught: M1 submit with the current tick's pose seq/time → `pose_seq: 12` AssertionError; M2 settings not restored → views-unchanged assertion; M3 draw with the borrowed view's own settings → `differs from the Solid reference (max 203)`; M5 `replaced` not counted → 1 Rust test failed; M6 failed fill publishes the buffer → 1 Rust test failed.
+    - Survived: M4 (look at visible screens first). Factory startup's first screen with a 3D view (`Animation`) is hidden anyway, and set/restore keeps user settings intact either way. Preferring a hidden view only saves redraws of the visible viewport, so this isn't tested.
+    - 5 of 6 caught.
+- **Toolchain finding (local, not a code bug):** the release wheel linked by CommandLineTools `ld-27037` (Aug 2026) failed to import in Blender's Python on macOS 27.0: `dlopen … (mis-aligned LINKEDIT string pool, fileOffset=0x0015FC8C)`. The `LC_SYMTAB` `stroff` was 4 mod 8. The linker doesn't pad the string pool to 8 bytes after the 4-byte indirect-symbol table, and macOS 27's `dyld` requires that on import (`ctypes.CDLL` of the same file loads). It depends on layout: `origin/main`'s release build is at 0 mod 8 and imports. Relinking with `-Wl,-x`, `-C strip=symbols` or `-dead_strip_dylibs` stayed at 4 mod 8; `rust-lld` can't read the macOS 27 SDK `.tbd` files. The debug-profile wheel is at 0 mod 8 and was used for every Blender run above (same code). CI builds its wheels with its own toolchain, and the macOS `blender-smoke` job imports them.
+- **Not verified:** CI GPU rendering (the render test isn't in CI; decided in 2.1b); Windows/Linux rendering (owner machines, S-1 row).
+- **Blocked:** none new.
+- **Next task:** 2.1b (timer + main-thread budget and frame skipping). No second task started.
+- **Owner actions:**
+  - Uncommitted Xcode changes appeared in the working tree during this iteration (`SightlineIOS/Info.plist`, `project.pbxproj`: `NSLocalNetworkUsageDescription` moved to `INFOPLIST_KEY_*` build settings, reformatting, **and `DEVELOPMENT_TEAM` added**). The loop didn't stage them. Remove `DEVELOPMENT_TEAM` before committing (AGENTS.md privacy rules).
+  - Local release wheels may fail to import on macOS 27 with CLT `ld-27037` (see Toolchain finding). If it recurs, try a newer CLT/Xcode linker.
+  - Existing device checks (1.5.1c, O-1, NET-004) are unchanged.
+
+## 2026-09-26 — Iteration 59 — PR #4 CI repair (NET-004) — done
+
+- **Orientation:** no LOOP_STOP; clean tree on `loop/2.1a`. Ready PR https://github.com/0xkr4t0s/Sightline/pull/4 failed iOS and therefore ci-ok in run 36157748175. The reconnect test measured 4.257 s from host return to session (limit 3 s), with a 4.948 s gap between attempts (limit 0.65 s). Fixing this PR's CI is this iteration's only task; 2.1b was not started.
+- **Cause and fix:** `VCPControlChannel.withDeadline` scheduled its timeout on the same serial queue as Network callbacks. A delayed callback also delayed the timeout and the next retry. The watchdog now runs on a separate global queue; cancelling completes the one pending bridge continuation directly, while its once-guard ignores any late Network callback. The deadline still cancels the connection, and a timeout wins if it races a successful callback. Injected callback queue enables a regression test that blocks Network callbacks for six seconds without slowing the 100 ms deadline.
+- **Files changed:** `SightlineIOS/SightlineIOS/VCP/VCPSessionClient.swift`, `SightlineIOS/SightlineIOSTests/VCPSessionClientTests.swift`, `docs/LOOP_LOG.md`. NET-004 remains Partial pending the existing real-device/Wi-Fi check; no status change in `IMPLEMENTATION_PROGRESS.md`.
+- **Commands run (Xcode 27, iPhone 17 simulator):**
+  - Focused stalled-callback test: `Executed 1 test, with 0 failures (0 unexpected) in 0.114 (0.115) seconds`; `** TEST SUCCEEDED **`. After the mutation was restored: `Executed 1 test, with 0 failures (0 unexpected) in 0.111 (0.113) seconds`; `** TEST SUCCEEDED **`.
+  - Full `xcodebuild test -project SightlineIOS/SightlineIOS.xcodeproj -scheme SightlineIOS -destination 'platform=iOS Simulator,name=iPhone 17'`: `Executed 60 tests, with 4 tests skipped and 0 failures (0 unexpected) in 29.496 (29.515) seconds`; `** TEST SUCCEEDED **`. `NET004_RECONNECT host_back_to_session_ms=308 attempts=4`.
+  - Mutation: scheduling the watchdog back on the blocked Network queue gave `Test Case '-[SightlineIOSTests.VCPSessionClientTests testDeadlineDoesNotWaitForStalledConnectionCallbacks]' failed (6.266 seconds).`, with two assertions (network refusal instead of timeout, and 6.005 s instead of <3 s). Restored the original global-queue line; the source hash returned to its pre-mutation value.
+- **Blocked:** none new. Existing physical-device NET-004 verification remains owner-dependent.
+- **Next task:** after CI merges PR #4, 2.1b (session timer, frame budget and adaptive skipping). No second task started.
+- **Owner actions:** none for this PR (auto-merge is already armed).
+
+## 2026-09-26 — Iteration 60 — waiting on CI for #4 (no task started)
+
+- **Orientation:** no LOOP_STOP; clean tree on `loop/2.1a`, tracking `origin/loop/2.1a`. PR #4 is ready and auto-merge is armed; the other open PR by the owner is not a `loop/*` PR and was ignored.
+- **CI:** `git fetch origin` passed. `gh pr checks 4 --watch` reached the 10-minute cap on run `36205073068`. `gh pr view 4 --json state,mergeStateStatus`: `{"mergeStateStatus":"BLOCKED","state":"OPEN"}`. `gh pr checks 4`: 13 jobs passed (rust-fmt, rust ×3, fuzz, wheels ×3, python, extension, blender-smoke ×3); `ios pending`. The `ci-ok` gate cannot finish yet. **waiting on CI for #4** (§1b); no new task started.
+- **Files changed:** `docs/LOOP_LOG.md` only. No code changed; no local test was run. No new blocker or requirement status change.
+- **Next task:** check PR #4 under §1b; only after it merges, start 2.1b (timer, budget and adaptive skipping). Existing owner-only device checks remain blocked.
