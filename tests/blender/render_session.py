@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Headless Blender: live stream settings change without carrying pending frames across modes.
+"""Headless Blender: live stream settings change without carrying pending frames across modes, and
+the video stream (task 2.2c2b) runs exactly while the add-on's stream loop does.
 
 Requires an installed extension, a GPU (gpu.init()), and FAKE_IPHONE built in native/.
 """
@@ -20,6 +21,32 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 gpu.init()
 addon_utils.enable(MODULE, default_set=True, handle_error=None)
 session = importlib.import_module(MODULE + ".core.session")
+
+
+class Recorder:
+    """Stands in for the stream's FrameSlot: records each submit and passes the frame on to the
+    encoder, so the test sees every frame without taking it from the video stream."""
+
+    def __init__(self, slot):
+        self.slot, self.frames = slot, []
+
+    def submit(self, pixels, pose_seq, render_time_ns):
+        frame_id = self.slot.submit(pixels, pose_seq, render_time_ns)
+        self.frames.append({"frame_id": frame_id, "pose_seq": pose_seq, "render_time_ns": render_time_ns,
+                            "shape": tuple(pixels.dimensions)})
+        return frame_id
+
+
+def take(stream):
+    """The newest frame submitted since the last call, or None."""
+    slot = stream.renderer.slot
+    if not isinstance(slot, Recorder):
+        slot = stream.renderer.slot = Recorder(slot)
+    frame = slot.frames[-1] if slot.frames else None
+    slot.frames.clear()
+    return frame
+
+
 scene = bpy.context.scene
 camera = scene.camera
 assert (scene.vcam_props.stream_resolution, scene.vcam_props.stream_fps,
@@ -45,16 +72,26 @@ try:
         assert session.state.stream_error is None, session.state.stream_error
         stream = session._stream
         if stream is not None:
-            frame = stream.renderer.slot._take()
+            assert live.video_stats() is not None, "stream loop running without its video stream"
+            frame = take(stream)
             if frame is not None:
                 assert pending == (frame["pose_seq"], frame["render_time_ns"]), (pending, frame["pose_seq"])
                 assert frame["pose_seq"] > 0
                 assert 0 <= live.host_clock_ns() - frame["render_time_ns"] < 10_000_000_000
-                assert (frame["width"], frame["height"]) == (960, 540)
-                assert len(frame["pixels"]) == 960 * 540 * 4
+                assert frame["shape"] == (540, 960, 4), frame["shape"]
                 frames.append(frame["frame_id"])
+        else:
+            assert live.video_stats() is None, "video stream running without the stream loop"
         time.sleep(0.003)
     assert frames == [1, 2, 3], frames
+    # The rendered frames reach the device over the session UDP (NET-VID-001/004).
+    deadline = time.monotonic() + 10
+    while (live.video_stats()["last_sent"] or {}).get("source_frame_id", 0) < 1:
+        assert time.monotonic() < deadline, live.video_stats()
+        time.sleep(0.01)
+    first_sent = live.video_stats()["last_sent"]
+    assert first_sent["pose_seq"] > 0 and (first_sent["width"], first_sent["height"]) == (960, 540), first_sent
+    assert first_sent["session_id"] == session.state.session_id, (first_sent, session.state.session_id)
     assert session._stream.pacer.budget_ms == 12
     assert session._stream.renderer.read_ns > 0 and session._stream.renderer.draw_ns > 0
 
@@ -64,7 +101,7 @@ try:
 
     def switch_mode(resolution, fps, shading, expected_size):
         stream = session._stream
-        stream.renderer.slot._take()  # discard an already published old-mode frame
+        take(stream)  # discard an already published old-mode frame
         assert stream.renderer._pending is not None, "need a prior frame to discard"
         scene.vcam_props.stream_resolution = resolution
         scene.vcam_props.stream_fps = fps
@@ -78,15 +115,14 @@ try:
         assert stream.renderer._offscreen.height == expected_size[1]
         assert stream.renderer.shading == shading
         assert stream.pacer.fps == int(fps)
-        assert stream.renderer.slot._take() is None, "submitted a pending frame from the previous mode"
+        assert take(stream) is None, "submitted a pending frame from the previous mode"
         deadline = time.monotonic() + 10
         while True:
             assert time.monotonic() < deadline, "new mode never produced a frame"
             session._poll()
-            frame = stream.renderer.slot._take()
+            frame = take(stream)
             if frame is not None:
-                assert (frame['width'], frame['height']) == expected_size
-                assert len(frame['pixels']) == expected_size[0] * expected_size[1] * 4
+                assert frame['shape'] == (expected_size[1], expected_size[0], 4), frame['shape']
                 return frame['frame_id']
             time.sleep(0.003)
 
@@ -94,10 +130,19 @@ try:
     eevee_id = switch_mode('360p', '60', 'RENDERED', (640, 360))
     solid_id = switch_mode('1080p', '30', 'SOLID', (1920, 1080))
     assert material_id < eevee_id < solid_id
+    # A mode switch keeps the video stream; its frames go out at the new size.
+    deadline = time.monotonic() + 10
+    while (live.video_stats()["last_sent"] or {}).get("width") != 1920:
+        assert time.monotonic() < deadline, live.video_stats()
+        session._poll()
+        time.sleep(0.003)
+    video = live.video_stats()
+    assert video["sent"] >= 4 and video["send_failed"] == 0, video
 
     scene.camera = None
     session._poll()
     assert session._stream is None, "deleted camera kept its pending GPU frame"
+    assert live.video_stats() is None, "video stream outlived its stream loop"
     scene.camera = camera
     deadline = time.monotonic() + 10
     while session._stream is None:
@@ -106,7 +151,10 @@ try:
         time.sleep(0.003)
     assert session._stream.renderer._pending[0] == session.applier().applied_seq
     assert session.state.stream_error is None
+    restarted = live.video_stats()
+    assert restarted is not None and restarted["sent"] == 0 and restarted["last_sent"] is None, restarted
     session.stop()
+    assert live.video_stats() is None
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "stream-settings.blend")
         bpy.ops.wm.save_as_mainfile(filepath=path)
@@ -125,4 +173,6 @@ finally:
     addon_utils.disable(MODULE, default_set=True)
 
 print(f"VCAM_RENDER_SESSION_OK frames={frames} modes=Material/EEVEE/Solid "
-      f"sizes=720p/360p/1080p saved=true budget_ms=2 stopped=true")
+      f"sizes=720p/360p/1080p saved=true budget_ms=2 stopped=true "
+      f"video_sent={video['sent']} video_skipped={video['encoded_skipped']} "
+      f"video_1080p_jpeg={video['last_sent']['jpeg_bytes']} video_restarted_with_camera=true")
