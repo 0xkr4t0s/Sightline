@@ -25,6 +25,7 @@ from dataclasses import dataclass
 
 from .apply import Applier, clear_zero, find_origin, target_camera
 from .latency import LatencyLog
+from .render import DEFAULT_BUDGET_MS, StreamLoop
 from .status import pose_latency_ms
 
 HOST_ID_FILE = "host_id"
@@ -47,9 +48,9 @@ class SessionState:
     session_id: int | None = None
     last_error: str | None = None
     # From the last applied pose (vcp.md §6.1) and the clock estimate (NET-003).
-    tracking_state: int | None = None
     latency_ms: float | None = None
     clock_jitter_ms: float | None = None
+    stream_error: str | None = None
 
 
 _package: str | None = None
@@ -60,6 +61,9 @@ _latency = LatencyLog()
 # The CLOCK estimate behind the newest pose-leg sample, for the report.
 _latency_clock: dict | None = None
 _last_redraw = float("-inf")
+_stream: StreamLoop | None = None
+_stream_enabled = False
+_stream_failed = False
 
 
 def load_or_create_host_id(directory: str) -> bytes:
@@ -113,9 +117,19 @@ def current():
     return _session if running() else None
 
 
-def start(port: int = DEFAULT_PORT, bind: str = "0.0.0.0") -> None:
-    """Starts listening and advertising. Raises OSError/ValueError on failure, nothing started."""
-    global _session, _applier, _latency, _latency_clock
+def _close_stream() -> None:
+    global _stream
+    stream, _stream = _stream, None
+    if stream is not None:
+        try:
+            stream.free()
+        except Exception as e:  # noqa: BLE001 - cleanup must not prevent session shutdown
+            state.stream_error = f"Stream cleanup: {e}"
+
+
+def start(port: int = DEFAULT_PORT, bind: str = "0.0.0.0", *, stream: bool | None = None) -> None:
+    """Start the host. Background Blender needs stream=True after gpu.init()."""
+    global _session, _applier, _latency, _latency_clock, _stream_enabled, _stream_failed
     import bpy
     import vcam_native
 
@@ -126,6 +140,8 @@ def start(port: int = DEFAULT_PORT, bind: str = "0.0.0.0") -> None:
     vars(state).update(vars(SessionState()))  # reset in place: importers keep the object
     _applier = Applier()
     _latency, _latency_clock = LatencyLog(), None
+    _stream_enabled = not bpy.app.background if stream is None else stream
+    _stream_failed = False
     try:
         session.advertise(socket.gethostname(), bpy.path.basename(bpy.data.filepath))
     except (OSError, ValueError) as e:
@@ -140,11 +156,13 @@ def start(port: int = DEFAULT_PORT, bind: str = "0.0.0.0") -> None:
 
 def stop() -> None:
     """Stops the session and its poll. Never raises; a DNS-SD withdrawal error is recorded."""
-    global _session
+    global _session, _stream_enabled
     import bpy
 
     if bpy.app.timers.is_registered(_poll):
         bpy.app.timers.unregister(_poll)
+    _close_stream()
+    _stream_enabled = False
     session, _session = _session, None
     if session is None:
         return
@@ -213,9 +231,34 @@ def _tag_redraw(now: float) -> None:
                 area.tag_redraw()
 
 
+def _render_frame(session, context) -> None:
+    """After applying the live pose, draw only when a frame is due; never block for a skipped one."""
+    global _stream, _stream_failed
+    if not _stream_enabled or _stream_failed or state.session_id is None:
+        _close_stream()
+        return
+    scene = context.scene
+    camera = target_camera(scene)
+    if camera is None or _applier.applied_seq == 0:
+        _close_stream()
+        return
+    props = getattr(scene, "vcam_props", None)
+    budget_ms = getattr(props, "render_budget_ms", DEFAULT_BUDGET_MS)
+    try:
+        if _stream is None:
+            import vcam_native
+
+            _stream = StreamLoop(vcam_native.FrameSlot())
+        _stream.tick(context, camera, _applier.applied_seq, session.host_clock_ns, budget_ms)
+    except Exception as e:  # noqa: BLE001 - a broken GPU must not interrupt pose tracking
+        state.stream_error = f"Stream: {e}"
+        _stream_failed = True
+        _close_stream()
+
+
 def _poll() -> float | None:
     """Timer callback on the main thread: drains events, applies the pose. Never raises."""
-    global _latency_clock
+    global _latency_clock, _stream_failed
     import bpy
 
     session = _session
@@ -228,11 +271,15 @@ def _poll() -> float | None:
                 break
             kind = event["type"]
             if kind == "session_started":
+                _close_stream()  # do not carry a frame or GPU resource across device sessions
+                _stream_failed = False
+                state.stream_error = None
                 state.device_id = event["device_id"]
                 state.device_name = event["device_name"]
                 state.session_id = event["session_id"]
             elif kind == "session_ended" and event["session_id"] == state.session_id:
                 state.session_id = None
+                _close_stream()
             elif kind == "pairing_storage_failed":
                 state.last_error = f"pairing not saved: {event['error']}"
         error = session.discovery_error()
@@ -255,6 +302,7 @@ def _poll() -> float | None:
                 _latency_clock = dict(clock)
             if state.session_id is not None:  # a re-apply after the device left isn't a sample
                 _latency.record(state.session_id, applied["seq"], apply_ms, pose_leg)
+        _render_frame(session, bpy.context)
         _tag_redraw(now)
     except Exception as e:  # noqa: BLE001 - an exception would silently unregister the timer
         state.last_error = str(e)
@@ -265,6 +313,7 @@ def _on_load_post(*_args) -> None:
     """A new file keeps the running session: take its smoothing and name, re-apply the pose."""
     import bpy
 
+    _close_stream()
     _applier.reapply()
     if not running():
         return
@@ -281,6 +330,7 @@ def _on_load_post(*_args) -> None:
 
 def _on_undo_redo(*_args) -> None:
     """Undo restored an older camera transform and zero; show the live pose under that zero."""
+    _close_stream()
     _applier.reapply()
 
 
