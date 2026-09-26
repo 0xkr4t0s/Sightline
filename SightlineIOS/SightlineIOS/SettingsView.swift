@@ -172,6 +172,7 @@ struct SettingsView: View {
                     Toggle("Rule of thirds", isOn: $controller.framing.thirds)
                     Toggle("Centre cross", isOn: $controller.framing.centreCross)
                     Toggle("Action and title safe", isOn: $controller.framing.safeAreas)
+                    Toggle("Horizon level", isOn: $controller.framing.horizon)
                 }
 
                 Section("Pose (Blender axes)") {

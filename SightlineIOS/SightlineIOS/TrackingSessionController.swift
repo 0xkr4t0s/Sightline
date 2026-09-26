@@ -55,6 +55,12 @@ final class TrackingSessionController {
     var framing = FramingSettings.load() {
         didSet { framing.save() }
     }
+    /// The horizon level's angle for the newest pose (FR-VF-003); nil when not tracking, so a
+    /// stopped run doesn't leave a level that no longer moves.
+    var horizonAngle: Double? {
+        guard isTracking, let latestPose else { return nil }
+        return HorizonLevel.angle(orientation: latestPose.orientation, lockFlags: controls.lockFlags)
+    }
     // ARSession.delegate is weak: this keeps the receiver alive.
     @ObservationIgnored private var receiver: ARFrameReceiver?
     @ObservationIgnored private var rateMeter = PoseRateMeter()

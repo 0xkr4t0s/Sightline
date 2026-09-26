@@ -48,7 +48,8 @@ struct ContentView: View {
             // Same full-screen space as the Metal view, so the guides line up with the frame.
             ZStack {
                 ViewfinderView(renderer: controller.viewfinder)
-                FramingOverlayView(settings: controller.framing, frameSize: controller.videoFrameSize)
+                FramingOverlayView(settings: controller.framing, frameSize: controller.videoFrameSize,
+                                   horizonAngle: controller.horizonAngle)
             }
             .ignoresSafeArea()
         }
