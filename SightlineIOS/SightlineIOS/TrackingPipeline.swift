@@ -155,7 +155,9 @@ nonisolated struct SendLegMeter: Sendable {
 
 /// The per-frame path, off the main actor (ARC-005): ARKit frame → VCP `POSE` → sealed datagram →
 /// UDP send, on one serial queue (FR-TRK-001/002, PR-FD-001). The same path sends the rig controls
-/// as `CONTROL_STATE` and reads the host's `STATUS` for their acknowledgement (vcp.md §6.2).
+/// as `CONTROL_STATE` and reads the host's `STATUS` for their acknowledgement (vcp.md §6.2), and
+/// reassembles the viewfinder's `VIDEO_FRAGMENT`s, reporting how they arrive in `VIDEO_REPORT`
+/// (§6.5, §6.6).
 ///
 /// That queue is the actor's executor, the `ARSession` delegate queue, and the UDP socket's read
 /// queue, so ARKit callbacks, received datagrams and the retransmit timer run inside the actor with
@@ -182,8 +184,15 @@ actor TrackingPipeline {
     /// Every datagram is sealed into this buffer; its capacity is reserved once.
     private var datagram: [UInt8] = []
     private var sendLeg = SendLegMeter()
+    /// This session's viewfinder frames (§6.5); the report timer runs once the first fragment arrived.
+    private var video = VCPVideoReassembler()
+    private var reportSeq: UInt32 = 0
+    private var reportTimer: DispatchSourceTimer?
     /// Bumped by every start and stop, so a host name resolved after its run ended is ignored.
     private var run: UInt64 = 0
+
+    /// vcp.md §6.6: `VIDEO_REPORT` interval once viewfinder frames arrive.
+    static let videoReportInterval: DispatchTimeInterval = .milliseconds(500)
 
     /// vcp.md §6.2: the latest state is repeated this often until the host acknowledges it.
     static let controlRepeatInterval: DispatchTimeInterval = .milliseconds(500)
@@ -217,6 +226,10 @@ actor TrackingPipeline {
                 pipeline.snapshot.sessionID = destination.endpoint?.sessionID
                 pipeline.sendLeg = SendLegMeter()
                 pipeline.statusFilter = VCPSeqFilter()
+                // §6.6: report_seq and both counters start again with each session.
+                pipeline.cancelReportTimer()
+                pipeline.video = VCPVideoReassembler()
+                pipeline.reportSeq = 0
                 pipeline.connect()
                 pipeline.sendNewControlState()
                 pipeline.startLivenessTimer()
@@ -232,6 +245,7 @@ actor TrackingPipeline {
                 pipeline.destination = nil
                 pipeline.cancelControlTimer()
                 pipeline.cancelLivenessTimer()
+                pipeline.cancelReportTimer()
                 pipeline.sender.close()
             }
         }
@@ -388,6 +402,7 @@ actor TrackingPipeline {
                 pipeline.destination = nil
                 pipeline.cancelControlTimer()
                 pipeline.cancelLivenessTimer()
+                pipeline.cancelReportTimer()
                 pipeline.sender.close()
                 pipeline.snapshot.sessionLost = true
                 pipeline.publish(pipeline.snapshot)
@@ -400,6 +415,28 @@ actor TrackingPipeline {
     private func cancelLivenessTimer() {
         livenessTimer?.cancel()
         livenessTimer = nil
+    }
+
+    /// §6.6: every 500 ms from the first valid `VIDEO_FRAGMENT` until the session ends; the totals
+    /// make retransmission unnecessary. Motion-to-photon isn't measured yet (0, task 2.6).
+    private func startReportTimer() {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + Self.videoReportInterval, repeating: Self.videoReportInterval)
+        timer.setEventHandler { [weak self] in
+            self?.assumeIsolated { $0.sendVideoReport() }
+        }
+        timer.resume()
+        reportTimer = timer
+    }
+
+    private func sendVideoReport() {
+        reportSeq &+= 1
+        _ = send(.videoReport(video.report(seq: reportSeq, m2pP95Ms: 0)))
+    }
+
+    private func cancelReportTimer() {
+        reportTimer?.cancel()
+        reportTimer = nil
     }
 
     /// Only a valid authenticated host datagram refreshes liveness (§8). STATUS freshness is
@@ -424,9 +461,13 @@ actor TrackingPipeline {
             if snapshot.controlAck >= snapshot.controlSeq {
                 cancelControlTimer()
             }
+        case let .videoFragment(fragment):
+            // Stale, duplicate and inconsistent fragments still count as the stream arriving. The
+            // viewfinder that decodes `video.frame` comes later (FR-VF-001).
+            _ = video.push(fragment)
+            if reportTimer == nil { startReportTimer() }
         default:
-            // VIDEO_FRAGMENT still refreshes liveness above; the viewfinder that shows it comes
-            // later (FR-VF-001). VCPEndpoint rejects every other host-to-device message in v1.
+            // VCPEndpoint rejects every other host-to-device message in v1.
             break
         }
     }

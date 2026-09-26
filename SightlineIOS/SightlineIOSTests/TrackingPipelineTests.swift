@@ -458,6 +458,64 @@ final class TrackingPipelineTests: XCTestCase {
         pipeline.stop()
     }
 
+    /// vcp.md §6.5/§6.6: authentic `VIDEO_FRAGMENT`s go through newest-frame-wins reassembly, and
+    /// from the first one on the device sends `VIDEO_REPORT` every 500 ms with the session's totals.
+    /// Forged fragments count for nothing; a new session starts the reports and counters again, and
+    /// a stopped one sends none.
+    func testVideoFragmentsAreReassembledAndReportedEveryHalfSecond() throws {
+        let (device, blender) = try goldenSession()
+        let host = try LoopbackReceiver()
+        let pipeline = TrackingPipeline(publish: { _ in })
+        let destination = TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device)
+        pipeline.start(destination)
+        defer { pipeline.stop() }
+        func fragment(_ id: UInt32, _ index: UInt16, of count: UInt16) throws -> [UInt8] {
+            let data = [UInt8](repeating: UInt8(truncatingIfNeeded: id), count: 4)
+            return try blender.seal(.videoFragment(VCPVideoFragment(
+                frame: VCPVideoFrameInfo(frameID: id, renderTimeNs: 1_000 * UInt64(id), poseSeq: id, quality: 80),
+                frameLength: UInt32(count) * 4, fragIndex: index, fragCount: count, fragSize: 4, data: data[...])))
+        }
+        func report(timeout: Double = 1) throws -> VCPVideoReport {
+            guard case let .videoReport(report) = try blender.open(XCTUnwrap(next(VCPMessageType.videoReport,
+                                                                                   from: host, timeout: timeout))).get()
+            else { throw POSIXError(.EBADMSG) }
+            return report
+        }
+        _ = try XCTUnwrap(next(VCPMessageType.controlState, from: host))  // the host now knows the device
+        XCTAssertNil(next(VCPMessageType.videoReport, from: host, timeout: 0.8), "no report before any fragment")
+
+        var forged = try fragment(9, 0, of: 1)
+        forged[forged.count - 1] ^= 1
+        host.reply(forged)
+        XCTAssertNil(next(VCPMessageType.videoReport, from: host, timeout: 0.8), "a forged fragment starts nothing")
+
+        let first = Date()
+        host.reply(try fragment(1, 1, of: 2))
+        host.reply(try fragment(1, 0, of: 2))  // frame 1 complete
+        host.reply(try fragment(2, 0, of: 3))  // frame 2 never completes
+        host.reply(try fragment(3, 0, of: 1))  // frame 3 complete; frame 2 lost
+        host.reply(try fragment(1, 0, of: 2))  // stale
+        host.reply(forged)
+        var got = try report()
+        XCTAssertGreaterThan(Date().timeIntervalSince(first), 0.4, "the first report comes one interval after")
+        XCTAssertEqual(got, VCPVideoReport(reportSeq: 1, newestFrameID: 3, framesComplete: 2, m2pP95Ms: 0))
+        let sent = Date()
+        got = try report()
+        XCTAssertEqual(got, VCPVideoReport(reportSeq: 2, newestFrameID: 3, framesComplete: 2, m2pP95Ms: 0),
+                       "reports repeat without new fragments")
+        XCTAssertEqual(Date().timeIntervalSince(sent), 0.5, accuracy: 0.15)
+
+        pipeline.start(destination)  // a new session
+        _ = try XCTUnwrap(next(VCPMessageType.controlState, from: host))
+        XCTAssertNil(next(VCPMessageType.videoReport, from: host, timeout: 0.8), "the old session's reports stop")
+        host.reply(try fragment(1, 0, of: 1))  // ids start again at 1
+        XCTAssertEqual(try report(), VCPVideoReport(reportSeq: 1, newestFrameID: 1, framesComplete: 1, m2pP95Ms: 0))
+
+        pipeline.stop()
+        while host.receive(timeout: 0.02) != nil {}
+        XCTAssertNil(next(VCPMessageType.videoReport, from: host, timeout: 0.8), "a stopped session reports nothing")
+    }
+
     /// CLOCK and STATUS independently renew the deadline; authentication precedes renewal,
     /// while STATUS sequence filtering still protects control acknowledgements.
     func testHostHeartbeatsRenewLivenessButForgedTrafficDoesNot() throws {

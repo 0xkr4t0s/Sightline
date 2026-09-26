@@ -1933,3 +1933,21 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** nothing new; device checks (1.5.1c, O-1, NET-004) remain owner-only.
 - **Next task:** 2.3b, the tracking session receiving `VIDEO_FRAGMENT`s into a `VCPVideoReassembler` and sending `VIDEO_REPORT`s every 500 ms once frames arrive (checked with the fake-host tests). No second task started.
 - **Owner actions:** none. PR #18 set ready with squash auto-merge.
+
+## 2026-09-26 — Iteration 80 — 2.3b (NET-VID-004/005) — done
+
+- **Orientation:** no LOOP_STOP; clean tree on `loop/2.3a`. Ready PR #18: its `ci-ok` failure was the draft run `36245825059` (every job skipped); the ready run `36245831653` passed every job (python, rust-fmt, rust ×3, fuzz, wheels ×3, extension, blender-smoke ×3, `ios pass 8m10s`, `ci-ok pass`) and PR #18 auto-merged (`7ccac98`). Fast-forwarded `main`, deleted local `loop/2.3a`, published `loop/2.3b` with draft PR https://github.com/0xkr4t0s/Sightline/pull/19. The other open PR (not `loop/*`) was not touched.
+- **Change:**
+  - `SightlineIOS/SightlineIOS/TrackingPipeline.swift`: one `VCPVideoReassembler` per session (`:188`); every authentic `VIDEO_FRAGMENT` is pushed into it (`:464`; stale/duplicate/inconsistent ones count as arriving, as §6.5 counts them). The first one starts the `VIDEO_REPORT` timer (`startReportTimer`, `:422`): every 500 ms (`videoReportInterval`, `:195`), first one interval after the fragment, `report_seq` +1, the reassembler's totals, `m2p_p95_ms` 0 until 2.6 (`sendVideoReport`, `:432`). `start` resets the reassembler, `report_seq` and the timer (`:229-232`, §6.6 "start again with each session"); `stop` and liveness expiry cancel the timer. Nothing decodes `video.frame` yet (2.3c).
+  - `SightlineIOS/SightlineIOSTests/TrackingPipelineTests.swift:465`: `testVideoFragmentsAreReassembledAndReportedEveryHalfSecond` with the loopback fake host and the golden session keys: no report before any fragment, none after a forged one; frames 1 (complete), 2 (1 of 3), 3 (complete), a stale frame-1 fragment and a forged one give report 1 = `{seq 1, newest 3, complete 2, m2p 0}` > 0.4 s after the first fragment, report 2 the same totals 0.5 ± 0.15 s later; a new session stops the old reports and restarts at `{seq 1, newest 1, complete 1}`; a stopped session sends none.
+  - No dependency, wire-format, vector, Rust, Python or add-on change.
+- **Commands and observed results (Xcode 27, iPhone 17 simulator):**
+  - `-only-testing:SightlineIOSTests/TrackingPipelineTests`: `Executed 18 tests, with 1 test skipped and 0 failures (0 unexpected) in 24.586 (24.593) seconds`; `** TEST SUCCEEDED **`.
+  - Full `xcodebuild test … -destination 'platform=iOS Simulator,name=iPhone 17'`: `Executed 63 tests, with 4 tests skipped and 0 failures (0 unexpected) in 35.183 (35.208) seconds`; `** TEST SUCCEEDED **` (62 before + 1).
+  - `.venv.nosync/bin/pytest -q -p no:cacheprovider BlenderAddOn/tests`: `35 passed in 0.04s`; `tools/gen_testdata.py --check`: `testdata/ up to date (25 files)`.
+  - Rust and Blender not run: no file they build or read changed.
+  - **Mutation proof** (sequential script, one backup, each pattern hit exactly once, restored, `RESTORED_IDENTICAL`), 6 of 6 caught: report timer never started → `XCTUnwrap failed` (no report); reassembler not reset per session → `("…newestFrameID: 3, framesComplete: 2…") is not equal to ("…newestFrameID: 1, framesComplete: 1…")`; `report_seq` not reset → `reportSeq: 3 … is not equal to … reportSeq: 1`; old timer kept across sessions → `XCTAssertNil failed … the old session's reports stop`; first report immediate → `("0.0011…") is not greater than ("0.4")`; interval 1000 ms → `("0.9993…") is not equal to ("0.5") +/- ("0.15")`. (A first form of the interval mutation didn't compile and was redone.)
+- **Not verified:** against the real Rust host (the fake-host test uses the golden keys and the Swift codec, which 2.3a checked against the same vectors the Rust side uses); device behaviour.
+- **Blocked:** nothing new; device checks (1.5.1c, O-1, NET-004) remain owner-only.
+- **Next task:** 2.3c, JPEG decode and Metal presentation of the newest completed frame (FR-VF-001/002). No second task started.
+- **Owner actions:** none. PR #19 set ready with squash auto-merge.
