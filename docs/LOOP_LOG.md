@@ -1558,3 +1558,10 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Blocked:** none new. Existing physical-device NET-004 verification remains owner-dependent.
 - **Next task:** after CI merges PR #4, 2.1b (session timer, frame budget and adaptive skipping). No second task started.
 - **Owner actions:** none for this PR (auto-merge is already armed).
+
+## 2026-09-26 — Iteration 60 — waiting on CI for #4 (no task started)
+
+- **Orientation:** no LOOP_STOP; clean tree on `loop/2.1a`, tracking `origin/loop/2.1a`. PR #4 is ready and auto-merge is armed; the other open PR by the owner is not a `loop/*` PR and was ignored.
+- **CI:** `git fetch origin` passed. `gh pr checks 4 --watch` reached the 10-minute cap on run `36205073068`. `gh pr view 4 --json state,mergeStateStatus`: `{"mergeStateStatus":"BLOCKED","state":"OPEN"}`. `gh pr checks 4`: 13 jobs passed (rust-fmt, rust ×3, fuzz, wheels ×3, python, extension, blender-smoke ×3); `ios pending`. The `ci-ok` gate cannot finish yet. **waiting on CI for #4** (§1b); no new task started.
+- **Files changed:** `docs/LOOP_LOG.md` only. No code changed; no local test was run. No new blocker or requirement status change.
+- **Next task:** check PR #4 under §1b; only after it merges, start 2.1b (timer, budget and adaptive skipping). Existing owner-only device checks remain blocked.
