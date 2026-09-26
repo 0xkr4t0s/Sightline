@@ -3,8 +3,13 @@
 //! `unsafe` (NFR-QA-004).
 
 pub mod frame;
+pub mod jpeg;
 
 pub use frame::{Frame, FrameColorSpace, FrameError, FrameMeta, FrameSlot};
+pub use jpeg::{
+    DEFAULT_QUALITY, EncodeError, EncodedFrame, EncodedSlot, JpegEncoder, JpegWorker,
+    JpegWorkerStats,
+};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

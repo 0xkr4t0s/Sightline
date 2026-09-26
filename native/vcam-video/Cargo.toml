@@ -9,10 +9,13 @@ license.workspace = true
 [lints]
 workspace = true
 
+# Stage A JPEG encoder (S-2a choice, SRS §13.2): vendored libjpeg-turbo, linked statically.
+[dependencies]
+turbojpeg = "=1.5.1"
+
 [dev-dependencies]
 jpeg-encoder = "=0.7.1"
 openh264 = { version = "=0.9.8", features = ["libloading"] }
-turbojpeg = "=1.5.1"
 vcam-protocol.workspace = true
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]

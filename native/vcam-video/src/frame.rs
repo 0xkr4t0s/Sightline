@@ -10,7 +10,8 @@
 //! Pixels are RGBA8 as GPUTexture.read() returns them: rows bottom-up, with Blender's
 //! viewport display transform applied into sRGB (Rec.709 primaries).
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 /// Bytes per RGBA8 pixel.
 pub const BYTES_PER_PIXEL: usize = 4;
@@ -123,12 +124,15 @@ struct State {
     spare: Option<Vec<u8>>,
     last_id: u64,
     replaced: u64,
+    /// Set by [`FrameSlot::wake`]; consumed by the next [`FrameSlot::wait_take`].
+    woken: bool,
 }
 
 /// Holds the newest frame until the encoder takes it. Shared between threads.
 #[derive(Debug, Default)]
 pub struct FrameSlot {
     state: Mutex<State>,
+    ready: Condvar,
 }
 
 impl FrameSlot {
@@ -162,6 +166,7 @@ impl FrameSlot {
         }
         let mut state = self.lock();
         state.last_id += 1;
+        let frame_id = state.last_id;
         let frame = Frame {
             frame_id: state.last_id,
             meta,
@@ -171,13 +176,33 @@ impl FrameSlot {
             state.replaced += 1;
             state.spare = Some(old.pixels);
         }
-        Ok(state.last_id)
+        drop(state);
+        self.ready.notify_all();
+        Ok(frame_id)
     }
 
     /// The newest frame, if one arrived since the last `take`.
     #[must_use]
     pub fn take(&self) -> Option<Frame> {
         self.lock().latest.take()
+    }
+
+    /// Like [`FrameSlot::take`], but waits up to `timeout` for a frame. Returns `None` on
+    /// timeout, or early after [`FrameSlot::wake`] (the encoder thread's stop signal).
+    #[must_use]
+    pub fn wait_take(&self, timeout: Duration) -> Option<Frame> {
+        let (mut state, _) = self
+            .ready
+            .wait_timeout_while(self.lock(), timeout, |s| s.latest.is_none() && !s.woken)
+            .unwrap_or_else(PoisonError::into_inner);
+        state.woken = false;
+        state.latest.take()
+    }
+
+    /// Makes a current or the next [`FrameSlot::wait_take`] return at once.
+    pub fn wake(&self) {
+        self.lock().woken = true;
+        self.ready.notify_all();
     }
 
     /// Hands a taken frame's buffer back for reuse.
