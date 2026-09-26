@@ -67,17 +67,23 @@ nonisolated struct VCPHostPairing: Equatable, Sendable {
 /// flight throws `.timeout`. After `close()`, calls throw `.closed`.
 nonisolated final class VCPControlChannel: Sendable {
     private let connection: NWConnection
-    private let queue = DispatchQueue(label: "Sightline.VCPControlChannel")
-    /// Why the connection was cancelled on this end, if it was.
-    private let cancelledBecause = OSAllocatedUnfairLock<VCPLinkError?>(initialState: nil)
+    private let queue: DispatchQueue
+    /// Cancellation reason and the one in-flight control operation (handshake or session read).
+    private struct Cancellation {
+        var reason: VCPLinkError?
+        var pending: (@Sendable (VCPLinkError) -> Void)?
+    }
+    private let cancellation = OSAllocatedUnfairLock(initialState: Cancellation())
 
-    init(host: String, port: UInt16) throws(VCPLinkError) {
+    init(host: String, port: UInt16, callbackQueue: DispatchQueue = DispatchQueue(label: "Sightline.VCPControlChannel")) throws(VCPLinkError) {
         guard !host.isEmpty, let port = NWEndpoint.Port(rawValue: port), port != .any else {
             throw .network("no host address or port")
         }
+        queue = callbackQueue
         connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: .tcp)
     }
     init(serviceName: String) {
+        queue = DispatchQueue(label: "Sightline.VCPControlChannel")
         connection = NWConnection(to: .service(name: serviceName, type: DiscoveredHost.serviceType,
                                                 domain: "local.", interface: nil), using: .tcp)
     }
@@ -107,9 +113,12 @@ nonisolated final class VCPControlChannel: Sendable {
     /// `.timeout`.
     func withDeadline<T>(_ seconds: Double, _ body: () async throws(VCPLinkError) -> T) async throws(VCPLinkError) -> T {
         let expire = DispatchWorkItem { [self] in cancel(because: .timeout) }
-        queue.asyncAfter(deadline: .now() + seconds, execute: expire)
+        // A stalled NWConnection callback queue must not extend a reconnect attempt.
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + seconds, execute: expire)
         defer { expire.cancel() }
-        return try await body()
+        let value = try await body()
+        if cancellation.withLock({ $0.reason }) == .timeout { throw .timeout }
+        return value
     }
 
     func send(_ message: VCPControlMessage) async throws(VCPLinkError) {
@@ -168,17 +177,21 @@ nonisolated final class VCPControlChannel: Sendable {
     }
 
     private func cancel(because reason: VCPLinkError) {
-        cancelledBecause.withLock { $0 = $0 ?? reason }
+        let (firstReason, pending) = cancellation.withLock { state in
+            if state.reason == nil { state.reason = reason }
+            return (state.reason ?? reason, state.pending)
+        }
+        pending?(firstReason)
         connection.cancel()
     }
 
     private var cancelReason: VCPLinkError {
-        cancelledBecause.withLock { $0 } ?? .closed
+        cancellation.withLock { $0.reason } ?? .closed
     }
 
     /// A Network framework error, unless this end cancelled the connection (then why it did).
     private func failure(_ error: NWError) -> VCPLinkError {
-        cancelledBecause.withLock { $0 } ?? .network(error.debugDescription)
+        cancellation.withLock { $0.reason } ?? .network(error.debugDescription)
     }
 
     private func receive(exactly count: Int) async throws(VCPLinkError) -> [UInt8] {
@@ -189,18 +202,32 @@ nonisolated final class VCPControlChannel: Sendable {
                 } else if let error {
                     done(.failure(failure(error)))
                 } else {
-                    done(.failure(cancelledBecause.withLock { $0 } ?? .closed))  // end of stream mid-frame
+                    done(.failure(cancelReason))  // end of stream mid-frame
                 }
             }
         }
     }
 
-    /// Adapts a callback that fires exactly once to `async` with a typed error.
+    /// Adapts a Network callback and local cancellation to async, resuming exactly once.
     private func bridge<T: Sendable>(
         _ start: (@escaping @Sendable (Result<T, VCPLinkError>) -> Void) -> Void
     ) async throws(VCPLinkError) -> T {
         let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<T, VCPLinkError>, Never>) in
-            start { continuation.resume(returning: $0) }
+            let once = OSAllocatedUnfairLock(initialState: false)
+            let done: @Sendable (Result<T, VCPLinkError>) -> Void = { [self] outcome in
+                guard once.withLock({ fired in defer { fired = true }; return !fired }) else { return }
+                let reason = cancellation.withLock { state in
+                    state.pending = nil
+                    return state.reason
+                }
+                continuation.resume(returning: reason.map { .failure($0) } ?? outcome)
+            }
+            let reason = cancellation.withLock { state -> VCPLinkError? in
+                if let reason = state.reason { return reason }
+                state.pending = { done(.failure($0)) }
+                return nil
+            }
+            if let reason { done(.failure(reason)) } else { start(done) }
         }
         return try result.get()
     }

@@ -27,7 +27,7 @@ class VCamProperties(bpy.types.PropertyGroup):
     )
     port: bpy.props.IntProperty(
         name="Port",
-        description="TCP control port the iPhone connects to (shown to it over Bonjour)",
+        description="TCP control port the device connects to (shown to it over Bonjour)",
         default=DEFAULT_PORT,
         min=1024,
         max=65535,
@@ -46,7 +46,7 @@ class VCamProperties(bpy.types.PropertyGroup):
     )
     hold_last_good: bpy.props.BoolProperty(
         name="Hold Last Good Pose",
-        description="While iPhone tracking is limited, keep the camera at the last normal pose",
+        description="While device tracking is limited, keep the camera at the last normal pose",
         default=True,
         update=_hold_changed,
     )
