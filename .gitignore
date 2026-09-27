@@ -30,6 +30,7 @@ legacy/DesktopReceiver/build/
 docs/LOOP_STOP
 
 # Agent harness state (local only)
+.mission/
 .omx/
 .claude/settings.local.json
 .omp/

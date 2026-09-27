@@ -26,6 +26,13 @@ The product is called **Sightline** (renamed from "VCam for Blender" on 2026-09-
 - Golden vectors in `testdata/` are the source of truth across Rust, Swift, and Python.
 - Local tools: Blender 5.2.2 at `/Applications/Blender.app`; Rust 1.97.1. Paths contain spaces, so quote them.
 
+## Local checks and Missions
+
+- `tools/mission/setup.sh` prepares a fresh checkout or worktree: the `.venv.nosync/` venv, a debug `vcam_native` wheel for Blender's Python 3.13 (the local linker can break release wheels; see `docs/LOOP_LOG.md`), the fake iPhone, and the extension installed into an isolated Blender user dir under `.mission/`. Re-run it after changing `native/` or `BlenderAddOn/`.
+- `tools/mission/check.sh [rust|python|blender|ios ...]` runs the suites CI runs, plus the GPU-only render checks. It prints one PASS/FAIL line per suite and writes the full output to `.mission/logs/<suite>.log`. `BLENDER_TESTS="addon_apply video_native"` limits the Blender scripts.
+- The user surface is exercised without hardware: `vcam-fake-iphone` pairs with headless Blender, streams scripted motion and receives video (`tests/blender/`). Anything needing a real iPhone, ARKit, Wi-Fi or Apple signing is owner-only: note it as not verified instead of attempting it. iOS runs unit tests in the iPhone 17 simulator only.
+- Mission work stays on local `mission/*` branches unless the owner asks otherwise: don't push, open PRs or run the agent loop's GitHub flow (`docs/AGENT_LOOP_PROMPT.md`). The Privacy rules below still apply to every commit, and `.mission/` logs can contain host and device names, so don't paste them anywhere unredacted.
+
 ## Privacy (public repository)
 
 The repository is public and its history was scrubbed on 2026-09-25. Never put the owner's personal data into anything that gets published: commits (messages, author, files), branch names, PR titles/bodies, PR or issue comments, `docs/LOOP_LOG.md`, `reports/`, or test output pasted anywhere. Personal data means:
