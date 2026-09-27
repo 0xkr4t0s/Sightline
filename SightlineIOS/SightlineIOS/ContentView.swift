@@ -9,88 +9,143 @@ import SwiftUI
 /// newest frame Blender streams, letterboxed (FR-VF-001/002), with the chosen framing guides on top
 /// (FR-VF-003), and says when that frame goes stale (FR-VF-005). Status runs along the top edge, the
 /// controls sit in a rail under the right thumb and hide after a few seconds while tracking;
-/// `HUDLayout` keeps both out of the centre of the frame.
+/// `HUDLayout` keeps both out of the centre of the frame. The rail's Lens button swaps it for the
+/// lens panel (FR-CTL-001..003), which hides and comes back in the rail's place until it's closed.
+///
+/// Gestures on the viewfinder, while Blender streams to a live session: a tap on the picture
+/// focuses there (FR-CTL-002) and shows the controls; a tap in the letterbox or pillar bars
+/// around the picture shows or hides them; a pinch anywhere changes the focal length
+/// (FR-CTL-001). Without a streamed frame every tap shows or hides the controls.
 struct ContentView: View {
     @Bindable var controller: TrackingSessionController
     @State private var chrome = ChromeVisibility(now: .now)
     @State private var now = ContinuousClock.now
     @State private var showsSettings = false
+    @State private var showsLens = false
+    @State private var pinchStartMM: Float?
+    @State private var focusMark: FocusMark?
 
     var body: some View {
-        GeometryReader { proxy in
-            let fullSize = CGSize(
-                width: proxy.size.width + proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing,
-                height: proxy.size.height + proxy.safeAreaInsets.top + proxy.safeAreaInsets.bottom)
-            let picture =
-                controller.videoFrameSize.flatMap {
-                    FramingGeometry(frame: $0, view: fullSize, maskAspect: controller.framing.maskAspect)?.picture
-                } ?? CGRect(origin: .zero, size: fullSize)
-            let layout = HUDLayout(
-                size: proxy.size,
-                picture: picture.offsetBy(dx: -proxy.safeAreaInsets.leading, dy: -proxy.safeAreaInsets.top),
-                viewfinder: CGRect(
-                    x: -proxy.safeAreaInsets.leading, y: -proxy.safeAreaInsets.top,
-                    width: fullSize.width, height: fullSize.height))
-            let controlsShown = chrome.isShown(at: now, tracking: controller.isTracking)
-            ZStack(alignment: .topLeading) {
+        // The full-screen viewfinder is the root, so taps in the bars beside the picture reach it
+        // even inside the safe-area insets; the status, HUD and controls lie over it.
+        viewfinder
+            .overlay {
+                GeometryReader { proxy in
+                    let fullSize = CGSize(
+                        width: proxy.size.width + proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing,
+                        height: proxy.size.height + proxy.safeAreaInsets.top + proxy.safeAreaInsets.bottom)
+                    let picture =
+                        controller.videoFrameSize.flatMap {
+                            FramingGeometry(frame: $0, view: fullSize, maskAspect: controller.framing.maskAspect)?
+                                .picture
+                        } ?? CGRect(origin: .zero, size: fullSize)
+                    let layout = HUDLayout(
+                        size: proxy.size,
+                        picture: picture.offsetBy(dx: -proxy.safeAreaInsets.leading, dy: -proxy.safeAreaInsets.top),
+                        viewfinder: CGRect(
+                            x: -proxy.safeAreaInsets.leading, y: -proxy.safeAreaInsets.top,
+                            width: fullSize.width, height: fullSize.height))
+                    let controlsShown = chrome.isShown(at: now, tracking: controller.isTracking)
+                    ZStack(alignment: .topLeading) {
+                        // Taps and pinches go through to the viewfinder's gesture layer.
+                        Color.clear
+                            .allowsHitTesting(false)
+                        if controller.videoStalled {
+                            stalledOverlay
+                                .frame(width: proxy.size.width, height: proxy.size.height)
+                                .allowsHitTesting(false)
+                        }
+                        // The status and HUD are read-only: taps and pinches on them reach the viewfinder.
+                        statusStrip
+                            .frame(width: layout.statusStrip.width, height: layout.statusStrip.height)
+                            .offset(x: layout.statusStrip.minX, y: layout.statusStrip.minY)
+                            .allowsHitTesting(false)
+                        dataPanel
+                            .frame(width: layout.dataPanel.width, height: layout.dataPanel.height)
+                            .clipped()
+                            .background {
+                                Color.black.opacity(0.7)
+                                    .accessibilityLabel("HUD panel")
+                                    .accessibilityIdentifier("hud.panel")
+                            }
+                            .offset(x: layout.dataPanel.minX, y: layout.dataPanel.minY)
+                            .allowsHitTesting(false)
+                        if showsLens && controlsShown {
+                            LensPanel(
+                                shown: controller.shownLens, lens: controller.controls.lens,
+                                rackDurationMS: controller.lensPanel.rackDurationMS,
+                                perform: { action in
+                                    interact()
+                                    controller.performLens(action)
+                                },
+                                close: {
+                                    showsLens = false
+                                    interact()
+                                }
+                            )
+                            .frame(width: layout.lensPanel.width, height: layout.lensPanel.height)
+                            .offset(x: layout.lensPanel.minX, y: layout.lensPanel.minY)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                        } else if controlsShown {
+                            controlRail
+                                .frame(width: layout.controlRail.width, height: layout.controlRail.height)
+                                .offset(x: layout.controlRail.minX, y: layout.controlRail.minY)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.25), value: controlsShown)
+                    .animation(.easeInOut(duration: 0.25), value: showsLens)
+                }
+            }
+            .preferredColorScheme(.dark)
+            // Re-check visibility once the hide delay has passed since the last change.
+            .task(id: chrome) {
+                try? await Task.sleep(for: ChromeVisibility.hideAfter)
+                now = .now
+            }
+            .task(id: focusMark) {
+                guard focusMark != nil else { return }
+                try? await Task.sleep(for: .seconds(1))
+                focusMark = nil
+            }
+            .onChange(of: controller.isTracking) {
+                interact()
+            }
+            .sheet(isPresented: $showsSettings, onDismiss: interact) {
+                SettingsView(controller: controller)
+            }
+    }
+
+    /// Same full-screen space as the Metal view, so the guides and taps line up with the frame.
+    private var viewfinder: some View {
+        ZStack {
+            ViewfinderView(renderer: controller.viewfinder)
+            FramingOverlayView(
+                settings: controller.framing, frameSize: controller.videoFrameSize,
+                horizonAngle: controller.horizonAngle)
+            GeometryReader { screen in
                 Color.clear
                     .contentShape(Rectangle())
-                    .onTapGesture {
-                        now = .now
-                        chrome.tapFrame(at: now, tracking: controller.isTracking)
+                    .onTapGesture(coordinateSpace: .local) { location in
+                        viewfinderTapped(at: location, screen: screen.size)
                     }
-                if controller.videoStalled {
-                    stalledOverlay
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .allowsHitTesting(false)
-                }
-                statusStrip
-                    .frame(width: layout.statusStrip.width, height: layout.statusStrip.height)
-                    .offset(x: layout.statusStrip.minX, y: layout.statusStrip.minY)
-                dataPanel
-                    .frame(width: layout.dataPanel.width, height: layout.dataPanel.height)
-                    .clipped()
-                    .background {
-                        Color.black.opacity(0.7)
-                            .accessibilityLabel("HUD panel")
-                            .accessibilityIdentifier("hud.panel")
+                    .simultaneousGesture(pinch)
+                    .overlay(alignment: .topLeading) {
+                        if let focusMark {
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Color.yellow, lineWidth: 1.5)
+                                .frame(width: 56, height: 56)
+                                .position(focusMark.point)
+                                .allowsHitTesting(false)
+                        }
                     }
-                    .offset(x: layout.dataPanel.minX, y: layout.dataPanel.minY)
-                if controlsShown {
-                    controlRail
-                        .frame(width: layout.controlRail.width, height: layout.controlRail.height)
-                        .offset(x: layout.controlRail.minX, y: layout.controlRail.minY)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
             }
-            .animation(.easeInOut(duration: 0.25), value: controlsShown)
         }
-        .background {
-            // Same full-screen space as the Metal view, so the guides line up with the frame.
-            ZStack {
-                ViewfinderView(renderer: controller.viewfinder)
-                FramingOverlayView(
-                    settings: controller.framing, frameSize: controller.videoFrameSize,
-                    horizonAngle: controller.horizonAngle)
-            }
-            .ignoresSafeArea()
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Viewfinder")
-            .accessibilityValue(viewfinderDescription)
-            .accessibilityIdentifier("viewfinder")
-        }
-        .preferredColorScheme(.dark)
-        // Re-check visibility once the hide delay has passed since the last change.
-        .task(id: chrome) {
-            try? await Task.sleep(for: ChromeVisibility.hideAfter)
-            now = .now
-        }
-        .onChange(of: controller.isTracking) {
-            interact()
-        }
-        .sheet(isPresented: $showsSettings, onDismiss: interact) {
-            SettingsView(controller: controller)
-        }
+        .ignoresSafeArea()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Viewfinder")
+        .accessibilityValue(viewfinderDescription)
+        .accessibilityIdentifier("viewfinder")
     }
 
     private var statusStrip: some View {
@@ -213,6 +268,10 @@ struct ContentView: View {
             }
             .disabled(!controller.isTracking)
             .accessibilityIdentifier("control.origin")
+            railButton("Lens", systemImage: "camera.aperture") {
+                showsLens = true
+            }
+            .accessibilityIdentifier("control.lens")
             railButton("Settings", systemImage: "gearshape") {
                 showsSettings = true
             }
@@ -257,6 +316,35 @@ struct ContentView: View {
         chrome.interact(at: now)
     }
 
+    /// `location` is in the full-screen viewfinder's points, where the frame is drawn.
+    private func viewfinderTapped(at location: CGPoint, screen: CGSize) {
+        if controller.lensGesturesEnabled, let frame = controller.videoFrameSize,
+            let image = FramingGeometry(frame: frame, view: screen, maskAspect: nil)?.image,
+            let point = LensInput.pictureTap(at: location, image: image)
+        {
+            controller.performLens(.tap(u: point.u, v: point.v))
+            focusMark = FocusMark(point: location)
+            interact()
+            return
+        }
+        now = .now
+        chrome.tapFrame(at: now, tracking: controller.isTracking)
+    }
+
+    /// Pinching out lengthens the lens from where it was when the pinch began.
+    private var pinch: some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                guard controller.lensGesturesEnabled else { return }
+                let start = pinchStartMM ?? controller.shownLens.lensMM ?? 50
+                pinchStartMM = start
+                controller.performLens(.lens(LensInput.pinch(from: start, magnification: value.magnification)))
+            }
+            .onEnded { _ in
+                pinchStartMM = nil
+            }
+    }
+
     /// Green when ARKit tracks normally, yellow when limited, grey when not tracking.
     private var trackingColor: Color {
         guard controller.isTracking else {
@@ -285,6 +373,12 @@ struct ContentView: View {
         }
         return controller.sessionEndpoint != nil ? "Sending to Blender" : "Paired"
     }
+}
+
+/// Where the last tap-to-focus landed; shown for a moment.
+private struct FocusMark: Equatable {
+    let point: CGPoint
+    let id = UUID()
 }
 
 #Preview {

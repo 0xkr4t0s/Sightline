@@ -46,6 +46,8 @@
 				FramingOverlay.swift,
 				HostDiscovery.swift,
 				LensControls.swift,
+				LensInput.swift,
+				LensPanel.swift,
 				PairingStore.swift,
 				SceneUnderstanding.swift,
 				StatusHUD.swift,

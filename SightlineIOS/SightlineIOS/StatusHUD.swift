@@ -236,9 +236,14 @@ nonisolated struct HUDLayout: Equatable, Sendable {
     static let centreMargin: CGFloat = 4
     /// Largest share of the frame's height (strip) or width (rail) either may take.
     static let maxShare: CGFloat = 0.2
+    /// The lens panel takes the rail's place and whatever else is free right of the centre, within
+    /// these widths. Below the minimum (a small split-view window) it may cover the centre.
+    static let lensPanelMinWidth: CGFloat = 140
+    static let lensPanelMaxWidth: CGFloat = 240
 
     let statusStrip: CGRect
     let controlRail: CGRect
+    let lensPanel: CGRect
     let dataPanel: CGRect
     let centre: CGRect
 
@@ -256,6 +261,10 @@ nonisolated struct HUDLayout: Equatable, Sendable {
         controlRail = CGRect(
             x: size.width - railWidth, y: stripHeight,
             width: railWidth, height: size.height - stripHeight)
+        let lensWidth = min(
+            Self.lensPanelMaxWidth, max(Self.lensPanelMinWidth, size.width - centre.maxX - Self.centreMargin))
+        lensPanel = CGRect(
+            x: size.width - lensWidth, y: stripHeight, width: lensWidth, height: size.height - stripHeight)
         let panelHeight = min(Self.panelMaxHeight, max(0, size.height - centre.maxY - Self.centreMargin))
         dataPanel = CGRect(
             x: 0, y: size.height - panelHeight,

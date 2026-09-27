@@ -43,6 +43,8 @@ final class TrackingSessionController {
     /// The Blender camera's lens as the host last reported it (vcp.md §6.4), shown instead of the
     /// phone's own request; nil without a session or before the host sends it.
     private(set) var appliedLens: VCPAppliedLens?
+    /// What the lens panel shows and the next rack's duration (FR-CTL-001..003).
+    private(set) var lensPanel = LensPanelModel()
     /// The device's thermal state, kept current by the injected provider (FR-UX-004).
     private(set) var thermal = ThermalStatus(state: ProcessInfo.processInfo.thermalState)
 
@@ -497,6 +499,41 @@ final class TrackingSessionController {
         }
     }
 
+    // MARK: - Lens (FR-CTL-001..003)
+
+    /// The lens as the panel shows it: the camera's, or the operator's change still on its way.
+    var shownLens: LensValues {
+        lensPanel.shown(controls.lens, applied: appliedLens)
+    }
+
+    /// Viewfinder taps focus and pinches zoom only on a frame Blender streams in a live session;
+    /// before the camera's lens is known a pinch would overwrite it.
+    var lensGesturesEnabled: Bool {
+        isTracking && sessionEndpoint != nil && videoFrameSize != nil
+    }
+
+    /// Carries out a lens panel or viewfinder request; the pipeline sends the new state.
+    func performLens(_ action: LensAction) {
+        var panel = lensPanel
+        var next = controls
+        let accepted = panel.perform(action, &next.lens, applied: appliedLens)
+        lensPanel = panel
+        controls = next
+        guard accepted else { return }
+        switch action {
+        case let .tap(u, v):
+            Log.lens.info(
+                "Tap focus u=\(u, format: .fixed(precision: 3), privacy: .public) v=\(v, format: .fixed(precision: 3), privacy: .public)"
+            )
+        case .rack:
+            let target = next.lens.rack.target == VCPRackFocus.targetA ? "A" : "B"
+            Log.lens.info(
+                "Rack to \(target, privacy: .public) over \(next.lens.rack.durationMS, privacy: .public) ms")
+        default:
+            break
+        }
+    }
+
     /// Leaving the foreground ends the run (ARKit stops in the background); coming back starts it
     /// again with a new session from the stored pairing (NET-004), unless the operator stopped it.
     func handleScenePhase(_ phase: ScenePhase) {
@@ -547,6 +584,9 @@ final class TrackingSessionController {
         controlAck = snapshot.controlAck
         if snapshot.appliedLens != appliedLens {
             appliedLens = snapshot.appliedLens
+            if let applied = snapshot.appliedLens {
+                lensPanel.statusChanged(controls.lens, applied: applied)
+            }
         }
         if let applied = snapshot.appliedLens {
             var adopted = controls

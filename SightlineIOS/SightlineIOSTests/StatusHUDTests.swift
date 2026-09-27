@@ -205,6 +205,39 @@ final class StatusHUDTests: XCTestCase {
         }
     }
 
+    /// The lens panel replaces the rail along the trailing edge and stays right of the centre,
+    /// including on an iPhone whose safe area narrows the room.
+    func testLensPanelStaysRightOfTheCentreAndClearOfTheHUDData() throws {
+        let viewport = CGSize(width: 874, height: 402)
+        let inset = CGRect(x: 62, y: 0, width: 750, height: 381)
+        let geometry = try XCTUnwrap(
+            FramingGeometry(frame: CGSize(width: 960, height: 540), view: viewport, maskAspect: nil))
+        let phone = HUDLayout(
+            size: inset.size, picture: geometry.picture.offsetBy(dx: -inset.minX, dy: 0),
+            viewfinder: CGRect(x: -inset.minX, y: 0, width: viewport.width, height: viewport.height))
+        var layouts = [(inset.size, phone)]
+        for size in [
+            viewport, CGSize(width: 667, height: 375), CGSize(width: 1376, height: 1032),
+            CGSize(width: 1032, height: 1376),
+        ] {
+            layouts.append((size, HUDLayout(size: size)))
+        }
+        for (size, layout) in layouts {
+            let panel = layout.lensPanel
+            XCTAssertFalse(panel.intersects(layout.centre), "lens panel over the centre at \(size)")
+            XCTAssertFalse(panel.intersects(layout.dataPanel), "lens panel over the HUD data at \(size)")
+            XCTAssertGreaterThanOrEqual(panel.width, HUDLayout.lensPanelMinWidth, "at \(size)")
+            XCTAssertLessThanOrEqual(panel.width, HUDLayout.lensPanelMaxWidth)
+            XCTAssertGreaterThanOrEqual(panel.width, layout.controlRail.width, "covers the rail it replaces")
+            XCTAssertEqual(panel.maxX, size.width)
+            XCTAssertEqual(panel.minY, layout.statusStrip.maxY)
+            XCTAssertEqual(panel.maxY, size.height)
+        }
+        XCTAssertEqual(phone.lensPanel.minX, phone.centre.maxX + HUDLayout.centreMargin, accuracy: 0.01)
+        let small = HUDLayout(size: CGSize(width: 320, height: 180))
+        XCTAssertEqual(small.lensPanel.width, HUDLayout.lensPanelMinWidth, "usable before clear")
+    }
+
     /// VAL-HUD-011: pixel rounding once put the panel 0.17 pt from the centre; it now keeps a margin.
     func testPanelKeepsAMarginAboveTheCentre() throws {
         XCTAssertGreaterThanOrEqual(HUDLayout.centreMargin, 4)
