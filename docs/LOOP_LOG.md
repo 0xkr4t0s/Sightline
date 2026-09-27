@@ -2343,3 +2343,26 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
   - That volume keeps its system behaviour while stopped or with Settings open.
 - **Open for the owner:** on a device the Camera Control click arrives as primary, like volume down, so it racks to A instead of showing the record message; the light press has no hardware source.
 - **Blocked:** none.
+
+## 2026-09-28 — Mission — 2.6 (NFR-LAT-003/004, NET-VID-005, FR-VF-004) — done in the simulator (device display time needs owner)
+
+- **Files:** `SightlineIOS/SightlineIOS/DeviceLatency.swift` (new, in the test target's `membershipExceptions`), `TrackingPipeline.swift`, `Viewfinder.swift`, `TrackingSessionController.swift`, `StatusHUD.swift`, `ContentView.swift`, `SettingsView.swift`, `SightlineIOS.xcodeproj/project.pbxproj`, `SightlineIOSTests/DeviceLatencyTests.swift` (new), `TrackingPipelineTests.swift`, `StatusHUDTests.swift`, `SightlineIOSUITests/SightlineUITests.swift`, `native/vcam-py/src/video.rs` (test), `tools/mission/qa_ios.sh` (`latency`), `tools/mission/check.sh` and `.github/workflows/ci.yml` (Release allocation test), `IMPLEMENTATION_PROGRESS.md`, this log.
+- **What:** the iPhone measures motion-to-photon and reports it.
+  - The pipeline keeps each sent pose's capture time in `PoseCaptureRing`, 256 slots of `InlineArray` (no heap storage; 256 divides 2^32, so slots stay right across the `pose_seq` wrap).
+  - Every decoded frame carries its submit and decode times. The renderer calls back with its display time, and the pipeline looks up the capture time of the frame's `pose_seq`: M2P = display − capture.
+  - Display time is `MTLDrawable.presentedTime` (`addPresentedHandler`). It and `ARFrame.timestamp` are seconds on the mach clock (`CACurrentMediaTime` base), so the conversion is × 1e9 with no offset; a test checks `CACurrentMediaTime` against `CLOCK_UPTIME_RAW`.
+  - The simulator SDK's `MTLDrawable` has neither `addPresentedHandler` nor `presentedTime`, so the simulator build uses the frame's `GPUEndTime`. That leaves out the wait for the next refresh, so simulator M2P is a lower bound; the report's `methods.display_time` says so.
+  - `VIDEO_REPORT.m2p_p95_ms` is the p95 over the frames shown since the previous report: 0 until one is shown, milliseconds rounded up (never 0 once measured), 65535 at or above 65535 ms.
+  - Legs with p50/p95/p99: receive (first → last fragment of a frame), decode, display, M2P. `hud.m2p` shows the reported p95; Settings → "Latency overlay" (off by default) shows all legs at the top left, clear of the picture centre.
+  - `latency-device.json` (kind `vcam-latency-device`, legs, methods, environment) is written to the app's Documents at most every 2 s and on stop. `tools/mission/qa_ios.sh latency [PATH]` copies it out of the simulator's app container.
+- **Checks:** `tools/mission/check.sh ios`: `PASS ios (159 s)`, `SightlineIOS.app line coverage: 81.8% (5918/7238 lines); minimum 75%`; Release `VCAM_M2P_ALLOCATIONS frames=1000 allocations=0` and `VCAM_SEND_ALLOCATIONS poses=600 allocations=0`. `tools/mission/check.sh rust coverage`: `PASS rust (25 s)`, `PASS coverage (26 s)`, TOTAL line coverage 85.10 %. `python3 tools/check_todos.py`: `142 source file(s), 0 marker(s)`. `xcrun swift-format lint --strict`: exit 0. Device SDK build (`generic/platform=iOS`, no signing): `BUILD SUCCEEDED`.
+- **UI test:** `qa_ios.sh uitest -only-testing:…/testStreamsFromBlenderHost` against the QA host: passed (39.6 s). `hud.m2p` matched `^[1-9][0-9]* ms$`, the overlay's value matched the leg format and stays off the centre, and the host's `video.adapt.report.m2p_p95_ms` was non-zero: `VCAM_M2P_UI hud.m2p=106 ms host m2p_p95_ms=106`.
+- **Device report (simulator, that run):** receive 0.6/1.5/1.9 ms, decode 2.3/5.2/6.0, display 2.6/20.4/30.9, M2P 99/115/131 ms (p50/p95/p99, 684 frames), 0 frames without a capture time, `last_report_m2p_p95_ms` 90.
+- **Mutation proof:** 14 of 14 caught (each file restored and byte-compared).
+  - `DeviceLatencyTests`: ring lookup ignoring the stored seq; ring slot modulo 255; `presentedTime` 0 accepted; display time × 1e6; measured M2P rounding to 0; no 65535 saturation; report interval never restarting; M2P sign reversed; the writer's 2 s throttle removed.
+  - `TrackingPipelineTests.testShownFramesGiveTheReportsMotionToPhoton`: `m2p_p95_ms` back to 0; frames of an earlier run accepted; poses not recorded in the ring.
+  - `StatusHUDTests`/`DeviceLatencyTests`: `hud.m2p` always "—".
+  - Rust `the_devices_m2p_report_drives_the_session_adapter`: the adapter ignoring the device's M2P.
+- **QA (manual):** `qa_blender.sh start`, pair, `qa_ios.sh launch --motion orbit -- -viewfinder.latencyOverlay YES`: the screenshot shows the overlay and `M2P p95 107 ms` in the HUD; host `state.json` `video.adapt.report.m2p_p95_ms` 109.
+- **Not verified, needs owner:** `presentedTime` M2P on a real iPhone (includes the refresh wait), with ARKit and Wi-Fi; device thermal testing (NFR-PERF-001).
+- **Blocked:** none.

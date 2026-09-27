@@ -16,6 +16,12 @@
 #   tools/mission/qa_ios.sh uitest [XCODEBUILD_ARGS...]   # default: -only-testing:SightlineIOSUITests
 #   tools/mission/qa_ios.sh defaults write KEY VALUE | read [KEY] | delete KEY
 #   tools/mission/qa_ios.sh input fullPress|lightPress|volumeDown|volumeUp   # one hardware-button press
+#   tools/mission/qa_ios.sh latency [PATH]         # copy the app's device latency report out
+#
+# `latency` copies Documents/latency-device.json (NFR-LAT-004: receive, decode, display and M2P
+# p50/p95/p99 of the latest session; written every 2 s while streaming and when a run stops) from
+# the app's data container (`simctl get_app_container ... data`) to PATH, by default
+# .mission/qa/latency-device.json.
 #
 # `input` posts the Darwin notification kr8t0s.Sightline.qa.input.<button> inside the simulator
 # (SightlineIOS/SightlineIOS/SimulatorQAInput.swift). The app treats it as a real press, so it
@@ -290,9 +296,20 @@ cmd_input() {
   echo "Pressed $1"
 }
 
+cmd_latency() {
+  local out="${1:-${QA_DIR}/latency-device.json}" container
+  container="$(xcrun simctl get_app_container "$(udid)" "${BUNDLE_ID}" data 2> /dev/null)" \
+    || die "no app data container (install and launch the app first)"
+  [ -f "${container}/Documents/latency-device.json" ] \
+    || die "no latency report yet: stream from a host until a frame is shown"
+  mkdir -p "$(dirname "${out}")"
+  cp "${container}/Documents/latency-device.json" "${out}"
+  echo "${out}"
+}
+
 sub="${1:-}"
 [ $# -gt 0 ] && shift
 case "${sub}" in
-  build | boot | launch | screenshot | terminate | status | logs | uitest | defaults | input) "cmd_${sub}" "$@" ;;
-  *) sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  build | boot | launch | screenshot | terminate | status | logs | uitest | defaults | input | latency) "cmd_${sub}" "$@" ;;
+  *) sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

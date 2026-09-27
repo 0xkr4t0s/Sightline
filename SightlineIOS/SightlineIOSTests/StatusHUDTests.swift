@@ -285,12 +285,59 @@ final class StatusHUDTests: XCTestCase {
         XCTAssertEqual(HUDFields.level(quality: 70, size: CGSize(width: 960, height: 540)), "q70 · 960×540")
         XCTAssertEqual(HUDFields.level(quality: 50, size: CGSize(width: 640, height: 360)), "q50 · 640×360")
         XCTAssertEqual(HUDFields.level(quality: 0, size: CGSize(width: 960, height: 540)), "q— · 960×540")
-        XCTAssertEqual(HUDFields.m2p, "—")
         XCTAssertEqual(HUDFields.recording, "Recording: not available (T3)")
         XCTAssertEqual(HUDFields.tracking(running: false, state: 5), "Stopped")
         XCTAssertEqual(HUDFields.tracking(running: true, state: nil), "Starting")
         XCTAssertEqual(HUDFields.tracking(running: true, state: 0), "Tracking unavailable")
         XCTAssertEqual(HUDFields.tracking(running: true, state: 2), "Tracking limited")
         XCTAssertEqual(HUDFields.tracking(running: true, state: VCPPose.trackingNormal), "Tracking")
+    }
+
+    /// NFR-LAT-003: `hud.m2p` is the p95 the device last reported to Blender, "—" until measured.
+    func testMotionToPhotonField() {
+        XCTAssertEqual(HUDFields.m2p(nil), "—")
+        XCTAssertEqual(HUDFields.m2p(DeviceLatencySummary()), "—", "0 = not measured")
+        XCTAssertEqual(HUDFields.m2p(DeviceLatencySummary(reportedM2PMs: 85)), "85 ms")
+        XCTAssertEqual(HUDFields.m2p(DeviceLatencySummary(reportedM2PMs: 1)), "1 ms")
+        XCTAssertEqual(HUDFields.m2p(DeviceLatencySummary(reportedM2PMs: 65_535)), "≥ 65535 ms")
+    }
+
+    /// NFR-LAT-004: the overlay shows every device leg and M2P as p50/p95/p99 in ms.
+    func testLatencyOverlayLines() {
+        XCTAssertEqual(
+            HUDFields.latency(nil),
+            ["p50/p95/p99 ms · Receive — · Decode —", "Display — · M2P —"])
+        func leg(_ p50: UInt64, _ p95: UInt64, _ p99: UInt64) -> LatencySummary {
+            LatencySummary(count: 10, p50: p50 * 100_000, p95: p95 * 100_000, p99: p99 * 100_000, max: p99 * 100_000)
+        }
+        let latency = DeviceLatencySummary(
+            reportedM2PMs: 92, receive: leg(7, 19, 21), decode: leg(24, 57, 62), display: leg(9, 149, 163),
+            m2p: leg(1_010, 1_180, 1_340))
+        XCTAssertEqual(
+            HUDFields.latency(latency),
+            ["p50/p95/p99 ms · Receive 0.7/1.9/2.1 · Decode 2.4/5.7/6.2", "Display 0.9/14.9/16.3 · M2P 101/118/134"])
+    }
+
+    /// The latency overlay sits under the status strip, above the centre and left of the lens
+    /// panel, with room for its two lines on an iPhone in landscape.
+    func testLatencyOverlayStaysOutOfTheCentreAndTheControls() throws {
+        let viewport = CGSize(width: 874, height: 402)
+        let inset = CGRect(x: 62, y: 0, width: 750, height: 381)
+        let geometry = try XCTUnwrap(
+            FramingGeometry(frame: CGSize(width: 960, height: 540), view: viewport, maskAspect: nil))
+        let phone = HUDLayout(
+            size: inset.size, picture: geometry.picture.offsetBy(dx: -inset.minX, dy: 0),
+            viewfinder: CGRect(x: -inset.minX, y: 0, width: viewport.width, height: viewport.height))
+        for layout in [phone, HUDLayout(size: viewport), HUDLayout(size: CGSize(width: 1376, height: 1032))] {
+            let overlay = layout.latencyOverlay
+            XCTAssertFalse(overlay.intersects(layout.centre), "overlay over the centre: \(overlay)")
+            XCTAssertFalse(overlay.intersects(layout.lensPanel), "overlay under the lens panel")
+            XCTAssertFalse(overlay.intersects(layout.controlRail), "overlay under the rail")
+            XCTAssertFalse(overlay.intersects(layout.dataPanel), "overlay over the HUD data")
+            XCTAssertEqual(overlay.minY, layout.statusStrip.maxY)
+            XCTAssertEqual(overlay.maxY, layout.centre.minY - HUDLayout.centreMargin, accuracy: 0.01)
+        }
+        XCTAssertGreaterThanOrEqual(phone.latencyOverlay.height, 40, "two caption rows")
+        XCTAssertEqual(HUDLayout(size: CGSize(width: 320, height: 60)).latencyOverlay.height, 0, "no room: nothing")
     }
 }

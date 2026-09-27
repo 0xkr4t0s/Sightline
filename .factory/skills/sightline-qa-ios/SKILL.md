@@ -28,8 +28,16 @@ tools/mission/qa_ios.sh screenshot              # .mission/qa/ios-<timestamp>.pn
 tools/mission/qa_ios.sh logs 50                 # app log (os.Logger, subsystem kr8t0s.Sightline)
 tools/mission/qa_blender.sh state               # the Blender side: applied_seq rising, camera moving
 tools/mission/qa_ios.sh input lightPress        # one hardware-button press (fullPress|lightPress|volumeDown|volumeUp)
+tools/mission/qa_ios.sh latency                 # device M2P report -> .mission/qa/latency-device.json
 tools/mission/qa_ios.sh terminate
 ```
+
+`latency` copies `Documents/latency-device.json` out of the app container: receive, decode,
+display and M2P p50/p95/p99 in ms, plus how each is measured. The app writes it at most every 2 s
+while frames show, and on stop. In the Simulator the display time is the frame's `GPUEndTime`
+(the SDK has no `presentedTime`), so M2P there is a lower bound. Launch with
+`-- -viewfinder.latencyOverlay YES` to show the legs over the viewfinder (`hud.latency`);
+`hud.m2p` always shows the reported p95.
 
 Hardware buttons don't reach the app in the Simulator. `input` posts the Darwin notification
 `kr8t0s.Sightline.qa.input.<button>` inside the simulator, and the app handles it like a real
@@ -57,6 +65,7 @@ tools/mission/qa_ios.sh uitest -only-testing:SightlineIOSUITests/SightlineUITest
     `960x540; mask 2.39:1, thirds, horizon`, or `No video`.
   - **Stall badge:** `video.stalled`.
   - **Button notice:** `hud.notice` (shows for 3 s after a press that only has a message).
+  - **Latency:** `hud.m2p` (`N ms`, `—` until measured), `hud.latency` (overlay, when on).
   - **Settings:** `settings.*`, e.g. `settings.host`, `settings.port`, `settings.pairingCode`,
     `settings.pair`, `settings.session`, `settings.packetsSent`, `settings.setOrigin`,
     `settings.motionScale`, `settings.lockHeight`, `settings.framing.thirds`,

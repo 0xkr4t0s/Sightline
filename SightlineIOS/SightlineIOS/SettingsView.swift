@@ -123,6 +123,8 @@ struct SettingsView: View {
                         LabeledContent("Send leg p95", value: Self.sendLegText(leg))
                             .foregroundStyle(leg.meetsTarget ? Color.primary : Color.orange)
                     }
+                    Toggle("Latency overlay", isOn: $controller.showsLatencyOverlay)
+                        .accessibilityIdentifier("settings.latencyOverlay")
                     LabeledContent("Session", value: controller.sessionStatus)
                         .accessibilityIdentifier("settings.session")
                     if let seconds = controller.lastReconnectSeconds {

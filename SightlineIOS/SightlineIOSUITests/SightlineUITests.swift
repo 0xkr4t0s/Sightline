@@ -86,6 +86,7 @@ final class SightlineUITests: XCTestCase {
             "-viewfinder.framing.centreCross", "NO",
             "-viewfinder.framing.safeAreas", "NO",
             "-viewfinder.framing.horizon", "YES",
+            "-viewfinder.latencyOverlay", "YES",
         ]
         app.launch()
 
@@ -134,7 +135,26 @@ final class SightlineUITests: XCTestCase {
         // HUDLayout.centreMargin is 4 pt; allow half a point of pixel rounding.
         XCTAssertGreaterThanOrEqual(
             panel.frame.minY - centre.maxY, 3.5, "HUD panel margin above the centre: \(panel.frame), centre \(centre)")
-        XCTAssertEqual(element(app, "hud.m2p").value as? String, "—")
+        // NFR-LAT-003/004: the device measures motion-to-photon, shows it, and reports it to Blender.
+        expect(element(app, "hud.m2p"), NSPredicate(format: "value MATCHES %@", "^[1-9][0-9]* ms$"), timeout: 10)
+        let latency = element(app, "hud.latency")
+        let ms = "[0-9]+(\\.[0-9])?/[0-9]+(\\.[0-9])?/[0-9]+(\\.[0-9])?"
+        expect(
+            latency,
+            NSPredicate(
+                format: "value MATCHES %@",
+                "^p50/p95/p99 ms · Receive \(ms) · Decode \(ms); Display \(ms) · M2P [0-9]+/[0-9]+/[0-9]+$"),
+            timeout: 10)
+        XCTAssertFalse(
+            latency.frame.intersects(centre), "latency overlay covers picture centre: \(latency.frame), \(centre)")
+        if hostDirectory != nil {
+            let host = waitForHost("the device's M2P p95") { state in
+                let m2p = self.videoReport(state)["m2p_p95_ms"] as? Int ?? 0
+                return m2p > 0 && m2p < 65_535
+            }
+            let value = element(app, "hud.m2p").value as? String ?? ""
+            print("VCAM_M2P_UI hud.m2p=\(value) host m2p_p95_ms=\(videoReport(host)["m2p_p95_ms"] ?? "none")")
+        }
         XCTAssertEqual(element(app, "hud.recording").value as? String, "Recording: not available (T3)")
         // Frames keep coming: no stall once they arrive (FR-VF-005).
         sleep(2)
@@ -157,6 +177,7 @@ final class SightlineUITests: XCTestCase {
         // accessibility tree.
         let packets = scrollTo(app, "settings.packetsSent")
         XCTAssertFalse(text(of: packets).hasSuffix(" 0"), "packets sent: \(text(of: packets))")
+        XCTAssertEqual(scrollTo(app, "settings.latencyOverlay").value as? String, "1", "overlay on (launch argument)")
         let controlStatus = scrollTo(app, "settings.controlStatus")
         expect(
             controlStatus,
@@ -785,6 +806,10 @@ final class SightlineUITests: XCTestCase {
     private func camera(_ state: [String: Any]) -> [String: Any] { state["camera"] as? [String: Any] ?? [:] }
     private func controls(_ state: [String: Any]) -> [String: Any] { state["controls"] as? [String: Any] ?? [:] }
     private func session(_ state: [String: Any]) -> [String: Any] { state["session"] as? [String: Any] ?? [:] }
+    /// The newest `VIDEO_REPORT` the host's adaptive quality took (`video.adapt.report`).
+    private func videoReport(_ state: [String: Any]) -> [String: Any] {
+        ((state["video"] as? [String: Any])?["adapt"] as? [String: Any])?["report"] as? [String: Any] ?? [:]
+    }
 
     /// Polls `state.json` (rewritten at 5 Hz) until `check` accepts it; the last state either way.
     @discardableResult

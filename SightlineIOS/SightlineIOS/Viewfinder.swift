@@ -4,6 +4,7 @@ import Foundation
 import ImageIO
 import Metal
 import MetalKit
+import QuartzCore
 import SwiftUI
 import Synchronization
 import UIKit
@@ -16,17 +17,27 @@ import UIKit
 nonisolated final class ViewfinderFrame: @unchecked Sendable {
     let info: VCPVideoFrameInfo
     let texture: any MTLTexture
+    /// CLOCK_UPTIME_RAW when the frame was handed to the decoder and when its texture was ready.
+    let submittedNs: UInt64
+    let decodedNs: UInt64
     private let pixelBuffer: CVPixelBuffer
     private let metalTexture: CVMetalTexture
 
     fileprivate init(
         info: VCPVideoFrameInfo, texture: any MTLTexture, pixelBuffer: CVPixelBuffer,
-        metalTexture: CVMetalTexture
+        metalTexture: CVMetalTexture, submittedNs: UInt64
     ) {
         self.info = info
         self.texture = texture
         self.pixelBuffer = pixelBuffer
         self.metalTexture = metalTexture
+        self.submittedNs = submittedNs
+        decodedNs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+    }
+
+    /// The frame's latency record before it is on screen.
+    var unpresented: PresentedFrame {
+        PresentedFrame(poseSeq: info.poseSeq, submittedNs: submittedNs, decodedNs: decodedNs, presentedNs: nil)
     }
 }
 
@@ -49,7 +60,7 @@ nonisolated final class ViewfinderDecoder: @unchecked Sendable {
     }
 
     private struct Slot {
-        var pending: (info: VCPVideoFrameInfo, jpeg: Data)?
+        var pending: (info: VCPVideoFrameInfo, jpeg: Data, submittedNs: UInt64)?
         var draining = false
         var stats = Stats()
     }
@@ -82,9 +93,10 @@ nonisolated final class ViewfinderDecoder: @unchecked Sendable {
 
     /// Hands over a complete encoded frame. Returns at once; any frame still waiting is dropped.
     func submit(_ info: VCPVideoFrameInfo, jpeg: Data) {
+        let submitted = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         let start = slot.withLock { slot in
             if slot.pending != nil { slot.stats.superseded += 1 }
-            slot.pending = (info, jpeg)
+            slot.pending = (info, jpeg, submitted)
             defer { slot.draining = true }
             return !slot.draining
         }
@@ -101,7 +113,7 @@ nonisolated final class ViewfinderDecoder: @unchecked Sendable {
                 return slot.pending
             }
             guard let next else { return }
-            let frame = decode(next.info, next.jpeg)
+            let frame = decode(next.info, next.jpeg, submittedNs: next.submittedNs)
             slot.withLock { slot in
                 if frame == nil { slot.stats.failed += 1 } else { slot.stats.decoded += 1 }
             }
@@ -109,7 +121,7 @@ nonisolated final class ViewfinderDecoder: @unchecked Sendable {
         }
     }
 
-    private func decode(_ info: VCPVideoFrameInfo, _ jpeg: Data) -> ViewfinderFrame? {
+    private func decode(_ info: VCPVideoFrameInfo, _ jpeg: Data, submittedNs: UInt64) -> ViewfinderFrame? {
         guard let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
             let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
             let width = properties[kCGImagePropertyPixelWidth] as? Int,
@@ -142,7 +154,8 @@ nonisolated final class ViewfinderDecoder: @unchecked Sendable {
                 == kCVReturnSuccess,
             let metalTexture, let texture = CVMetalTextureGetTexture(metalTexture)
         else { return nil }
-        return ViewfinderFrame(info: info, texture: texture, pixelBuffer: buffer, metalTexture: metalTexture)
+        return ViewfinderFrame(
+            info: info, texture: texture, pixelBuffer: buffer, metalTexture: metalTexture, submittedNs: submittedNs)
     }
 
     /// A buffer from the pool for this size; a new size (the host changed resolution) replaces it.
@@ -203,6 +216,9 @@ final class ViewfinderRenderer: NSObject, MTKViewDelegate {
     private weak var view: MTKView?
     /// Runs on the main thread after a new frame is committed to the display.
     var onShown: ((ViewfinderFrame) -> Void)?
+    /// Hears when each new frame reached the screen (`DisplayClock.source`), on a Metal thread:
+    /// the display end of motion-to-photon (NFR-LAT-003).
+    var onPresented: (@Sendable (PresentedFrame) -> Void)?
     private weak var lastShownFrame: ViewfinderFrame?
 
     /// A centred quad whose half-extent in normalized device coordinates is `scale`
@@ -281,11 +297,28 @@ final class ViewfinderRenderer: NSObject, MTKViewDelegate {
             let commandBuffer = commandQueue.makeCommandBuffer()
         else { return }
         encode(frame, pass: pass, drawableSize: view.drawableSize, into: commandBuffer)
+        let newFrame = frame.flatMap { $0 !== lastShownFrame ? $0 : nil }
+        if let newFrame, let onPresented {
+            let unpresented = newFrame.unpresented
+            #if targetEnvironment(simulator)
+            // The simulator SDK's MTLDrawable has no presented handler or `presentedTime`: the
+            // frame counts as shown when the GPU finished drawing it (`DisplayClock.source`).
+            commandBuffer.addCompletedHandler { buffer in
+                let end = buffer.gpuEndTime > 0 ? buffer.gpuEndTime : CACurrentMediaTime()
+                onPresented(unpresented.presented(atMediaTime: end))
+            }
+            #else
+            // Registered before `present`, so the handler can't miss the presentation.
+            drawable.addPresentedHandler { drawable in
+                onPresented(unpresented.presented(atMediaTime: drawable.presentedTime))
+            }
+            #endif
+        }
         commandBuffer.present(drawable)
         commandBuffer.commit()
-        if let frame, frame !== lastShownFrame {
-            lastShownFrame = frame
-            onShown?(frame)
+        if let newFrame {
+            lastShownFrame = newFrame
+            onShown?(newFrame)
         }
     }
 

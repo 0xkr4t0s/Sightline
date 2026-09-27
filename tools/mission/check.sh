@@ -63,7 +63,8 @@ suite_ios() {
     SightlineIOS/scripts/coverage_check.sh "${bundle}/debug.xcresult" 75 | tail -1 &&
     xcodebuild test -configuration Release -project SightlineIOS/SightlineIOS.xcodeproj -scheme SightlineIOS \
       -destination "${IOS_DESTINATION}" -resultBundlePath "${bundle}/release" \
-      -only-testing:SightlineIOSTests/TrackingPipelineTests/testPoseSendPathAllocatesNothing
+      -only-testing:SightlineIOSTests/TrackingPipelineTests/testPoseSendPathAllocatesNothing \
+      -only-testing:SightlineIOSTests/DeviceLatencyTests/testRecordingPosesAndFramesAllocatesNothing
 }
 
 suites=("$@")
