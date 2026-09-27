@@ -141,6 +141,50 @@ final class GameControllerInputTests: XCTestCase {
         XCTAssertEqual(
             GameControllerEvent.sticks(id: 3, of: pad), .sticks(id: 3, left: [0.5, -0.25], right: [-1, 0.75]))
     }
+
+    /// The `GCController` notifications become connect, stick and disconnect events while started,
+    /// and nothing after stop.
+    @MainActor
+    func testControllerNotificationsBecomeEvents() throws {
+        let early = GCController.withMicroGamepad()
+        let source = GCControllerNotificationSource(center: NotificationCenter(), connectedNow: { [early] })
+        var events: [GameControllerEvent] = []
+        source.onEvent = { events.append($0) }
+        let controller = GCController.withExtendedGamepad()
+        let pad = try XCTUnwrap(controller.extendedGamepad)
+        let id = GCControllerNotificationSource.id(of: controller)
+
+        source.center.post(name: .GCControllerDidConnect, object: controller)
+        XCTAssertEqual(events, [], "not started")
+        source.start()
+        let earlyID = GCControllerNotificationSource.id(of: early)
+        let earlyName = early.vendorName ?? "Game controller"
+        XCTAssertEqual(events, [.connected(id: earlyID, name: earlyName)], "one connected before start counts")
+        events = []
+        source.start()
+        XCTAssertEqual(events, [], "a second start changes nothing")
+        source.center.post(name: .GCControllerDidConnect, object: controller)
+        XCTAssertEqual(events, [.connected(id: id, name: "ExtendedGamepad")], "one observer after two starts")
+
+        pad.leftThumbstick.setValueForXAxis(0, yAxis: 1)
+        let handler = try XCTUnwrap(pad.valueChangedHandler, "sticks are watched once connected")
+        handler(pad, pad.leftThumbstick)
+        XCTAssertEqual(events.last, .sticks(id: id, left: [0, 1], right: [0, 0]))
+
+        source.center.post(name: .GCControllerDidDisconnect, object: controller)
+        XCTAssertEqual(events.last, .disconnected(id: id))
+        XCTAssertNil(pad.valueChangedHandler, "a disconnected pad is no longer watched")
+        source.center.post(name: .GCControllerDidConnect, object: "not a controller")
+        XCTAssertEqual(events.count, 3)
+
+        source.center.post(name: .GCControllerDidConnect, object: controller)
+        XCTAssertNotNil(pad.valueChangedHandler)
+        source.stop()
+        XCTAssertNil(pad.valueChangedHandler, "stop lets go of the pads")
+        source.center.post(name: .GCControllerDidConnect, object: controller)
+        source.center.post(name: .GCControllerDidDisconnect, object: controller)
+        XCTAssertEqual(events.count, 4, "nothing after stop")
+    }
 }
 
 @MainActor

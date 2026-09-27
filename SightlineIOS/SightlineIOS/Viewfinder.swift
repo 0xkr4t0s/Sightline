@@ -375,11 +375,18 @@ final class VideoStallWatch {
 /// The viewfinder behind the status screen; plain black where Metal is unavailable.
 struct ViewfinderView: UIViewRepresentable {
     let renderer: ViewfinderRenderer?
+    /// The hardware buttons' capture-event interaction (FR-CTL-008), installed on this view.
+    var captureEvents: CaptureEventSource?
 
     func makeUIView(context: Context) -> UIView {
-        if let renderer { return renderer.makeView() }
-        let view = UIView()
-        view.backgroundColor = .black
+        let view: UIView
+        if let renderer {
+            view = renderer.makeView()
+        } else {
+            view = UIView()
+            view.backgroundColor = .black
+        }
+        captureEvents?.install(on: view)
         return view
     }
 

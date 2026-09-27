@@ -17,6 +17,8 @@ nonisolated enum Log {
     static let video = Logger(subsystem: subsystem, category: "video")
     /// Tap-to-focus, focus marks and racks the operator asks for (FR-CTL-002).
     static let lens = Logger(subsystem: subsystem, category: "lens")
+    /// Hardware buttons and game controllers (FR-CTL-008).
+    static let input = Logger(subsystem: subsystem, category: "input")
     /// Simulator QA mode (launch arguments), compiled only into simulator debug builds.
     static let qa = Logger(subsystem: subsystem, category: "qa")
 }

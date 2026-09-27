@@ -62,6 +62,79 @@ protocol GameControllerSource: AnyObject {
     func stop()
 }
 
+/// `GCController` connect and disconnect notifications, and the thumbsticks of each connected
+/// extended gamepad, on the main actor.
+@MainActor
+final class GCControllerNotificationSource: GameControllerSource {
+    var onEvent: ((GameControllerEvent) -> Void)?
+    let center: NotificationCenter
+    /// The controllers already connected when `start` is called.
+    private let connectedNow: () -> [GCController]
+    private var observers: [any NSObjectProtocol] = []
+    /// The controllers whose sticks are watched, by id.
+    private var watched: [Int: GCController] = [:]
+
+    init(center: NotificationCenter = .default, connectedNow: @escaping () -> [GCController] = GCController.controllers)
+    {
+        self.center = center
+        self.connectedNow = connectedNow
+    }
+
+    /// Stable while the controller object lives, which is while it is connected.
+    static func id(of controller: GCController) -> Int {
+        ObjectIdentifier(controller).hashValue
+    }
+
+    func start() {
+        guard observers.isEmpty else { return }
+        observers = [
+            observe(.GCControllerDidConnect) { $0.connected($1) },
+            observe(.GCControllerDidDisconnect) { $0.disconnected($1) },
+        ]
+        connectedNow().forEach(connected)
+    }
+
+    func stop() {
+        observers.forEach(center.removeObserver)
+        observers = []
+        for controller in watched.values {
+            controller.extendedGamepad?.valueChangedHandler = nil
+        }
+        watched = [:]
+    }
+
+    private func observe(
+        _ name: Notification.Name, _ action: @escaping @MainActor (GCControllerNotificationSource, GCController) -> Void
+    ) -> any NSObjectProtocol {
+        center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+            // Delivered on the main queue, so the controller never leaves the main thread.
+            nonisolated(unsafe) let controller = note.object as? GCController
+            MainActor.assumeIsolated {
+                guard let self, let controller else { return }
+                action(self, controller)
+            }
+        }
+    }
+
+    private func connected(_ controller: GCController) {
+        let id = Self.id(of: controller)
+        watched[id] = controller
+        onEvent?(.connected(id: id, name: controller.vendorName ?? "Game controller"))
+        guard let pad = controller.extendedGamepad else { return }
+        controller.handlerQueue = .main
+        pad.valueChangedHandler = { [weak self] pad, _ in
+            MainActor.assumeIsolated { self?.onEvent?(.sticks(id: id, of: pad)) }
+        }
+    }
+
+    private func disconnected(_ controller: GCController) {
+        let id = Self.id(of: controller)
+        controller.extendedGamepad?.valueChangedHandler = nil
+        watched[id] = nil
+        onEvent?(.disconnected(id: id))
+    }
+}
+
 /// The connected controllers and the current locomotion intent.
 nonisolated struct GameControllerState: Equatable, Sendable {
     /// Connected controllers by id, with their names.

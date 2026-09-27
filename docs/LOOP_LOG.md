@@ -2302,3 +2302,44 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
   - `.rackTo` picks the farther mark: `HardwareInputTests.swift:153`, `:99`, `:136`.
 - **QA:** nothing on screen changed (the seams aren't installed yet), so no simulator smoke; the wireup feature adds the injection hook and the UI test.
 - **Not verified, needs owner:** whether an ARKit-only app receives capture events at all (the header: "The system sends capture events only to apps that actively use the camera"), and every hardware press (volume, Camera Control click and light press, game controller) on a device. **Open for the owner:** on a device the Camera Control click can't be told from volume down, so it would rack to A rather than show the record message. **Blocked:** none.
+
+## 2026-09-28 — Mission — 2.5 (FR-CTL-008) — done in the simulator (device delivery needs owner)
+
+- **Files:** `SightlineIOS/SightlineIOS/HardwareInputController.swift` (new, in the test target's `membershipExceptions`), `SimulatorQAInput.swift` (new, simulator Debug only), `GameControllerInput.swift` (`GCControllerNotificationSource`), `TrackingSessionController.swift`, `ContentView.swift`, `Viewfinder.swift`, `Log.swift` (`input` category), `SightlineIOSTests/HardwareInputControllerTests.swift` (new), `GameControllerInputTests.swift`, `SightlineIOSUITests/SightlineUITests.swift`, `SightlineIOS.xcodeproj/project.pbxproj`, `tools/mission/qa_ios.sh` (`input`), `.factory/skills/sightline-qa-ios/SKILL.md`, `IMPLEMENTATION_PROGRESS.md`, this log.
+- **What:** the 2.5 seams wired into the app.
+  - `CaptureEventSource` wraps `AVCaptureEventInteraction(primary:secondary:)`. It is created, installed and called on the main actor, starts disabled, and is installed on the viewfinder's UIView (`ViewfinderView.makeUIView`).
+  - `InputGate`/`HardwareInputController`: the buttons belong to the app only while a run tracks and the Settings sheet is closed. Otherwise every source gets `isEnabled = false`, which gives volume and the camera launch back to the system. Events that arrive while disabled are dropped, not queued. The Settings sheet is now bound to `TrackingSessionController.settingsShown`, so the controller sees it.
+  - Presses go through `InputMapper`: light press → tap at (0.5, 0.5); volume down/up → rack to A/B; full press → "Recording not available (T3)"; an unset mark → "Set focus mark A first". Messages show for 3 s in `hud.notice`, under the status strip and clear of the picture centre.
+  - `GCControllerNotificationSource` observes `GCControllerDidConnect`/`DidDisconnect` on the main queue and each extended gamepad's sticks. The monitor starts with the app and logs only the connected count; the intent still drives nothing.
+  - Simulator-Debug QA hook: Darwin notifications `kr8t0s.Sightline.qa.input.<fullPress|lightPress|volumeDown|volumeUp>` (`notify_register_dispatch` on the main queue) become one began/ended press through the same gate. UI tests post them with `notify_post`; `tools/mission/qa_ios.sh input <button>` posts one with `simctl spawn … notifyutil -p`. This is how the full press and the light press are reached, since neither has a distinct hardware source (inputs-seams finding).
+- **Checks (milestone gate):** `tools/mission/setup.sh`: exit 0. `tools/mission/check.sh rust python blender ios coverage`: `PASS rust (22 s)`, `PASS python (1 s)`, `PASS blender (98 s)`, `PASS ios (149 s)`, `PASS coverage (26 s)` (gate 300 s). iOS: `SightlineIOS.app line coverage: 81.8% (5609/6860 lines); minimum 75%`; Rust TOTAL line coverage 85.01 %. No compiler warnings in the changed files (the only three are the existing ones in `ThermalStateProviderTests.swift` and `VCPSessionClientTests.swift`). `python3 tools/check_todos.py`: `139 source file(s), 0 marker(s)`. `xcrun swift-format lint --strict`: exit 0.
+- **UI tests:** `tools/mission/qa_ios.sh uitest` with a fresh host and pairing: `Executed 8 tests, with 1 test skipped and 0 failures`, `PASS uitest` (the skip is `testLensStateSurvivesAHostRestart`, which needs `SIGHTLINE_QA_RESTART=1`). New `testHardwareButtonsActOnTheHost` (40 s):
+  - record: `hud.notice` = "Recording not available (T3)"; host `state_seq`/`tap_seq`/`rack_seq` unchanged.
+  - light press: `tap_seq` +1 with `tap_u`/`tap_v` 0.5; Blender's `focus_distance` = the centre ray's hit (`INPUT_LIGHT_PRESS focus 1.30 m on QA Totem 2`, the same as a manual centre tap); `hud.lens` shows it.
+  - volume up, then down: new `rack_seq` each, `rack_target` 2 then 1, a smooth one-way rack of 11 samples to B (4.1 m) and back to A (1.3 m).
+  - Settings open: volume up and full press → no notice, `state_seq`/`tap_seq`/`rack_seq` unchanged, still after closing; then the same press racks to B and the notice shows again.
+- **Mutation proof:** 9 of 11 caught; the 2 survivors were redundant code, now removed.
+  - Unit (`HardwareInputControllerTests`, `GameControllerInputTests`):
+    - gate ignores Settings: `testEventsWhileDisabledAreDropped` (full press delivered with Settings open).
+    - controller forwards while disabled: same test (volume down delivered while not tracking).
+    - update leaves sources alone: `testEverySourceIsDisabledWhenTheAppCantAct`.
+    - interaction starts enabled: `testTheCaptureEventInteractionFollowsTheGate` ("the system keeps the buttons until the app can act").
+    - install does nothing: `testTheInteractionIsInstalledOnceOnTheView` (0 ≠ 1).
+    - stop keeps pad handlers: `testControllerNotificationsBecomeEvents` ("stop lets go of the pads").
+    - start registers twice: same test (duplicate connect events).
+    - Survived: an explicit `removeInteraction` from the old view, and a guard against installing twice on the same view. UIKit already does both (`addInteraction` moves the interaction and doesn't duplicate it), so both lines were removed; the test still pins that behaviour.
+  - UI (`testHardwareButtonsActOnTheHost`, rebuilt per mutant):
+    - the app passes `settingsOpen: false`: "no notice with Settings open".
+    - a message sets no notice: "the record notice shows".
+  - Every file was restored identical (SHA-1 checked) and touched.
+- **QA (manual):** `qa_blender.sh start`, pair, `qa_ios.sh launch --motion still`, then `qa_ios.sh input fullPress|lightPress|volumeDown`:
+  - The screenshots show "Recording not available (T3)" and "Set focus mark A first" under the status strip, clear of the picture centre.
+  - Host `tap_seq` 0 → 1 and focus 10.00 → 1.30 m after the light press; nothing changed for the record press or the unset mark.
+  - App log: "Hardware buttons on" at run start, one "Button …" line per press.
+- **VAL-INPUT-009:** the hook is only in `#if targetEnvironment(simulator) && DEBUG` (`SimulatorQAInput.swift:6`, `TrackingSessionController.swift:112`, `:203`). The gate's Release simulator build has 0 `qa.input` and 0 `SightlineQAHost` strings, though it does contain "Recording not available". The Debug `SightlineIOS.debug.dylib` has 1 of each.
+- **Not verified, needs owner:**
+  - Whether an ARKit-only app receives capture events at all. The AVKit header `AVCaptureEventInteraction.h` says: "The system sends capture events only to apps that actively use the camera."
+  - Every hardware press on a device: volume, Action button, Camera Control click and light press, and a game controller's connect and sticks.
+  - That volume keeps its system behaviour while stopped or with Settings open.
+- **Open for the owner:** on a device the Camera Control click arrives as primary, like volume down, so it racks to A instead of showing the record message; the light press has no hardware source.
+- **Blocked:** none.

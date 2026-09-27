@@ -15,6 +15,11 @@
 #   tools/mission/qa_ios.sh logs [LINES]           # tail .mission/logs/qa-ios.log
 #   tools/mission/qa_ios.sh uitest [XCODEBUILD_ARGS...]   # default: -only-testing:SightlineIOSUITests
 #   tools/mission/qa_ios.sh defaults write KEY VALUE | read [KEY] | delete KEY
+#   tools/mission/qa_ios.sh input fullPress|lightPress|volumeDown|volumeUp   # one hardware-button press
+#
+# `input` posts the Darwin notification kr8t0s.Sightline.qa.input.<button> inside the simulator
+# (SightlineIOS/SightlineIOS/SimulatorQAInput.swift). The app treats it as a real press, so it
+# does nothing unless a run is tracking with Settings closed.
 #
 # `launch` takes the host and pairing code from .mission/qa/host.json when there is one (port,
 # pairing_code), installs the latest build, restarts the app, and streams its unified log
@@ -276,9 +281,18 @@ cmd_defaults() {
   esac
 }
 
+cmd_input() {
+  case "${1:-}" in
+    fullPress | lightPress | volumeDown | volumeUp) ;;
+    *) die "usage: input fullPress|lightPress|volumeDown|volumeUp" ;;
+  esac
+  xcrun simctl spawn "$(udid)" notifyutil -p "${BUNDLE_ID}.qa.input.$1"
+  echo "Pressed $1"
+}
+
 sub="${1:-}"
 [ $# -gt 0 ] && shift
 case "${sub}" in
-  build | boot | launch | screenshot | terminate | status | logs | uitest | defaults) "cmd_${sub}" "$@" ;;
-  *) sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  build | boot | launch | screenshot | terminate | status | logs | uitest | defaults | input) "cmd_${sub}" "$@" ;;
+  *) sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

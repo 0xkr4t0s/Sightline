@@ -20,7 +20,6 @@ struct ContentView: View {
     @Bindable var controller: TrackingSessionController
     @State private var chrome = ChromeVisibility(now: .now)
     @State private var now = ContinuousClock.now
-    @State private var showsSettings = false
     @State private var showsLens = false
     @State private var pinchStartMM: Float?
     @State private var focusMark: FocusMark?
@@ -70,6 +69,13 @@ struct ContentView: View {
                             }
                             .offset(x: layout.dataPanel.minX, y: layout.dataPanel.minY)
                             .allowsHitTesting(false)
+                        if let notice = controller.inputNotice {
+                            noticeFlash(notice.text)
+                                .frame(width: proxy.size.width)
+                                .offset(y: layout.statusStrip.maxY + 8)
+                                .allowsHitTesting(false)
+                                .transition(.opacity)
+                        }
                         if showsLens && controlsShown {
                             LensPanel(
                                 shown: controller.shownLens, lens: controller.controls.lens,
@@ -95,6 +101,7 @@ struct ContentView: View {
                     }
                     .animation(.easeInOut(duration: 0.25), value: controlsShown)
                     .animation(.easeInOut(duration: 0.25), value: showsLens)
+                    .animation(.easeInOut(duration: 0.2), value: controller.inputNotice)
                 }
             }
             .preferredColorScheme(.dark)
@@ -111,7 +118,14 @@ struct ContentView: View {
             .onChange(of: controller.isTracking) {
                 interact()
             }
-            .sheet(isPresented: $showsSettings, onDismiss: interact) {
+            .task(id: controller.inputNotice?.id) {
+                guard let notice = controller.inputNotice else { return }
+                try? await Task.sleep(for: .seconds(3))
+                controller.clearNotice(notice)
+            }
+            // The controller knows when Settings covers the viewfinder: the hardware buttons are
+            // off then (FR-CTL-008).
+            .sheet(isPresented: $controller.settingsShown, onDismiss: interact) {
                 SettingsView(controller: controller)
             }
     }
@@ -119,7 +133,7 @@ struct ContentView: View {
     /// Same full-screen space as the Metal view, so the guides and taps line up with the frame.
     private var viewfinder: some View {
         ZStack {
-            ViewfinderView(renderer: controller.viewfinder)
+            ViewfinderView(renderer: controller.viewfinder, captureEvents: controller.captureEvents)
             FramingOverlayView(
                 settings: controller.framing, frameSize: controller.videoFrameSize,
                 horizonAngle: controller.horizonAngle)
@@ -252,6 +266,20 @@ struct ContentView: View {
         .accessibilityIdentifier("video.stalled")
     }
 
+    /// A hardware button's message, e.g. "Recording not available (T3)", under the status strip;
+    /// taps go through to the viewfinder.
+    private func noticeFlash(_ text: String) -> some View {
+        Text(text)
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(Color.black.opacity(0.75), in: Capsule())
+            .accessibilityLabel(text)
+            .accessibilityValue(text)
+            .accessibilityIdentifier("hud.notice")
+    }
+
     private var controlRail: some View {
         VStack(spacing: 20) {
             let running = controller.isTracking || controller.isStarting
@@ -273,7 +301,7 @@ struct ContentView: View {
             }
             .accessibilityIdentifier("control.lens")
             railButton("Settings", systemImage: "gearshape") {
-                showsSettings = true
+                controller.settingsShown = true
             }
             .accessibilityIdentifier("control.settings")
         }
