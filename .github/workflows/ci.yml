@@ -306,9 +306,10 @@ jobs:
         run: |
           # addon_apply: matrix_world of the driven camera at every scripted keypose.
           # addon_lens: device lens controls and sensor presets on the camera, STATUS lens (task 2.4).
+          # addon_focus: tap-to-focus ray cast and the host-run A/B rack (task 2.4).
           # pose_leg_latency: the NFR-LAT-001 report over loopback (task 1.5.1).
           # video_native: JPEG VIDEO_FRAGMENTs from vcam_native reach the fake iPhone (task 2.2c2a).
-          for t in addon_apply addon_lens addon_panel addon_robust pose_leg_latency video_native; do
+          for t in addon_apply addon_lens addon_focus addon_panel addon_robust pose_leg_latency video_native; do
             echo "::group::${t}"
             "${BLENDER}" --background --factory-startup --python-exit-code 1 \
               --python "tests/blender/${t}.py"

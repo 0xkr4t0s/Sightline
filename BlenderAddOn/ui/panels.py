@@ -5,7 +5,8 @@ counters, tracking state and hold, camera selection, the camera's lens with the 
 and origin/scale/lock settings.
 
 The Lens section shows the target camera's values as Blender has them (whether the device or
-the user set them), and the FOV and 35 mm equivalent the device shows for them.
+the user set them), and the FOV and 35 mm equivalent the device shows for them, then the
+device's last tap-to-focus (including a miss) and a running A/B rack (FR-CTL-002).
 
 Scale and locks come from the iPhone (`CONTROL_STATE` is the device's idempotent state,
 FR-CTL-009), so they are shown, not edited, here. Set/Clear origin act on the host-side zero.
@@ -21,6 +22,7 @@ from ..core.apply import camera_lens, camera_status, find_origin
 from ..core.render import thermal_stream_settings
 from ..core.status import (
     code_label,
+    focus_labels,
     hold_label,
     lens_labels,
     locks_label,
@@ -77,6 +79,9 @@ class VCAM_PT_main_panel(bpy.types.Panel):
         if camera is not None:
             for line in lens_labels(*camera_lens(context.scene, camera)):
                 col.label(text=line)
+        applier = session.applier()
+        for line in focus_labels(applier.last_tap, applier.rack):
+            col.label(text=line)
 
         if live is None:
             op = layout.operator("vcam.session_start", text="Start Session", icon='PLAY')

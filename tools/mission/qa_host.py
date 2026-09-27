@@ -25,8 +25,9 @@ Files (under $MISSION_DIR, default .mission):
   qa/host.json    written at start and whenever it changes: state (running/stopped/failed), port,
                   bind, pairing_code (current code or null), pid, blender_version, blend,
                   scene (qa/factory/blend), log, started_at.
-  qa/state.json   rewritten at ~5 Hz: session and device, camera and VCam_Origin transforms,
-                  controls, latency, video stats, stream and render settings, the N-panel's labels
+  qa/state.json   rewritten at ~5 Hz: poll timings, session and device, camera and VCam_Origin
+                  transforms, controls, tap/rack focus, latency, video stats, stream and render
+                  settings, the N-panel's labels
                   and buttons (drawn by the real panel), and the errors the loop captured.
   qa/cmd/*.json   command queue: one JSON object per file, run in name order on the main thread.
                   The result goes to qa/cmd/<name>.result.json and the command file is removed.
@@ -380,6 +381,9 @@ class Host:
         self.started = time.monotonic()
         self.errors = deque(maxlen=MAX_ERRORS)
         self.ticks = 0
+        # Duration of the add-on's main-thread poll: the last one, and the longest since the
+        # previous state.json write.
+        self.poll_ms_last = self.poll_ms_max = 0.0
         self.host_info: dict = {}
         self.pairing_code = None
         self.seen_errors = (None, None)
@@ -477,6 +481,8 @@ class Host:
                 session._poll()  # the add-on's timer body: events, pose apply, stream render
             except Exception as e:  # noqa: BLE001 - keep hosting; the error is in state.json
                 self.error("poll", e)
+            poll_ms = (time.monotonic() - tick) * 1e3
+            self.poll_ms_last, self.poll_ms_max = poll_ms, max(self.poll_ms_max, poll_ms)
             self.ticks += 1
             self._note_session_errors()
             if tick >= next_cmd:
@@ -526,6 +532,7 @@ class Host:
             write_json(STATE_FILE, self.snapshot())
         except Exception as e:  # noqa: BLE001
             self.error("state", e)
+        self.poll_ms_max = 0.0
 
     def snapshot(self) -> dict:
         s, apply, status = self.session, self.apply, self.status
@@ -549,11 +556,13 @@ class Host:
             return data
 
         uptime = time.monotonic() - self.started
+        rack = applier.rack
         return {
             "time": now_iso(),
             "uptime_s": round(uptime, 3),
             "ticks": self.ticks,
             "poll_hz": round(self.ticks / uptime, 1) if uptime > 0 else None,
+            "poll_ms": {"last": round(self.poll_ms_last, 3), "max_since_last_state": round(self.poll_ms_max, 3)},
             "blend": self.rel(bpy.data.filepath),
             "session": {
                 "running": live is not None,
@@ -613,6 +622,19 @@ class Host:
                 "thermal_state": control["thermal_state"] if control is not None else None,
                 # The T2 lens keys of the newest native CONTROL_STATE (None when absent).
                 **{key: control.get(key) if control is not None else None for key in LENS_CONTROL_KEYS},
+            },
+            # FR-CTL-002 on the host: the last tap's (distance, object) (None, None after a miss)
+            # and the running rack.
+            "focus": {
+                "last_tap": applier.last_tap,
+                "rack": None
+                if rack is None
+                else {
+                    "target": "AB"[rack.target - 1],
+                    "start_m": rack.start_m,
+                    "end_m": rack.end_m,
+                    "duration_s": rack.duration_s,
+                },
             },
             "latency": {
                 "session_id": log.session_id,

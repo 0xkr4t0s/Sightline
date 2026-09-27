@@ -16,6 +16,14 @@ and DoF requests (merged in `rig.Controls` / `lens.LensControls`) are written to
 camera's data in the same tick. A request that arrives while there is no camera waits for one.
 The scene's sensor preset is written when it or the target camera changes (`properties/`).
 
+Tap-to-focus and the A/B rack (FR-CTL-002; maths and request rules in `core/lens.py`) run in
+the same tick, before this tick's pose is applied, so a tap ray-casts from the pose the
+streamed picture was drawn with. A hit sets `dof.focus_distance` and never `use_dof` (that
+follows the device's DoF flag); a miss keeps the distance and is logged and shown in the
+N-panel. A rack writes one eased value per tick and never blocks. Besides a manual focus
+request or a tap, any other change of the focus distance (an edit in Blender, another target
+camera) cancels it, so the rack doesn't fight the user.
+
 STATUS reports what the host actually applied: the pose `seq`, the merged `state_seq` as
 `control_ack`, the camera, and the camera's lens as Blender has it, including edits made in
 Blender (`core/lens.py`). It goes out at once on a camera/error/ack/lens change, and otherwise
@@ -28,8 +36,11 @@ pose isn't normal, the camera shows the session's last normal pose (`rig.PoseHol
 
 from __future__ import annotations
 
-from .lens import preset_sensor, render_aspect, status_lens
+from .lens import FocusRack, axial_distance, clamp_distance, preset_sensor, render_aspect, status_lens, tap_ray
+from .log import get_logger
 from .rig import Controls, PoseHold, local_pose, zero_from_pose
+
+_log = get_logger(__name__)
 
 STATUS_INTERVAL = 0.5
 ERROR_NONE = 0
@@ -112,6 +123,30 @@ def apply_lens(camera, changes) -> dict:
             setattr(owner, name, value)
             written[key] = value
     return written
+
+
+def tap_hit(scene, camera, u: float, v: float):
+    """Ray-casts through (u, v) of the camera's picture: (distance along the view axis, object
+    name), or None if nothing is hit between the clip planes. Main thread only.
+
+    `view_frame` has the scene render's aspect, so (u, v) of the streamed picture map onto it
+    only while the stream has that aspect too (LNS-003).
+    """
+    import bpy
+    from mathutils import Vector
+
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    world = camera.evaluated_get(depsgraph).matrix_world.normalized()  # the view ignores scale
+    data = camera.data
+    corners = [tuple(c) for c in data.view_frame(scene=scene)]
+    start, direction, length = tap_ray(corners, u, v, data.clip_start, data.clip_end, data.type == 'ORTHO')
+    rotation = world.to_3x3()
+    hit, location, _normal, _index, obj, _matrix = scene.ray_cast(
+        depsgraph, world @ Vector(start), rotation @ Vector(direction), distance=length
+    )
+    if not hit:
+        return None
+    return axial_distance(world.translation, rotation @ Vector((0.0, 0.0, -1.0)), location), obj.name
 
 
 def apply_sensor_preset(scene) -> bool:
@@ -204,6 +239,11 @@ class Applier:
         self._force = False
         self._published: tuple | None = None
         self._published_at = float("-inf")
+        # FR-CTL-002: the running rack, the focus distance it last wrote (as Blender stored it),
+        # and the last tap's (distance, object name), both None after a miss.
+        self.rack: FocusRack | None = None
+        self._rack_focus: float | None = None
+        self.last_tap: tuple[float | None, str | None] | None = None
 
     def request_set_origin(self) -> None:
         """Set origin from Blender (FR-TRK-003): re-zero at the pose applied on the next tick."""
@@ -213,6 +253,58 @@ class Applier:
         """Apply the current pose again on the next tick (after the zero or the hold option changed)."""
         self._force = True
 
+    def _lens_tick(self, scene, camera, now: float) -> None:
+        """Writes the device's lens requests, carries out a new tap, then starts or steps a rack."""
+        lens = self.controls.lens
+        if lens.waiting():
+            changes = lens.take()
+            if "focus_distance_m" in changes:
+                self._cancel_rack("manual focus")
+            if changes:
+                apply_lens(camera, changes)
+            tap = lens.take_tap()
+            if tap is not None:
+                self._cancel_rack("tap")
+                self._tap(scene, camera, *tap)
+            rack = lens.take_rack()
+            if rack is not None:
+                target, mark, duration = rack
+                self.rack = FocusRack(target, camera.data.dof.focus_distance, mark, duration, now)
+                self._rack_focus = None
+                _log.info(
+                    "rack to %s: %.3f -> %.3f m over %.0f ms", "AB"[target - 1], self.rack.start_m, mark, duration * 1e3
+                )
+        if self.rack is not None:
+            self._step_rack(camera, now)
+
+    def _tap(self, scene, camera, u: float, v: float) -> None:
+        dof = camera.data.dof
+        hit = tap_hit(scene, camera, u, v)
+        if hit is None:
+            self.last_tap = (None, None)
+            _log.info("tap focus u=%.3f v=%.3f: nothing hit, focus kept at %.3f m", u, v, dof.focus_distance)
+            return
+        distance, name = hit
+        dof.focus_distance = clamp_distance(distance)
+        self.last_tap = (dof.focus_distance, name)
+        _log.info("tap focus u=%.3f v=%.3f: hit %r, focus %.3f m", u, v, name, dof.focus_distance)
+
+    def _step_rack(self, camera, now: float) -> None:
+        rack, dof = self.rack, camera.data.dof
+        if self._rack_focus is not None and dof.focus_distance != self._rack_focus:
+            self._cancel_rack("focus changed in Blender")
+            return
+        dof.focus_distance = rack.value(now)
+        self._rack_focus = dof.focus_distance
+        if rack.finished(now):
+            _log.info("rack to %s done at %.3f m", "AB"[rack.target - 1], dof.focus_distance)
+            self.rack = self._rack_focus = None
+
+    def _cancel_rack(self, reason: str) -> None:
+        if self.rack is not None:
+            _log.info("rack to %s cancelled: %s", "AB"[self.rack.target - 1], reason)
+        self.rack = self._rack_focus = None
+
     def tick(self, session, session_id: int | None, scene, now: float):
         """Handles the newest pose if due; returns it (applied or held against), else None."""
         if session_id != self.session_id:  # a new session restarts every sequence number
@@ -221,8 +313,8 @@ class Applier:
         camera = target_camera(scene)
         changed, set_origin = self.controls.update(session.latest_control()) if session_id else (False, False)
         self._set_origin |= set_origin
-        if camera is not None and self.controls.lens.pending:
-            apply_lens(camera, self.controls.lens.take())
+        if camera is not None:
+            self._lens_tick(scene, camera, now)
         pose = session.latest_pose()
         handled = None
         due = pose is not None and (pose["seq"] != self._seen_seq or changed or self._set_origin or self._force)

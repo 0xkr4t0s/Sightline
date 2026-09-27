@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .lens import effective_fit, fov_and_equivalent
+from .lens import FocusRack, effective_fit, fov_and_equivalent
 from .render import adapted_resolution
 from .rig import LOCK_HEIGHT, LOCK_ROLL, PAN_ONLY
 
@@ -97,6 +97,19 @@ def lens_labels(
         if derived is not None
         else f"FOV: unavailable ({fit} fit)",
     ]
+
+
+def focus_labels(last_tap: tuple[float | None, str | None] | None, rack: FocusRack | None) -> list[str]:
+    """FR-CTL-002: the device's last tap-to-focus (hit or miss) and a running A/B rack."""
+    lines = []
+    if last_tap is not None:
+        distance, name = last_tap
+        lines.append(
+            "Tap focus: nothing hit, focus kept" if distance is None else f"Tap focus: {distance:.2f} m ({name})"
+        )
+    if rack is not None:
+        lines.append(f"Rack to {'AB'[rack.target - 1]}: {rack.end_m:.2f} m over {rack.duration_s:.1f} s")
+    return lines
 
 
 def _level_label(quality: int, resolution_key: str, drop: int) -> str:

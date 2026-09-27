@@ -289,7 +289,8 @@ actual = {
     "aspect": f32(aspect),
 }
 assert lens_fields["applied_lens"] == "1" and reported == actual, (lens_fields, actual)
-assert (actual["lens_mm"], actual["focus_m"], cam.dof.use_dof) == (85.0, 3.0, True), actual
+# The rack to B (8 m, 1200 ms from pose 120) has finished before the run ends (FR-CTL-002).
+assert (actual["lens_mm"], actual["focus_m"], cam.dof.use_dof) == (85.0, 8.0, True), actual
 assert (lens_fields["dof"], lens_fields["sensor_fit"]) == ("1", "0"), lens_fields
 width, lens_mm = actual["sensor_width_mm"], actual["lens_mm"]
 fov = math.degrees(2 * math.atan(width / (2 * lens_mm)))
