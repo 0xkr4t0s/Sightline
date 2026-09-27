@@ -25,7 +25,7 @@ max-complexity = 22
 "tools/gen_testdata.py" = ["N803", "N806", "E741"]
 
 [tool.pytest.ini_options]
-testpaths = ["BlenderAddOn/tests"]
+testpaths = ["BlenderAddOn/tests", "tools/latency"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = ["-p", "no:cacheprovider"]
@@ -62,6 +62,7 @@ files = [
     "tools/check_agents_md.py",
     "tools/check_large_files.py",
     "tools/check_todos.py",
+    "tools/latency/merge_report.py",
     "tools/media/find_loop.py",
     "tools/set_manifest_wheels.py",
     "tools/hooks/privacy_scan.py",
