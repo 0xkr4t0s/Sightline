@@ -1,0 +1,53 @@
+# Dependabot version updates. Security updates are separate and ignore the cooldown.
+# `labels` is left unset on purpose: Dependabot's default labels (`dependencies` plus an
+# ecosystem label) are created automatically, while custom labels that don't exist are dropped.
+# .github/release.yml files PRs with the `dependencies` label under "Dependencies".
+#
+# No pip entry: native/vcam-py/pyproject.toml has no dependencies besides the maturin build
+# backend, and CI pins its Python tools (pytest, maturin) in .github/workflows/ci.yml.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directories:
+      - /native
+      - /native/fuzz
+    schedule:
+      interval: weekly
+      day: monday
+    # New releases wait a week (majors two) before they are proposed.
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: deps
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: deps
+
+  - package-ecosystem: docker
+    directory: /.devcontainer
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: deps

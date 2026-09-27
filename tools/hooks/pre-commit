@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Fast checks on the staged change. Installed with `git config core.hooksPath tools/hooks`.
+# See tools/hooks/README.md. The full suites stay in tools/mission/check.sh and CI.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)" || exit 1
+cd "${ROOT}" || exit 1
+
+NOREPLY="10257520+0xkr4t0s@users.noreply.github.com"
+PY="$(command -v python3 || true)"
+failures=()
+
+say() { printf 'pre-commit: %s\n' "$*"; }
+fail() { failures+=("$1"); }
+# Tools print absolute paths, which contain the user name; show them repo-relative.
+relpaths() {
+  awk -v root="${ROOT}/" '{
+    while ((i = index($0, root)) > 0) $0 = substr($0, 1, i - 1) substr($0, i + length(root))
+    print
+  }'
+}
+
+if [ -z "${PY}" ]; then
+  say "python3 not found; the checks need it" >&2
+  exit 1
+fi
+
+# Staged paths (added, copied, modified, renamed), NUL-safe for paths with spaces.
+staged=()
+while IFS= read -r -d '' f; do staged+=("${f}"); done \
+  < <(git diff --cached --name-only -z --diff-filter=ACMR)
+[ "${#staged[@]}" -eq 0 ] && exit 0
+
+rs=(); py=(); swift=(); docs_changed=0
+for f in "${staged[@]}"; do
+  case "${f}" in
+    legacy/*) continue ;;
+  esac
+  case "${f}" in
+    native/*.rs) rs+=("${f}") ;;
+    *.py) py+=("${f}") ;;
+    *.swift) swift+=("${f}") ;;
+    AGENTS.md | README.md) docs_changed=1 ;;
+  esac
+done
+
+# (a) Large files, measured in the index.
+"${PY}" tools/check_large_files.py --staged --files "${staged[@]}" >/dev/null || fail "large files"
+
+# (b) Privacy: commit identity and the added lines.
+email="$(git config user.email || true)"
+if [ "${email}" != "${NOREPLY}" ]; then
+  say "git config user.email is not the project's noreply address (${NOREPLY})" >&2
+  fail "author email"
+fi
+"${PY}" tools/hooks/privacy_scan.py --staged || fail "privacy"
+
+# (c) Rust formatting (whole workspace; cargo fmt is fast).
+if [ "${#rs[@]}" -gt 0 ]; then
+  if command -v cargo >/dev/null 2>&1; then
+    cargo fmt --manifest-path native/Cargo.toml --all --check 2>&1 | relpaths
+    [ "${PIPESTATUS[0]}" -eq 0 ] || fail "cargo fmt"
+  else
+    say "cargo not found, skipping cargo fmt --check"
+  fi
+fi
+
+# (d) Python lint and format, when ruff is available.
+if [ "${#py[@]}" -gt 0 ]; then
+  ruff=""
+  if [ -x .venv.nosync/bin/ruff ]; then ruff=".venv.nosync/bin/ruff"
+  elif command -v ruff >/dev/null 2>&1; then ruff="$(command -v ruff)"
+  fi
+  if [ -n "${ruff}" ]; then
+    "${ruff}" check --quiet "${py[@]}" 2>&1 | relpaths
+    [ "${PIPESTATUS[0]}" -eq 0 ] || fail "ruff check"
+    "${ruff}" format --check --quiet "${py[@]}" 2>&1 | relpaths
+    [ "${PIPESTATUS[0]}" -eq 0 ] || fail "ruff format"
+  else
+    say "ruff not found (.venv.nosync/bin or PATH), skipping Python lint"
+  fi
+fi
+
+# (e) Swift lint, when the repo has a .swift-format config and the tool is available.
+if [ "${#swift[@]}" -gt 0 ] && [ -f .swift-format ]; then
+  xcode="/Applications/Xcode-27.0.0.app/Contents/Developer"
+  if [ -z "${DEVELOPER_DIR:-}" ] && [ -d "${xcode}" ]; then export DEVELOPER_DIR="${xcode}"; fi
+  if command -v xcrun >/dev/null 2>&1 && xcrun --find swift-format >/dev/null 2>&1; then
+    xcrun swift-format lint --strict --configuration .swift-format "${swift[@]}" 2>&1 | relpaths
+    [ "${PIPESTATUS[0]}" -eq 0 ] || fail "swift-format"
+  else
+    say "swift-format not found, skipping Swift lint"
+  fi
+fi
+
+# (f) Tech-debt markers must be linked to an issue or plan task.
+"${PY}" tools/check_todos.py --quiet --files "${staged[@]}" >/dev/null || fail "unlinked TODO markers"
+
+# (g) Paths referenced by the agent docs.
+if [ "${docs_changed}" -eq 1 ]; then
+  "${PY}" tools/check_agents_md.py >/dev/null || fail "AGENTS.md/README.md references"
+fi
+
+if [ "${#failures[@]}" -gt 0 ]; then
+  say "FAILED: $(IFS=,; echo "${failures[*]}" | sed 's/,/, /g')" >&2
+  say "fix the problems above, re-stage, and commit again" >&2
+  exit 1
+fi
+exit 0

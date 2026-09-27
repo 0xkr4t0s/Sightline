@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest a new capability or an improvement.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How should it work from the user's point of view (Blender side, iPhone side or both)?
+    validations:
+      required: true
+
+  - type: input
+    id: requirement
+    attributes:
+      label: Related requirement ID
+      description: If it maps to docs/SRS.md, give the ID (e.g. FR-VF-004). Leave empty if none.
+      placeholder: e.g. FR-TAKE-006
+    validations:
+      required: false
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Release tier
+      description: Where you think it belongs (docs/SRS.md §2.4). The maintainer decides in the end.
+      options:
+        - Not sure
+        - T1 Tracking
+        - T2 Virtual viewfinder
+        - T3 Production
+        - T4 Extras
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false

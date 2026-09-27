@@ -1,0 +1,18 @@
+# Store text files with LF in the repository; checkouts use the platform's line endings.
+* text=auto
+
+# Shell scripts and git hooks must keep LF even on Windows checkouts, or bash fails on \r.
+*.sh            text eol=lf
+tools/hooks/*   text eol=lf
+
+# Golden vectors are raw wire bytes shared by Rust, Swift and Python: never convert them.
+testdata/**/*.bin binary
+*.bin           binary
+
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.zip           binary
+*.whl           binary
+*.dmg           binary
+*.tar.xz        binary

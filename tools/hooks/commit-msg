@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Privacy check on the commit message; a warning when it cites no requirement or task ID.
+# Installed with `git config core.hooksPath tools/hooks`; see tools/hooks/README.md.
+set -uo pipefail
+
+msg_file="$1"
+ROOT="$(git rev-parse --show-toplevel)" || exit 1
+
+python3 "${ROOT}/tools/hooks/privacy_scan.py" --message "${msg_file}" || exit 1
+
+# Requirement IDs (FR-VF-004, NET-004, NFR-QA-002), plan tasks (2.3f, 1.1.3c) or spikes (S-2d).
+body="$(grep -v '^#' "${msg_file}")"
+case "${body}" in
+  Merge* | Revert* | fixup!* | squash!*) exit 0 ;;
+esac
+if ! printf '%s\n' "${body}" | grep -Eq '\b([A-Z]{2,}(-[A-Z]+)*-[0-9]{3}|[0-9]+\.[0-9]+[a-z0-9.]*|S-[0-9]+[a-z]?)\b'; then
+  echo "commit-msg: warning: no requirement ID (e.g. FR-VF-004) or plan task (e.g. 2.3f) in the message; AGENTS.md asks commits to cite them" >&2
+fi
+exit 0

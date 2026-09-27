@@ -1,0 +1,19 @@
+name: Question
+description: Ask how to build, set up or use Sightline.
+labels: [question]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What do you want to know? Mention what you already tried and which docs you read.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Setup
+      description: Blender version, desktop OS, iPhone model and iOS version if relevant. Leave out device names, host names and IP addresses.
+    validations:
+      required: false

@@ -1,0 +1,93 @@
+name: Bug report
+description: Something in Sightline doesn't work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. For security problems (pairing, session crypto, packet parsing),
+        please don't open a public issue: follow [SECURITY.md](https://github.com/0xKr4t0s/Sightline/blob/main/.github/SECURITY.md).
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Where does the problem show up?
+      options:
+        - iOS app
+        - Blender extension
+        - Native module (vcam_native / Rust)
+        - Protocol (VCP)
+        - Docs
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: sightline-version
+    attributes:
+      label: Sightline version or commit
+      placeholder: e.g. main at 16026fc, or the extension version shown in Blender
+    validations:
+      required: true
+
+  - type: input
+    id: blender-version
+    attributes:
+      label: Blender version
+      placeholder: e.g. 5.2.2
+    validations:
+      required: false
+
+  - type: input
+    id: ios-version
+    attributes:
+      label: iPhone or iPad model and iOS version
+      placeholder: e.g. iPhone 16 Pro, iOS 26.1 (no serial numbers or device names)
+    validations:
+      required: false
+
+  - type: input
+    id: desktop-os
+    attributes:
+      label: Desktop OS
+      placeholder: e.g. Windows 11 24H2, Ubuntu 26.04, macOS 27.0 (Apple silicon)
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start a Sightline session in Blender
+        2. Pair the iPhone
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Blender's console output, Xcode console, or crash logs. **Redact personal data first**:
+        replace your user name in paths, host names, IP and MAC addresses, device names and
+        team IDs with `<path>`, `<host>`, `<ip>` or `<team>`.
+      render: text
+    validations:
+      required: false
