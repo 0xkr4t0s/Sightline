@@ -52,6 +52,20 @@ def test_controls_keep_absent_fields_and_ignore_stale_states():
     assert (c.state_seq, c.motion_scale) == (2, 10.0)
 
 
+def test_thermal_control_keeps_absent_bit_and_ignores_duplicate_or_old_sequences():
+    c = Controls()
+    first = {"state_seq": 1, "motion_scale": None, "lock_flags": None, "origin_epoch": None, "thermal_state": 2}
+    assert c.update(first) == (True, False)
+    assert c.thermal_state == 2
+    assert c.update({**first, "state_seq": 2, "thermal_state": None}) == (True, False)
+    assert c.thermal_state == 2
+    assert c.update({**first, "state_seq": 2, "thermal_state": 0}) == (False, False)
+    assert c.update({**first, "state_seq": 1, "thermal_state": 0}) == (False, False)
+    assert c.thermal_state == 2
+    assert c.update({**first, "state_seq": 3, "thermal_state": 0}) == (True, False)
+    assert c.thermal_state == 0
+
+
 @pytest.mark.parametrize("sequence", HOLD["sequences"], ids=[s["name"] for s in HOLD["sequences"]])
 def test_pose_hold_matches_vectors(sequence):
     assert HOLD["tracking_normal"] == TRACKING_NORMAL

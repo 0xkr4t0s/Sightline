@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from .apply import Applier, camera_status, clear_zero, find_origin, target_camera
 from .latency import LatencyLog
 from .log import get_logger
-from .render import DEFAULT_BUDGET_MS, StreamLoop, adapted_resolution, resolution_steps
+from .render import DEFAULT_BUDGET_MS, StreamLoop, resolution_steps, thermal_stream_settings
 from .status import pose_latency_ms
 
 _log = get_logger(__name__)
@@ -285,7 +285,9 @@ def _render_frame(session, context) -> None:
         # NET-VID-005: the adapter's resolution step, below the user's size.
         stats = session.video_stats()
         adapt = stats["adapt"]
-        resolution = adapted_resolution(resolution_key, adapt["resolution_drop"] if adapt else 0)
+        resolution, fps = thermal_stream_settings(
+            resolution_key, fps, adapt["resolution_drop"] if adapt else 0, _applier.controls.thermal_state
+        )
         _log_stream_level((resolution, fps, shading, stats["quality"]))
         _stream.tick(context, camera, _applier.applied_seq, session.host_clock_ns, budget_ms, fps, resolution, shading)
     except Exception as e:  # noqa: BLE001 - a broken GPU must not interrupt pose tracking

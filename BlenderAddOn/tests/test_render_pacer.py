@@ -4,9 +4,11 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.render import FramePacer, adapted_resolution, resolution_steps  # noqa: E402
+from core.render import FramePacer, adapted_resolution, resolution_steps, thermal_stream_settings  # noqa: E402
 
 TICK = 1_000_000_000 // 30
 
@@ -79,3 +81,28 @@ def test_resolution_steps_go_down_the_stream_sizes_and_stop_at_the_smallest():
     # A drop left over from a larger user size (the adapter is capped straight after) never
     # goes below the list.
     assert adapted_resolution('540p', 3) == (640, 360)
+
+
+@pytest.mark.parametrize(
+    ("thermal", "expected"),
+    [
+        (None, ((960, 540), 30)),
+        (0, ((960, 540), 30)),
+        (1, ((960, 540), 30)),
+        (2, ((640, 360), 24)),
+        (3, ((640, 360), 24)),
+    ],
+)
+def test_thermal_serious_steps_once_and_caps_fps(thermal, expected):
+    assert thermal_stream_settings('540p', 30, 0, thermal) == expected
+    assert thermal_stream_settings('720p', 60, 0, thermal) == (
+        ((960, 540), 24) if thermal is not None and thermal >= 2 else ((1280, 720), 60)
+    )
+
+
+def test_thermal_stacks_with_adaptive_drop_floors_and_restores():
+    assert thermal_stream_settings('1080p', 60, 1, 2) == ((960, 540), 24)
+    assert thermal_stream_settings('540p', 60, 1, 3) == ((640, 360), 24)
+    assert thermal_stream_settings('360p', 30, 1, 2) == ((640, 360), 24)
+    assert thermal_stream_settings('1080p', 60, 1, 1) == ((1280, 720), 60)
+    assert thermal_stream_settings('540p', 24, 0, 2) == ((640, 360), 24)

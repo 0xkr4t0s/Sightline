@@ -13,6 +13,7 @@ from core.status import (  # noqa: E402
     locks_label,
     pose_latency_ms,
     scale_label,
+    thermal_label,
     tracking_label,
     video_labels,
 )
@@ -42,6 +43,14 @@ def test_tracking_and_locks_labels():
 
 def test_pairing_code_is_grouped():
     assert code_label("042917") == "042 917"
+
+
+def test_thermal_status_uses_actual_selected_stream_level():
+    assert thermal_label(None, (960, 540), 30) == "Device thermal: unknown"
+    assert thermal_label(0, (960, 540), 30) == "Device thermal: nominal"
+    assert thermal_label(1, (960, 540), 30) == "Device thermal: fair"
+    assert thermal_label(2, (640, 360), 24) == "Device thermal: serious — stream reduced to 640×360 @ 24 fps"
+    assert thermal_label(3, (960, 540), 24) == "Device thermal: critical — stream reduced to 960×540 @ 24 fps"
 
 
 def test_video_counters_show_the_last_frame_and_only_real_failures():

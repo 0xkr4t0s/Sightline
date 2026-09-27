@@ -14,7 +14,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 cd "${ROOT}"
 
 # The CI blender-smoke scripts plus the two GPU-only render checks (CI runners have no GPU).
-BLENDER_TESTS="${BLENDER_TESTS:-smoke_native session_native addon_session addon_apply addon_panel addon_robust pose_leg_latency video_native render_offscreen render_session}"
+BLENDER_TESTS="${BLENDER_TESTS:-smoke_native session_native addon_session addon_apply addon_panel addon_robust pose_leg_latency video_native render_offscreen render_session render_thermal}"
 
 suite_rust() {
   (cd native && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test) || return 1

@@ -62,6 +62,17 @@ def code_label(code: str) -> str:
     return f"{code[:3]} {code[3:]}" if len(code) == 6 else code
 
 
+def thermal_label(thermal_state: int | None, resolution: tuple[int, int], fps: int) -> str:
+    """Report the effective thermal stream policy, not the adapter's requested level."""
+    names = ("nominal", "fair", "serious", "critical")
+    if thermal_state is None:
+        return "Device thermal: unknown"
+    label = f"Device thermal: {names[thermal_state]}"
+    if thermal_state >= 2:
+        label += f" — stream reduced to {resolution[0]}×{resolution[1]} @ {fps} fps"
+    return label
+
+
 def _level_label(quality: int, resolution_key: str, drop: int) -> str:
     width, height = adapted_resolution(resolution_key, drop)
     return f"q{quality} {width}×{height}"
