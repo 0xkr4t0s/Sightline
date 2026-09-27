@@ -199,12 +199,12 @@ def applier() -> Applier:
 
 
 def latency_log() -> LatencyLog:
-    """Pose-leg and apply-cost samples of the current device session (task 1.5.1)."""
+    """Pose-leg, apply-cost and stream-leg samples of the current device session (1.5.1, 2.6)."""
     return _latency
 
 
 def latency_report() -> dict:
-    """The NFR-LAT-001 report of the current device session as a JSON-ready dict."""
+    """The NFR-LAT-001/004 report of the current device session as a JSON-ready dict."""
     import bpy
 
     return _latency.report(
@@ -294,7 +294,18 @@ def _render_frame(session, context) -> None:
             scene_aspect(scene),
         )
         _log_stream_level((resolution, fps, shading, stats["quality"]))
-        _stream.tick(context, camera, _applier.applied_seq, session.host_clock_ns, budget_ms, fps, resolution, shading)
+        # NFR-LAT-004 host legs: encode/send of the newest sent frame and the device's M2P report
+        # (both deduplicated by the log), then draw + readback of the frame submitted now.
+        if stats["last_sent"] is not None:
+            _latency.record_sent(state.session_id, stats["last_sent"])
+        if adapt is not None:
+            _latency.record_device_report(state.session_id, adapt)
+        submitted = _stream.tick(
+            context, camera, _applier.applied_seq, session.host_clock_ns, budget_ms, fps, resolution, shading
+        )
+        # A tick the pacer skips doesn't reach the renderer, whose value is then the previous frame's.
+        if submitted is not None and _stream.renderer.frame_render_ns is not None:
+            _latency.record_render(state.session_id, _stream.renderer.frame_render_ns / 1e6)
     except Exception as e:  # noqa: BLE001 - a broken GPU must not interrupt pose tracking
         state.stream_error = f"Stream: {e}"
         _log.exception("stream failed")

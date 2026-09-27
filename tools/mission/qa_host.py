@@ -47,6 +47,9 @@ Commands ({"cmd": NAME, ...}); relative paths are relative to the repository roo
   render_png [path, resolution, shading] draw the driven camera like the stream and save a PNG
                                         (default .mission/qa/render.png, the stream's size at the
                                         render aspect and shading)
+  latency_report [path]                 the N-panel's Save Latency Report for the current or last
+                                        device session (default .mission/qa/latency-host.json):
+                                        pose, apply, render/readback, encode, send, device M2P
   save_blend path                       save a copy of the open file
   open_blend path                       open a .blend (the session keeps running)
   eval       code                       QA escape hatch: exec Python with bpy on the main thread;
@@ -642,10 +645,12 @@ class Host:
             },
             "latency": {
                 "session_id": log.session_id,
-                "pose_leg_ms": summary(log.pose_leg_ms),
-                "apply_ms": summary(log.apply_ms),
+                **{name: summary(getattr(log, name)) for name in self.latency.LEGS},
+                "device_m2p_p95_ms": summary(log.device_m2p_p95_ms),
                 "poses_without_clock": log.without_clock,
                 "poses_not_applied": log.not_applied,
+                "frames_not_sampled": log.frames_not_sampled,
+                "device_reports_not_measured": log.reports_not_measured,
             },
             "video": dict(live.video_stats() or {}) or None if live is not None else None,
             "stream": {
@@ -836,6 +841,16 @@ class Host:
             renderer.free()
         write_png(path, frames[0])
         return {"path": self.rel(path), "width": width, "height": height, "shading": shading, "camera": camera.name}
+
+    def cmd_latency_report(self, c):
+        """The add-on's Save Latency Report (NFR-LAT-004) for the current or last device session."""
+        path = resolve(c.get("path") or os.path.join(QA_DIR, "latency-host.json"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        op = bpy.ops.vcam.latency_report_save
+        if not op.poll():
+            raise RuntimeError(f"{op.idname()} is unavailable: no pose applied in this device session")
+        result = sorted(op(filepath=path))
+        return {"path": self.rel(path), "operator": result, "summary": self.session.latency_log().summary_line()}
 
     def cmd_save_blend(self, c):
         if not c.get("path"):

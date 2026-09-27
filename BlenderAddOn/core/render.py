@@ -127,8 +127,12 @@ class StreamRenderer:
         self._offscreen: Any = None
         # (pose_seq, render_time_ns) of the frame drawn but not read yet.
         self._pending: tuple[int, int] | None = None
+        self._pending_draw_ns = 0
+        # This tick's GPU cost (for the pacer): the read of the previous frame, the draw of the next.
         self.read_ns = 0
         self.draw_ns = 0
+        # Draw + readback of the frame submitted this tick (NFR-LAT-004), None if none was.
+        self.frame_render_ns: int | None = None
 
     def configure(self, width: int, height: int, shading: str) -> bool:
         """Discard the old setting's pending frame before drawing with the new one."""
@@ -150,6 +154,7 @@ class StreamRenderer:
         if self._offscreen is None:
             self._offscreen = gpu.types.GPUOffScreen(self.width, self.height, format='RGBA8')
         self.read_ns = self.draw_ns = 0
+        self.frame_render_ns = None
         submitted: int | None = None
         if self._pending is not None:
             seq, drawn_ns = self._pending
@@ -157,11 +162,13 @@ class StreamRenderer:
             started = time.perf_counter_ns()
             submitted = self.slot.submit(self._offscreen.texture_color.read(), seq, drawn_ns)
             self.read_ns = time.perf_counter_ns() - started
+            self.frame_render_ns = self._pending_draw_ns + self.read_ns
         if camera is not None:
             started = time.perf_counter_ns()
             self._draw(scene, view_layer, depsgraph, camera)
             self.draw_ns = time.perf_counter_ns() - started
             self._pending = (pose_seq, now_ns)
+            self._pending_draw_ns = self.draw_ns
         return submitted
 
     def _draw(self, scene: Any, view_layer: Any, depsgraph: Any, camera: Any) -> None:

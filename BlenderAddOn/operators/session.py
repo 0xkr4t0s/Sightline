@@ -143,7 +143,7 @@ class VCAM_OT_origin_clear(bpy.types.Operator):
 
 
 class VCAM_OT_latency_report_save(bpy.types.Operator, ExportHelper):
-    """Save the pose-leg latency histograms and p50/p95/p99 of this device session (NFR-LAT-001)"""
+    """Save the pose, render, encode and send latency histograms and p50/p95/p99 of this device session (NFR-LAT-004)"""
 
     bl_idname = "vcam.latency_report_save"
     bl_label = "Save Latency Report"
