@@ -78,6 +78,12 @@ struct ContentView: View {
             }
             Text(controller.poseRate.map { "\(Int($0.rounded())) Hz" } ?? "– Hz")
             Text(connection)
+            if let stream = controller.stream {
+                Text(stream.label)
+                Label(stream.quality.label, systemImage: "wifi")
+                    .foregroundStyle(qualityColor(stream.quality))
+                    .accessibilityLabel("Connection \(stream.quality.label)")
+            }
             Label("Thermal: \(controller.thermal.label)", systemImage: "thermometer.medium")
                 .foregroundStyle(controller.thermal.isWarning ? Color.orange : Color.white)
             if let error = controller.lastError {
@@ -156,6 +162,14 @@ struct ContentView: View {
             return .gray
         }
         return controller.latestPose?.trackingState == VCPPose.trackingNormal ? .green : .yellow
+    }
+
+    private func qualityColor(_ quality: ConnectionQuality) -> Color {
+        switch quality {
+        case .good: .green
+        case .fair: .yellow
+        case .poor: .red
+        }
     }
 
     private var connection: String {

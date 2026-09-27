@@ -31,6 +31,109 @@ nonisolated struct PoseRateMeter: Sendable {
     }
 }
 
+/// How well the host's datagrams are getting through, as the HUD shows it (FR-VF-004).
+nonisolated enum ConnectionQuality: Int, Comparable, Sendable {
+    case good, fair, poor
+
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    var label: String {
+        switch self {
+        case .good: "Good"
+        case .fair: "Fair"
+        case .poor: "Poor"
+        }
+    }
+}
+
+/// The viewfinder stream and the link it arrives on, for the HUD (FR-VF-004).
+nonisolated struct StreamStats: Equatable, Sendable {
+    /// Viewfinder frames completed per second.
+    var framesPerSecond: Double
+    /// Video data received (every authentic `VIDEO_FRAGMENT`'s data), in bits per second.
+    var bitsPerSecond: Double
+    var quality: ConnectionQuality
+
+    /// "24 fps · 6.1 Mbit/s".
+    var label: String {
+        "\(Int(framesPerSecond.rounded())) fps · \((bitsPerSecond / 1e6).formatted(.number.precision(.fractionLength(1)))) Mbit/s"
+    }
+}
+
+/// Measures `StreamStats` over one-second windows of `CLOCK_UPTIME_RAW` time, fed by the pipeline
+/// from the session's authentic host datagrams. One per session. Connection quality is the worse
+/// of two losses over the last window: `STATUS` datagrams missing from the `status_seq` run (the
+/// host numbers every one it sends, vcp.md §6.4), and viewfinder frames abandoned incomplete. It
+/// is poor at once when nothing has come from the host for more than a second (STATUS is 2 Hz,
+/// and the host marks a silent device stale after the same second, §8).
+nonisolated struct StreamMeter: Sendable {
+    static let windowNs: UInt64 = 1_000_000_000
+    /// Longest host silence that still counts as connected well.
+    static let silenceNs: UInt64 = 1_000_000_000
+    /// Loss at or above which quality drops to fair, and to poor.
+    static let fairLoss = 0.02
+    static let poorLoss = 0.10
+
+    private var windowStartNs: UInt64
+    private var lastHostNs: UInt64
+    private var bytes: UInt64 = 0
+    private var lastStatusSeq: UInt32?
+    private var statusExpected: UInt64 = 0
+    private var statusReceived: UInt64 = 0
+    private var framesAtStart: (complete: UInt64, lost: UInt64) = (0, 0)
+    private var windowQuality = ConnectionQuality.good
+    private var rates: (fps: Double, bps: Double)?
+
+    /// `nowNs` is the session's start; the first second of silence is counted from here.
+    init(nowNs: UInt64) {
+        windowStartNs = nowNs
+        lastHostNs = nowNs
+    }
+
+    /// Any authentic host datagram.
+    mutating func hostDatagram(atNs nowNs: UInt64) {
+        lastHostNs = max(lastHostNs, nowNs)
+    }
+
+    /// A `STATUS` the sequence filter accepted (higher than every earlier one).
+    mutating func status(seq: UInt32) {
+        if let last = lastStatusSeq, seq > last {
+            statusExpected += UInt64(seq - last)
+            statusReceived += 1
+        }
+        lastStatusSeq = seq
+    }
+
+    /// The data bytes of an authentic `VIDEO_FRAGMENT`, whatever reassembly made of it.
+    mutating func fragment(bytes count: Int) {
+        bytes += UInt64(count)
+    }
+
+    /// Closes every window that has ended by `nowNs`, given the reassembler's session totals, and
+    /// returns the stats of the last one: nil until a full window has passed.
+    mutating func stats(atNs nowNs: UInt64, framesComplete: UInt64, framesLost: UInt64) -> StreamStats? {
+        if nowNs >= windowStartNs, nowNs - windowStartNs >= Self.windowNs {
+            let seconds = Double(nowNs - windowStartNs) / 1e9
+            let complete = framesComplete - framesAtStart.complete
+            let lost = framesLost - framesAtStart.lost
+            rates = (Double(complete) / seconds, Double(bytes * 8) / seconds)
+            let frameLoss = complete + lost > 0 ? Double(lost) / Double(complete + lost) : 0
+            let statusLoss = statusExpected > 0 ? Double(statusExpected - statusReceived) / Double(statusExpected) : 0
+            let loss = max(frameLoss, statusLoss)
+            windowQuality = loss >= Self.poorLoss ? .poor : loss >= Self.fairLoss ? .fair : .good
+            windowStartNs = nowNs
+            bytes = 0
+            statusExpected = 0
+            statusReceived = 0
+            framesAtStart = (framesComplete, framesLost)
+        }
+        guard let rates else { return nil }
+        let silent = nowNs > lastHostNs && nowNs - lastHostNs > Self.silenceNs
+        return StreamStats(framesPerSecond: rates.fps, bitsPerSecond: rates.bps,
+                           quality: silent ? .poor : windowQuality)
+    }
+}
+
 /// The device's thermal state as the status screen shows it (FR-UX-004).
 nonisolated struct ThermalStatus: Equatable, Sendable {
     var state: ProcessInfo.ThermalState

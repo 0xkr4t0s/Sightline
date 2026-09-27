@@ -37,6 +37,8 @@ final class TrackingSessionController {
     private(set) var poseRate: Double?
     /// NFR-LAT-002's send leg over this run's sent poses, nil until one has been sent.
     private(set) var sendLeg: SendLegSummary?
+    /// Viewfinder stream rate and connection quality (FR-VF-004), nil until known and without a session.
+    private(set) var stream: StreamStats?
     /// The device's thermal state, kept current from `ProcessInfo` notifications (FR-UX-004).
     private(set) var thermal = ThermalStatus(state: ProcessInfo.processInfo.thermalState)
 
@@ -305,6 +307,7 @@ final class TrackingSessionController {
             rateMeter = PoseRateMeter()
             poseRate = nil
             sendLeg = nil
+            stream = nil
             lastReconnectSeconds = nil
             sceneUnderstanding = understanding
             isTracking = true
@@ -405,6 +408,7 @@ final class TrackingSessionController {
         stallWatch.stop()
         sceneUnderstanding = nil
         poseRate = nil
+        stream = nil
         if let reason {
             sessionStatus = reason
         } else if lastError == nil {
@@ -451,6 +455,7 @@ final class TrackingSessionController {
         }
         packetsSent = snapshot.packetsSent
         sendLeg = snapshot.sendLeg
+        stream = snapshot.stream
         controlSeq = snapshot.controlSeq
         controlAck = snapshot.controlAck
         if let error = snapshot.sendError {
