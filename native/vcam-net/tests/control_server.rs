@@ -284,6 +284,7 @@ fn authenticated_control_refreshes_idle_timeout_but_forged_udp_does_not() {
                 lock_flags: Some(0),
                 origin_epoch: Some(1),
                 thermal_state: Some(2),
+                ..Default::default()
             });
             tx.send_to(&datagram(&keys, &control), server.udp_addr())
                 .unwrap();
@@ -381,6 +382,7 @@ fn paired_session_drives_real_udp_and_disconnect_revokes_it() {
                 control_ack: 0,
                 error_code: 0,
                 camera_name: Some("Camera".into()),
+                applied_lens: None,
             },
         )
         .unwrap();

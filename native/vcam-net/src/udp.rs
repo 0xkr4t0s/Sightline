@@ -19,8 +19,9 @@ use mio::net::UdpSocket;
 use mio::{Events, Interest, Poll, Token};
 
 use vcam_protocol::{
-    Clock, ClockEstimate, ClockEstimator, ControlState, DropReason, Endpoint, MAX_DATAGRAM,
-    Message, Pose, SeqFilter, Status, VideoFragment, VideoFrameInfo, VideoReport, fragment_frame,
+    AppliedLens, Clock, ClockEstimate, ClockEstimator, ControlState, DropReason, Endpoint,
+    MAX_DATAGRAM, Message, Pose, SeqFilter, Status, VideoFragment, VideoFrameInfo, VideoReport,
+    fragment_frame,
 };
 
 use crate::smooth::{PoseFilter, Smoothing};
@@ -42,13 +43,15 @@ const VIDEO_RETRY: Duration = Duration::from_micros(200);
 
 /// State actually applied by the host, not merely received over UDP (vcp.md §6.4).
 /// Publish after Blender's main-thread apply step; the network worker owns sequence/flags.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct HostStatus {
     pub applied_pose_seq: u32,
     pub control_ack: u32,
     pub error_code: u16,
     /// None means no camera bound; Some names the driven object (at most 63 UTF-8 bytes).
     pub camera_name: Option<String>,
+    /// The target camera's lens as Blender has it; sets `STATUS` flags bit 2 (§6.4).
+    pub applied_lens: Option<AppliedLens>,
 }
 
 impl Default for HostStatus {
@@ -58,19 +61,24 @@ impl Default for HostStatus {
             control_ack: 0,
             error_code: 1, // no camera until the application binds one
             camera_name: None,
+            applied_lens: None,
         }
     }
 }
 
 impl HostStatus {
     fn into_message(self, status_seq: u32) -> Message<'static> {
+        let flags = 1
+            | (u8::from(self.camera_name.is_some()) << 1)
+            | (u8::from(self.applied_lens.is_some()) << 2);
         Message::Status(Status {
             status_seq,
             applied_pose_seq: self.applied_pose_seq,
             control_ack: self.control_ack,
             error_code: self.error_code,
-            flags: 1 | (u8::from(self.camera_name.is_some()) << 1),
+            flags,
             camera_name: self.camera_name.unwrap_or_default(),
+            applied_lens: self.applied_lens,
         })
     }
 }
@@ -451,7 +459,8 @@ impl UdpReceiver {
 
     /// Publish applied host state for this session; stale callers cannot update a replacement.
     /// Changes are sent on the next worker poll (at most 50 ms when idle), then at 2 Hz.
-    /// Receiving POSE/CONTROL_STATE alone never advances the acknowledgements.
+    /// Receiving POSE/CONTROL_STATE alone never advances the acknowledgements. A camera name
+    /// over 63 bytes or an out-of-range applied lens is `InvalidInput` and changes nothing.
     pub fn update_status(&self, session_id: u32, status: HostStatus) -> io::Result<()> {
         if status
             .camera_name
@@ -461,6 +470,12 @@ impl UdpReceiver {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "camera name exceeds 63 UTF-8 bytes",
+            ));
+        }
+        if status.applied_lens.is_some_and(|lens| !lens.is_valid()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "applied lens value is outside its vcp.md §6.4 range",
             ));
         }
         let mut state = lock(&self.state);

@@ -23,11 +23,12 @@ pub use control::{
 };
 pub use endpoint::{
     DropReason, Endpoint, HEADER_LEN, MAGIC, MAX_DATAGRAM, PROTOCOL_VERSION, Role, SealError,
-    TAG_LEN,
+    TAG_LEN, decode_payload,
 };
 pub use fresh::{EpochWatcher, SeqFilter};
 pub use message::{
-    Clock, ClockSample, ControlState, Message, PayloadError, Pose, Status, msg_type,
+    AppliedLens, Clock, ClockSample, ControlState, Message, PayloadError, Pose, RackFocus, Status,
+    TapFocus, msg_type,
 };
 pub use pairing::{
     HostPairing, PairError, PendingPair, SessionHandshake, SessionKeys, device_pair,

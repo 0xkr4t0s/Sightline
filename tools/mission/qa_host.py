@@ -79,6 +79,21 @@ STATE_FILE = os.path.join(QA_DIR, "state.json")
 STATE_INTERVAL = 0.2
 CMD_INTERVAL = 0.05
 MAX_ERRORS = 20
+# vcam_native latest_control() keys for the T2 lens fields (vcp.md §6.2 bits 4-9).
+LENS_CONTROL_KEYS = (
+    "lens_mm",
+    "focus_distance_m",
+    "fstop",
+    "dof_on",
+    "tap_u",
+    "tap_v",
+    "tap_seq",
+    "rack_a_m",
+    "rack_b_m",
+    "rack_target",
+    "rack_duration_ms",
+    "rack_seq",
+)
 
 
 def parse_args():
@@ -573,6 +588,10 @@ class Host:
                 ],
                 "lens": camera.data.lens,
                 "sensor_width": camera.data.sensor_width,
+                "sensor_fit": camera.data.sensor_fit,
+                "dof_use": camera.data.dof.use_dof,
+                "focus_distance": camera.data.dof.focus_distance,
+                "fstop": camera.data.dof.aperture_fstop,
             },
             "camera_warning": warning,
             "origin": None
@@ -590,6 +609,8 @@ class Host:
                 "locks_label": status.locks_label(controls.lock_flags),
                 "origin_epoch": controls.origin_epoch,
                 "thermal_state": control["thermal_state"] if control is not None else None,
+                # The T2 lens keys of the newest native CONTROL_STATE (None when absent).
+                **{key: control.get(key) if control is not None else None for key in LENS_CONTROL_KEYS},
             },
             "latency": {
                 "session_id": log.session_id,

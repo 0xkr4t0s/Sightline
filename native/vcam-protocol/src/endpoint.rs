@@ -169,7 +169,7 @@ impl Endpoint {
             .verify_truncated_left(tag)
             .map_err(|_| DropReason::Tag)?;
         let payload = authed.get(HEADER_LEN..).ok_or(DropReason::Length)?;
-        let msg = decode(msg_type, payload)?;
+        let msg = decode_payload(msg_type, payload)?;
         if may_send(self.peer(), &msg) {
             Ok(msg)
         } else {
@@ -185,7 +185,10 @@ impl Endpoint {
     }
 }
 
-fn decode(msg_type: u8, payload: &[u8]) -> Result<Message<'_>, DropReason> {
+/// Steps 7–8 of vcp.md §4.3 on an already authenticated payload: the type and payload checks,
+/// without direction or freshness. [`Endpoint::open`] calls it after the frame checks; it is
+/// public so the fuzz targets can reach the payload decoders without forging tags.
+pub fn decode_payload(msg_type: u8, payload: &[u8]) -> Result<Message<'_>, DropReason> {
     let p = DropReason::Payload;
     Ok(match msg_type {
         msg_type::POSE => Message::Pose(Pose::decode(payload).map_err(p)?),

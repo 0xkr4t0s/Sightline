@@ -528,8 +528,11 @@ mod vcam_native {
         }
 
         /// The newest `CONTROL_STATE` (highest `state_seq`) as a dict, or None (vcp.md §6.2).
-        /// `motion_scale`, `lock_flags`, `origin_epoch` and `thermal_state` are None when absent from that
-        /// message: the host keeps their previous values.
+        /// `motion_scale`, `lock_flags`, `origin_epoch`, `thermal_state` and the T2 lens keys
+        /// (`lens_mm`, `focus_distance_m`, `fstop`, `dof_on`, `tap_u`/`tap_v`/`tap_seq`,
+        /// `rack_a_m`/`rack_b_m`/`rack_target`/`rack_duration_ms`/`rack_seq`) are None when absent
+        /// from that message: the host keeps their previous values. `tap_seq` and `rack_seq` are
+        /// request identities: a change starts one tap or rack.
         fn latest_control<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
             let Some(sample) = self.with(|s| Ok(s.latest_control()))? else {
                 return Ok(None);
@@ -541,6 +544,18 @@ mod vcam_native {
             d.set_item("lock_flags", c.lock_flags)?;
             d.set_item("origin_epoch", c.origin_epoch)?;
             d.set_item("thermal_state", c.thermal_state)?;
+            d.set_item("lens_mm", c.lens_mm)?;
+            d.set_item("focus_distance_m", c.focus_distance_m)?;
+            d.set_item("fstop", c.fstop)?;
+            d.set_item("dof_on", c.dof_on)?;
+            d.set_item("tap_u", c.tap.map(|t| t.u))?;
+            d.set_item("tap_v", c.tap.map(|t| t.v))?;
+            d.set_item("tap_seq", c.tap.map(|t| t.seq))?;
+            d.set_item("rack_a_m", c.rack.map(|r| r.a_m))?;
+            d.set_item("rack_b_m", c.rack.map(|r| r.b_m))?;
+            d.set_item("rack_target", c.rack.map(|r| r.target))?;
+            d.set_item("rack_duration_ms", c.rack.map(|r| r.duration_ms))?;
+            d.set_item("rack_seq", c.rack.map(|r| r.seq))?;
             Ok(Some(d))
         }
 
@@ -633,7 +648,18 @@ mod vcam_native {
         }
 
         /// Publishes the state Blender actually applied for `session_id` (vcp.md §6.4).
-        #[pyo3(signature = (session_id, applied_pose_seq, control_ack, error_code, camera_name = None))]
+        /// The keyword-only lens arguments are the target camera's applied lens, sent as the
+        /// `STATUS` applied-lens block: give all seven or none. `sensor_fit` is 0 horizontal,
+        /// 1 vertical, 2 auto. A partial or out-of-range lens raises `ValueError`.
+        #[pyo3(signature = (
+            session_id, applied_pose_seq, control_ack, error_code, camera_name = None, *,
+            lens_mm = None, focus_distance_m = None, fstop = None, dof_on = None,
+            sensor_width_mm = None, sensor_fit = None, render_aspect = None,
+        ))]
+        #[allow(
+            clippy::too_many_arguments,
+            reason = "one Python keyword argument per STATUS applied-lens field"
+        )]
         fn update_status(
             &self,
             session_id: u32,
@@ -641,7 +667,48 @@ mod vcam_native {
             control_ack: u32,
             error_code: u16,
             camera_name: Option<String>,
+            lens_mm: Option<f32>,
+            focus_distance_m: Option<f32>,
+            fstop: Option<f32>,
+            dof_on: Option<bool>,
+            sensor_width_mm: Option<f32>,
+            sensor_fit: Option<u8>,
+            render_aspect: Option<f32>,
         ) -> PyResult<()> {
+            let values = (
+                lens_mm,
+                focus_distance_m,
+                fstop,
+                dof_on,
+                sensor_width_mm,
+                sensor_fit,
+                render_aspect,
+            );
+            let applied_lens = match values {
+                (None, None, None, None, None, None, None) => None,
+                (
+                    Some(lens_mm),
+                    Some(focus_distance_m),
+                    Some(fstop),
+                    Some(dof_on),
+                    Some(sensor_width_mm),
+                    Some(sensor_fit),
+                    Some(render_aspect),
+                ) => Some(vcam_protocol::AppliedLens {
+                    lens_mm,
+                    focus_distance_m,
+                    fstop,
+                    dof_on,
+                    sensor_width_mm,
+                    sensor_fit,
+                    render_aspect,
+                }),
+                _ => {
+                    return Err(PyValueError::new_err(
+                        "applied lens requires all seven fields",
+                    ));
+                }
+            };
             self.with(|s| {
                 s.update_status(
                     session_id,
@@ -650,6 +717,7 @@ mod vcam_native {
                         control_ack,
                         error_code,
                         camera_name,
+                        applied_lens,
                     },
                 )
                 .map_err(io_err)

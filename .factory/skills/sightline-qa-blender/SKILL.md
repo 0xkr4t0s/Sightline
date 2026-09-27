@@ -32,7 +32,10 @@ tools/mission/qa_blender.sh stop                     # always stop when done; it
 - `drive` passes extra flags through to `vcam-fake-iphone` (the last value of a repeated flag
   wins). The flags are documented at the top of `native/vcam-fake-iphone/src/main.rs`:
   `--scale S`, `--locks FLAGS`, `--set-origin-at FRAME`, `--limited FROM-TO`, `--m2p MS`,
-  `--rate HZ`, `--linger S` and `--name NAME`.
+  `--thermal N`, `--thermal-at FRAME[:N]`, `--rate HZ`, `--linger S` and `--name NAME`, plus the
+  lens flags `--lens MM`, `--focus M`, `--fstop F`, `--dof 0|1`, `--tap U,V[@FRAME]` and
+  `--rack A,B,TARGET,MS[@FRAME]` (TARGET A or B; tap/rack default to frame 60, after a baseline
+  sequence 0 in the first state).
 - To inspect a device that is still connected, run `drive` with a long `--linger` in the
   background, then poll `state` while it runs.
 - Commands: `ping`, `state`, `pair`, `cancel_pair`, `set` (any `vcam_props` scene property, or
@@ -57,7 +60,13 @@ tools/mission/qa_blender.sh stop                     # always stop when done; it
 - `.mission/qa/fake-iphone-frame.jpg`: the newest frame the "phone" received. Open it with the
   Read tool and confirm it shows the scene from the driven camera. `render_png` gives the
   host-side image for comparison.
-- `FAKE_IPHONE_DONE` line from `drive`: `video_frames`, `video_lost`, `applied_pose_seq`, `control_ack`.
+- `FAKE_IPHONE_DONE` line from `drive`: `video_frames`, `video_lost`, `applied_pose_seq`, `control_ack`,
+  and the applied lens from STATUS: `applied_lens=1 lens_mm= focus_m= fstop= dof= sensor_width_mm=
+  sensor_fit= aspect= hfov_deg= equiv_mm=` (`hfov_deg`/`equiv_mm` are `unavailable` unless the
+  camera's sensor fit is horizontal; `applied_lens=0` when STATUS had no lens block).
+- `state.json` `controls` also has the newest native lens keys (`lens_mm`, `focus_distance_m`,
+  `fstop`, `dof_on`, `tap_*`, `rack_*`), and `camera` has `sensor_fit`, `dof_use`,
+  `focus_distance` and `fstop`.
 - Logs are in `.mission/logs/`:
   - `qa-host.log`: the add-on logger, redacted.
   - `qa-blender-stdout.log`: Blender's own output, not redacted.

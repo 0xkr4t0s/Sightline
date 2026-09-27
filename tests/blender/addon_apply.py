@@ -18,6 +18,9 @@ Timers don't run in a background script, so the test calls the session poll itse
 - Hold last good pose (task 1.3.6, FR-TRK-002): the fake iPhone sends a limited span
   (`testdata/rig/hold.json` "scripted"); with the option on the camera stays on the last normal
   keypose throughout and resumes after it, with it off the degraded poses are applied.
+- Lens (task 2.4, FR-CTL-009): the fake iPhone's lens flags arrive as `latest_control()` keys,
+  and the STATUS it receives carries the camera's actual lens (vcp.md §6.4), with the FOV and
+  35 mm equivalent derived from it.
 
 CI runs this, `addon_panel.py` and `addon_robust.py` on Linux, Windows and macOS against a
 release build of the fake iPhone (`blender-smoke` job in `.github/workflows/ci.yml`, task 1.3.5).
@@ -25,7 +28,9 @@ release build of the fake iPhone (`blender-smoke` job in `.github/workflows/ci.y
 
 import importlib
 import json
+import math
 import os
+import struct
 import subprocess
 import time
 
@@ -203,12 +208,99 @@ for name in hs["hidden_keyposes"]:  # applied as ARKit reported it
     assert name in seen and max_diff(seen[name][0], keys[name]["matrix_world"]) < 1e-5, sorted(seen)
 bpy.context.scene.vcam_props.hold_last_good = True
 
+# Run 5 (task 2.4): lens controls over the real wire, and the applied lens in STATUS. The host
+# doesn't apply lens requests yet, so STATUS reports the camera's own values, not the request.
+LENS_KEYS = (
+    "lens_mm",
+    "focus_distance_m",
+    "fstop",
+    "dof_on",
+    "tap_u",
+    "tap_v",
+    "tap_seq",
+    "rack_a_m",
+    "rack_b_m",
+    "rack_target",
+    "rack_duration_ms",
+    "rack_seq",
+)
+cam = camera.data
+cam.lens, cam.sensor_width, cam.sensor_fit = 35.0, 24.89, 'HORIZONTAL'
+cam.dof.use_dof, cam.dof.focus_distance, cam.dof.aperture_fstop = True, 4.0, 2.8
+
+
+def f32(value):
+    return struct.unpack("<f", struct.pack("<f", float(value)))[0]
+
+
+class LensWatch:
+    def __init__(self):
+        self.controls = []
+
+    def __call__(self):
+        live_now = session.current()
+        control = live_now.latest_control() if live_now is not None else None
+        if control is not None and (not self.controls or control != self.controls[-1]):
+            self.controls.append(control)
+
+
+lens_watch = LensWatch()
+_, lens_fields = run_fake(
+    "--lens",
+    "85",
+    "--focus",
+    "3",
+    "--fstop",
+    "2.8",
+    "--dof",
+    "1",
+    "--tap",
+    "0.25,0.75@60",
+    "--rack",
+    "2,8,B,1200@120",
+    observe=lens_watch,
+)
+first, last = lens_watch.controls[0], lens_watch.controls[-1]
+assert all(key in first for key in LENS_KEYS), sorted(first)
+assert (first["tap_seq"], first["rack_seq"], first["rack_target"]) == (0, 0, 0), first
+assert (last["state_seq"], last["tap_seq"], last["rack_seq"]) == (3, 1, 1), last
+want = {
+    "lens_mm": 85.0,
+    "focus_distance_m": 3.0,
+    "fstop": f32(2.8),
+    "dof_on": True,
+    "tap_u": 0.25,
+    "tap_v": 0.75,
+    "rack_a_m": 2.0,
+    "rack_b_m": 8.0,
+    "rack_target": 2,
+    "rack_duration_ms": 1200,
+}
+assert {k: last[k] for k in want} == want, last
+assert lens_fields["control_ack"] == "3", lens_fields
+render = bpy.context.scene.render
+aspect = render.resolution_x * render.pixel_aspect_x / (render.resolution_y * render.pixel_aspect_y)
+reported = {k: f32(lens_fields[k]) for k in ("lens_mm", "focus_m", "fstop", "sensor_width_mm", "aspect")}
+actual = {
+    "lens_mm": f32(cam.lens),
+    "focus_m": f32(cam.dof.focus_distance),
+    "fstop": f32(cam.dof.aperture_fstop),
+    "sensor_width_mm": f32(cam.sensor_width),
+    "aspect": f32(aspect),
+}
+assert lens_fields["applied_lens"] == "1" and reported == actual, (lens_fields, actual)
+assert (lens_fields["dof"], lens_fields["sensor_fit"]) == ("1", "0"), lens_fields
+width, lens_mm = actual["sensor_width_mm"], actual["lens_mm"]
+fov = math.degrees(2 * math.atan(width / (2 * lens_mm)))
+equivalent = lens_mm * 43.27 / math.hypot(width, width / actual["aspect"])
+assert (lens_fields["hfov_deg"], lens_fields["equiv_mm"]) == (f"{fov:.2f}", f"{equivalent:.2f}"), lens_fields
+
 
 class Stub:
     """A session whose pose and CONTROL_STATE the test sets; records STATUS."""
 
     def __init__(self):
-        self.calls, self.pose, self.control = [], None, None
+        self.calls, self.lens, self.pose, self.control = [], [], None, None
 
     def latest_pose(self):
         return self.pose
@@ -216,8 +308,9 @@ class Stub:
     def latest_control(self):
         return self.control
 
-    def update_status(self, *args):
+    def update_status(self, *args, **lens):
         self.calls.append(args)
+        self.lens.append(lens)
 
 
 def control(seq, scale, locks, epoch):
@@ -264,6 +357,11 @@ applier.tick(stub, 11, bpy.context.scene, 0.4)
 held = rig.local_pose(case["position"], case["orientation"], apply.read_zero(origin))
 assert max_diff(camera.matrix_basis, apply.pose_matrix(*held)) < 1e-6, "controls not applied to the held pose"
 assert stub.calls[-1] == (11, 2, 4, apply.ERROR_NONE, camera.name), stub.calls[-1]
+assert stub.lens[-1] == apply.applied_lens(bpy.context.scene, camera) and len(stub.lens[-1]) == 7, stub.lens[-1]
+# A lens value Blender allows but the wire doesn't (focus 0) leaves the lens block out.
+cam.dof.focus_distance = 0.0
+applier.tick(stub, 11, bpy.context.scene, 0.5)
+assert stub.lens[-1] == {} and apply.applied_lens(bpy.context.scene, camera) is None, stub.lens[-1]
 
 # No camera: nothing is applied and STATUS reports error 1 (no camera) without a name.
 before = camera.matrix_basis.copy()
@@ -283,5 +381,9 @@ addon_utils.disable(MODULE, default_set=True)
 print(
     f"VCAM_ADDON_APPLY_OK keyposes=5 max_err={worst:.2e} scripted_err={scripted_err:.2e} rig_err={rig_err:.2e} "
     f"applied_pose_seq={fields['applied_pose_seq']} camera={fields['camera']} "
-    f"held_ticks={watch_on.holding_ticks} held_err={watch_on.held_err:.2e} resumed_err={hold_err:.2e}"
+    f"held_ticks={watch_on.holding_ticks} held_err={watch_on.held_err:.2e} resumed_err={hold_err:.2e} "
+    f"lens_keys={','.join(k for k in LENS_KEYS if k in last)} "
+    f"status_lens=lens_mm:{lens_fields['lens_mm']},focus_m:{lens_fields['focus_m']},fstop:{lens_fields['fstop']},"
+    f"sensor_width_mm:{lens_fields['sensor_width_mm']},aspect:{lens_fields['aspect']},"
+    f"hfov_deg:{lens_fields['hfov_deg']},equiv_mm:{lens_fields['equiv_mm']}"
 )

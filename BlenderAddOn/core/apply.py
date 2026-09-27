@@ -12,8 +12,9 @@ no axis conversion here. The zero is stored on the origin object, so it survives
 saving the file.
 
 STATUS reports what the host actually applied: the pose `seq`, the merged `state_seq` as
-`control_ack`, and the camera. It goes out at once on a camera/error/ack change, and otherwise at
-most every `STATUS_INTERVAL` for the pose sequence.
+`control_ack`, the camera, and the camera's lens as Blender has it (task 2.4, `core/lens.py`).
+It goes out at once on a camera/error/ack/lens change, and otherwise at most every
+`STATUS_INTERVAL` for the pose sequence.
 
 Hold last good pose (FR-TRK-002, the scene's `hold_last_good`, on by default): while the newest
 pose isn't normal, the camera shows the session's last normal pose (`rig.PoseHold`) and
@@ -22,6 +23,7 @@ pose isn't normal, the camera shows the session's last normal pose (`rig.PoseHol
 
 from __future__ import annotations
 
+from .lens import render_aspect, status_lens
 from .rig import Controls, PoseHold, local_pose, zero_from_pose
 
 STATUS_INTERVAL = 0.5
@@ -71,6 +73,16 @@ def camera_status(scene):
     if not _in_scene(scene, obj):
         return None, f'"{obj.name}" is in another scene' if obj.users_scene else f'"{obj.name}" was deleted'
     return obj, None
+
+
+def applied_lens(scene, camera) -> dict | None:
+    """The camera's current lens as `update_status` keyword arguments, or None (vcp.md §6.4)."""
+    data, render = camera.data, scene.render
+    aspect = render_aspect(render.resolution_x, render.resolution_y, render.pixel_aspect_x, render.pixel_aspect_y)
+    dof = data.dof
+    return status_lens(
+        data.lens, dof.focus_distance, dof.aperture_fstop, dof.use_dof, data.sensor_width, data.sensor_fit, aspect
+    )
 
 
 def target_camera(scene):
@@ -191,9 +203,10 @@ class Applier:
             return handled
         error = ERROR_NONE if camera is not None else ERROR_NO_CAMERA
         name = camera_name(camera.name) if camera is not None else None
-        content = (self.controls.state_seq, error, name)
+        lens = applied_lens(scene, camera) if camera is not None else None
+        content = (self.controls.state_seq, error, name, lens)
         if self._published is None or content != self._published[1:] or now - self._published_at >= STATUS_INTERVAL:
-            session.update_status(session_id, self.applied_seq, self.controls.state_seq, error, name)
+            session.update_status(session_id, self.applied_seq, self.controls.state_seq, error, name, **(lens or {}))
             self._published = (self.applied_seq, *content)
             self._published_at = now
         return handled

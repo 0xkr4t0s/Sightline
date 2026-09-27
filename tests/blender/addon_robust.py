@@ -50,7 +50,7 @@ def poll_until(what, cond, timeout=10.0):
 
 
 def published():
-    """(applied_seq, state_seq, error, camera name) of the last STATUS sent to the device."""
+    """(applied_seq, state_seq, error, camera name, lens) of the last STATUS sent to the device."""
     return session.applier()._published
 
 
@@ -90,7 +90,7 @@ poll_until("first pose", lambda: session.applier().applied_seq > 0)
 bpy.context.scene.camera.name = "Hero Cam"
 seq = session.applier().applied_seq
 poll_until("pose after rename", lambda: session.applier().applied_seq > seq)
-assert published()[2:] == (apply.ERROR_NONE, "Hero Cam"), published()
+assert published()[2:4] == (apply.ERROR_NONE, "Hero Cam"), published()
 
 # Renamed rig: the camera stays under it (no second VCam_Origin, no re-parent jump).
 rig = bpy.data.objects[apply.ORIGIN_NAME]
@@ -142,7 +142,7 @@ assert bpy.app.timers.is_registered(session._poll)
 assert live.smoothing() is None, "the reloaded file's smoothing setting was not applied"
 poll()
 assert max_diff(bpy.data.objects["Hero Cam"].matrix_basis, expected_basis(final)) < 1e-6, "reload: pose not re-applied"
-assert published()[2:] == (apply.ERROR_NONE, "Hero Cam"), published()
+assert published()[2:4] == (apply.ERROR_NONE, "Hero Cam"), published()
 
 # Camera deleted in the UI: the object lingers outside the scene (the target pointer still uses
 # it), so it must not be driven; the device gets "no camera" and the panel warns.
@@ -157,7 +157,7 @@ camera, warning = apply.camera_status(scene)
 assert camera is None and "Hero Cam" in warning and "deleted" in warning, warning
 session.applier().reapply()
 poll()
-assert published()[2:] == (apply.ERROR_NO_CAMERA, None), published()
+assert published()[2:4] == (apply.ERROR_NO_CAMERA, None), published()
 assert cam.matrix_basis == Matrix.Identity(4), "a deleted camera was driven"
 assert bpy.ops.vcam.origin_clear.poll() is False
 
@@ -167,7 +167,7 @@ scene.collection.objects.link(new)
 scene.vcam_props.target_camera = new
 session.applier().reapply()
 poll()
-assert published()[2:] == (apply.ERROR_NONE, "Replacement"), published()
+assert published()[2:4] == (apply.ERROR_NONE, "Replacement"), published()
 assert new.parent == bpy.data.objects["My Rig"]  # the renamed rig, found by its marker
 
 # An empty file: no camera at all, nothing raises, the device is told.
@@ -176,7 +176,7 @@ assert session.current() is live
 camera, warning = apply.camera_status(bpy.context.scene)
 assert camera is None and warning.startswith("No camera"), warning
 poll()
-assert published()[2:] == (apply.ERROR_NO_CAMERA, None), published()
+assert published()[2:4] == (apply.ERROR_NO_CAMERA, None), published()
 
 child.terminate()
 child.wait(timeout=10)
