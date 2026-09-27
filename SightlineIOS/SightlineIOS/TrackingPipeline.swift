@@ -14,6 +14,8 @@ nonisolated struct TrackingSnapshot: Equatable, Sendable {
     /// `STATUS.control_ack` the host has sent back (vcp.md §6.2).
     var controlSeq: UInt32 = 0
     var controlAck: UInt32 = 0
+    /// The host camera's lens from the newest STATUS (vcp.md §6.4); nil until one carries it.
+    var appliedLens: VCPAppliedLens?
     /// NFR-LAT-002's send leg over this run's poses; nil until one has been sent.
     var sendLeg: SendLegSummary?
     /// Viewfinder rate and authenticated host link, absent without an active session.
@@ -42,6 +44,8 @@ nonisolated struct DeviceControls: Equatable, Sendable {
     var originEpoch: UInt16 = 0
     /// 0 nominal, 1 fair, 2 serious, 3 critical (FR-UX-004).
     var thermalState: UInt8 = 0
+    /// Focal length, focus, aperture, tap and rack (FR-CTL-001..003).
+    var lens = LensControls()
 
     /// Asks the host to re-zero position and yaw at the current pose; the host reacts to any
     /// change, so the counter simply wraps.
@@ -67,11 +71,14 @@ nonisolated struct DeviceControls: Equatable, Sendable {
     }
 
     /// Every field is present: the first state of a session must carry them all, and sending
-    /// the full state every time keeps a lost datagram from leaving the ends out of sync.
+    /// the full state every time keeps a lost datagram from leaving the ends out of sync. Lens
+    /// values the device doesn't know yet are the exception (`LensControls`).
     func message(seq: UInt32) -> VCPControlState {
-        VCPControlState(
+        var state = VCPControlState(
             stateSeq: seq, motionScale: motionScale, lockFlags: lockFlags,
             originEpoch: originEpoch, thermalState: thermalState)
+        lens.fill(&state)
+        return state
     }
 }
 
@@ -528,6 +535,7 @@ actor TrackingPipeline {
             if snapshot.controlAck >= snapshot.controlSeq {
                 cancelControlTimer()
             }
+            snapshot.appliedLens = status.appliedLens
         case let .videoFragment(fragment):
             streamMeter?.fragment(dataBytes: fragment.data.count)
             // Stale, duplicate and inconsistent fragments still count as the stream arriving.

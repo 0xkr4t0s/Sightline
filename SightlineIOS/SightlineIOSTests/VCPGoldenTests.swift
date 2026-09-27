@@ -45,6 +45,21 @@ final class VCPGoldenTests: XCTestCase {
     private func floats(_ v: Any?) -> [Float] { (v as! [NSNumber]).map(\.floatValue) }
     private func uint(_ v: Any?) -> UInt64 { (v as! NSNumber).uint64Value }
 
+    /// §6.4 derived values against a vector's doubles, to `testdata/rig/lens_cases.json`'s tolerance.
+    private func checkDerived(
+        _ got: (fovDegrees: Double, equivalentMM: Double)?, _ want: [String: Any], _ name: String,
+        line: UInt = #line
+    ) {
+        guard let got else { return XCTFail("\(name): no FOV/equivalent for a horizontal fit", line: line) }
+        let tolerance = 1e-5
+        XCTAssertEqual(
+            got.fovDegrees, (want["horizontal_fov_deg"] as! NSNumber).doubleValue, accuracy: tolerance, name,
+            line: line)
+        XCTAssertEqual(
+            got.equivalentMM, (want["equivalent_35mm_focal_mm"] as! NSNumber).doubleValue, accuracy: tolerance, name,
+            line: line)
+    }
+
     private func check(_ message: VCPMessage, _ f: [String: Any], _ name: String) {
         switch message {
         case let .pose(p):
@@ -61,6 +76,25 @@ final class VCPGoldenTests: XCTestCase {
             XCTAssertEqual(c.lockFlags.map(UInt64.init), bits & 2 != 0 ? uint(f["lock_flags"]) : nil, name)
             XCTAssertEqual(c.originEpoch.map(UInt64.init), bits & 4 != 0 ? uint(f["origin_epoch"]) : nil, name)
             XCTAssertEqual(c.thermalState.map(UInt64.init), bits & 8 != 0 ? uint(f["thermal_state"]) : nil, name)
+            func float(_ bit: UInt64, _ key: String) -> Float? {
+                bits & 1 << bit != 0 ? (f[key] as! NSNumber).floatValue : nil
+            }
+            XCTAssertEqual(c.lensMM, float(4, "lens_mm"), name)
+            XCTAssertEqual(c.focusDistanceM, float(5, "focus_distance_m"), name)
+            XCTAssertEqual(c.fstop, float(6, "fstop"), name)
+            XCTAssertEqual(c.dofOn, bits & 1 << 7 != 0 ? uint(f["dof_on"]) == 1 : nil, name)
+            XCTAssertEqual(
+                c.tap,
+                bits & 1 << 8 != 0
+                    ? VCPTapFocus(u: float(8, "tap_u")!, v: float(8, "tap_v")!, seq: UInt16(uint(f["tap_seq"])))
+                    : nil, name)
+            XCTAssertEqual(
+                c.rack,
+                bits & 1 << 9 != 0
+                    ? VCPRackFocus(
+                        aM: float(9, "rack_a_m")!, bM: float(9, "rack_b_m")!, target: UInt8(uint(f["rack_target"])),
+                        durationMS: UInt16(uint(f["rack_duration_ms"])), seq: UInt16(uint(f["rack_seq"]))) : nil,
+                name)
         case let .clock(c):
             let (t1, t2, t3) = (uint(f["t1"]), uint(f["t2"]), uint(f["t3"]))
             XCTAssertEqual(c, uint(f["mode"]) == 0 ? .request(t1: t1) : .reply(t1: t1, t2: t2, t3: t3), name)
@@ -71,6 +105,21 @@ final class VCPGoldenTests: XCTestCase {
             XCTAssertEqual(UInt64(s.errorCode), uint(f["error_code"]), name)
             XCTAssertEqual(UInt64(s.flags), uint(f["flags"]), name)
             XCTAssertEqual(s.cameraName, f["camera_name"] as? String, name)
+            if let want = f["applied_lens"] as? [String: Any] {
+                let lens = try? XCTUnwrap(s.appliedLens, name)
+                XCTAssertEqual(
+                    lens,
+                    VCPAppliedLens(
+                        lensMM: (want["lens_mm"] as! NSNumber).floatValue,
+                        focusDistanceM: (want["focus_distance_m"] as! NSNumber).floatValue,
+                        fstop: (want["fstop"] as! NSNumber).floatValue, dofOn: uint(want["dof_on"]) == 1,
+                        sensorFit: UInt8(uint(want["sensor_fit"])),
+                        sensorWidthMM: (want["sensor_width_mm"] as! NSNumber).floatValue,
+                        renderAspect: (want["render_aspect"] as! NSNumber).floatValue), name)
+                checkDerived(lens?.horizontalFOVAndEquivalent, want, name)
+            } else {
+                XCTAssertNil(s.appliedLens, "\(name): flags bit 2 clear means no applied lens")
+            }
         case let .videoFragment(v):
             let got: [UInt64] = [
                 UInt64(v.frame.frameID), UInt64(v.frameLength), UInt64(v.fragIndex), UInt64(v.fragCount),
@@ -175,16 +224,71 @@ final class VCPGoldenTests: XCTestCase {
         let e = endpoints(try load("vcp/receive.json")["receiver"] as! [String: Any])
         var checked = 0
         for case let c as [String: Any] in try load("vcp/messages.json")["cases"] as! [Any]
-        where c["channel"] as? String == "udp" && c["feature"] as? String != "lens" {
+        where c["channel"] as? String == "udp" {
             let name = c["name"] as! String
             let bytes = hex(c["hex"] as! String)
             let (rx, tx) = pair(c["direction"] as! String, e)
             let message = try rx.open(bytes).get()
             check(message, c["fields"] as! [String: Any], name)
-            XCTAssertEqual(try tx.seal(message), bytes, "\(name): re-encoding differs")
+            let resealed = try tx.seal(message)
+            if name == "control_state_lens_tap" || name == "control_state_lens_rack" {
+                // These carry non-zero bytes behind clear bits, which are ignored on receive and
+                // re-encoded as zero (§6.2): same length and message, different bytes.
+                XCTAssertEqual(resealed.count, bytes.count, name)
+                XCTAssertEqual(try rx.open(resealed).get(), message, name)
+                XCTAssertNotEqual(resealed, bytes, "\(name): the vector's ignored bytes are non-zero")
+            } else {
+                XCTAssertEqual(resealed, bytes, "\(name): re-encoding differs")
+            }
             checked += 1
         }
-        XCTAssertEqual(checked, 10)
+        XCTAssertEqual(checked, 15)
+    }
+
+    /// FR-CTL-009: the device's complete control state, lens included, is the §6.2 T2 example
+    /// byte for byte; tap and rack sequences come from 12 taps and 7 racks.
+    func testDeviceControlsWithLensEncodeTheGoldenVector() throws {
+        let e = endpoints(try load("vcp/receive.json")["receiver"] as! [String: Any])
+        let vector = try XCTUnwrap(
+            (try load("vcp/messages.json")["cases"] as! [[String: Any]])
+                .first { $0["name"] as? String == "control_state_lens_full" })
+        var controls = DeviceControls(motionScale: 10, lockFlags: 2, originEpoch: 3, thermalState: 0)
+        controls.lens.setLens(50)
+        controls.lens.setFocus(4)
+        controls.lens.setFstop(2.8)
+        controls.lens.setDoF(true)
+        for _ in 0..<12 { controls.lens.tap(u: 0.25, v: 0.75) }
+        controls.lens.setMark(VCPRackFocus.targetA, to: 2)
+        controls.lens.setMark(VCPRackFocus.targetB, to: 8)
+        for _ in 0..<7 { controls.lens.startRack(to: VCPRackFocus.targetB, durationMS: 1200) }
+        XCTAssertEqual(
+            try e.device.seal(.controlState(controls.message(seq: 11))), hex(vector["hex"] as! String),
+            "DeviceControls must encode the complete T2 state byte-exact")
+    }
+
+    /// LNS-002: FOV and 35 mm-equivalent from the applied sensor and lens (§6.4), for every preset
+    /// in `lens_cases.json`; vertical and auto fits have none.
+    func testFOVAndEquivalentMatchLensCases() throws {
+        let vectors = try load("rig/lens_cases.json")
+        XCTAssertEqual((vectors["tolerance"] as! NSNumber).doubleValue, 1e-5)
+        let cases = vectors["cases"] as! [[String: Any]]
+        XCTAssertEqual(cases.count, 4)
+        for c in cases {
+            let name = c["name"] as! String
+            var lens = VCPAppliedLens(
+                lensMM: (c["lens_mm"] as! NSNumber).floatValue, focusDistanceM: 1, fstop: 2.8, dofOn: false,
+                sensorFit: UInt8(uint(c["sensor_fit"])), sensorWidthMM: (c["sensor_width_mm"] as! NSNumber).floatValue,
+                renderAspect: (c["render_aspect"] as! NSNumber).floatValue)
+            checkDerived(lens.horizontalFOVAndEquivalent, c, name)
+            for fit: UInt8 in [1, 2] {
+                lens.sensorFit = fit
+                XCTAssertNil(lens.horizontalFOVAndEquivalent, "\(name): fit \(fit) has no FOV from the width alone")
+            }
+        }
+        let fullFrame = VCPAppliedLens(
+            lensMM: 50, focusDistanceM: 1, fstop: 2.8, dofOn: false, sensorFit: 0, sensorWidthMM: 36, renderAspect: 1.5)
+        XCTAssertEqual(try XCTUnwrap(fullFrame.horizontalFOVAndEquivalent).fovDegrees, 39.6, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(fullFrame.horizontalFOVAndEquivalent).equivalentMM, 50, accuracy: 0.01)
     }
 
     func testReceiveRulesMatchVectors() throws {
@@ -192,7 +296,7 @@ final class VCPGoldenTests: XCTestCase {
         let e = endpoints(vectors["receiver"] as! [String: Any])
         let cases = vectors["cases"] as! [[String: Any]]
         XCTAssertEqual(cases.count, 54)
-        for c in cases where c["feature"] as? String != "lens" {
+        for c in cases {
             let name = c["name"] as! String
             let (rx, _) = pair(c["direction"] as! String, e)
             let result = rx.open(hex(c["hex"] as! String))
@@ -219,6 +323,24 @@ final class VCPGoldenTests: XCTestCase {
                 .open(hex(absent["hex"] as! String)).get()
         else { return XCTFail("expected CONTROL_STATE without thermal presence") }
         XCTAssertNil(control.thermalState)
+        for name in [
+            "control_lens_nan", "control_lens_zero", "control_focus_infinite", "control_focus_zero",
+            "control_fstop_zero", "control_dof_unknown", "control_tap_u_above_one", "control_tap_v_nan",
+            "control_rack_a_zero", "control_rack_b_infinite", "control_rack_target_unknown",
+            "control_rack_duration_too_long", "status_lens_nan", "status_sensor_zero", "status_aspect_infinite",
+            "status_dof_unknown", "status_fit_unknown",
+        ] {
+            XCTAssertEqual(reason(name), .payload(.lensRange), name)
+        }
+        for name in (4...9).map({ "control_lens_bit_\($0)_short" }) + ["status_lens_short"] {
+            XCTAssertEqual(reason(name), .payload(.tooShort), name)
+        }
+        let nan = try XCTUnwrap(cases.first { $0["name"] as? String == "control_lens_absent_nan_ignored" })
+        guard
+            case let .controlState(ignored) = try pair(nan["direction"] as! String, e).0
+                .open(hex(nan["hex"] as! String)).get()
+        else { return XCTFail("expected CONTROL_STATE with bit 4 clear") }
+        XCTAssertEqual(ignored, VCPControlState(stateSeq: 15, motionScale: nil, lockFlags: nil, originEpoch: nil))
         XCTAssertThrowsError(
             try e.device.seal(
                 .controlState(
@@ -290,6 +412,47 @@ final class VCPGoldenTests: XCTestCase {
         let serious = VCPMessage.controlState(
             VCPControlState(stateSeq: 2, motionScale: nil, lockFlags: nil, originEpoch: nil, thermalState: 2))
         XCTAssertEqual(try e.host.open(e.device.seal(serious)).get(), serious)
+        // Lens values are validated before sealing, like thermal (§6.2, §6.4).
+        let bad: [VCPControlState] = [
+            VCPControlState(stateSeq: 3, motionScale: nil, lockFlags: nil, originEpoch: nil, lensMM: 0.5),
+            VCPControlState(stateSeq: 3, motionScale: nil, lockFlags: nil, originEpoch: nil, focusDistanceM: .nan),
+            VCPControlState(stateSeq: 3, motionScale: nil, lockFlags: nil, originEpoch: nil, fstop: 200),
+            VCPControlState(
+                stateSeq: 3, motionScale: nil, lockFlags: nil, originEpoch: nil,
+                tap: VCPTapFocus(u: 1.5, v: 0, seq: 1)),
+            VCPControlState(
+                stateSeq: 3, motionScale: nil, lockFlags: nil, originEpoch: nil,
+                rack: VCPRackFocus(aM: 1, bM: 2, target: 3, durationMS: 0, seq: 1)),
+            VCPControlState(
+                stateSeq: 3, motionScale: nil, lockFlags: nil, originEpoch: nil,
+                rack: VCPRackFocus(aM: 1, bM: 2, target: 1, durationMS: 60_001, seq: 1)),
+        ]
+        for state in bad {
+            XCTAssertThrowsError(try e.device.seal(.controlState(state)), "\(state)") {
+                XCTAssertEqual($0 as? VCPSealError, .payload(.lensRange))
+            }
+        }
+        // Groups keep fixed offsets, so a lone focus distance still makes a 28-byte payload.
+        let focusOnly = VCPControlState(
+            stateSeq: 4, motionScale: nil, lockFlags: nil, originEpoch: nil, focusDistanceM: 3)
+        let sealed = try e.device.seal(.controlState(focusOnly))
+        XCTAssertEqual(sealed.count, VCPEndpoint.headerLength + 28 + VCPEndpoint.tagLength)
+        XCTAssertEqual(try e.host.open(sealed).get(), .controlState(focusOnly))
+        let lens = VCPAppliedLens(
+            lensMM: 35, focusDistanceM: 3, fstop: 4, dofOn: true, sensorFit: 0, sensorWidthMM: 36, renderAspect: 1.5)
+        var withLens = VCPStatus(
+            statusSeq: 1, appliedPoseSeq: 0, controlAck: 0, errorCode: 0, flags: 7, cameraName: "Camera",
+            appliedLens: lens)
+        XCTAssertEqual(try e.device.open(e.host.seal(.status(withLens))).get(), .status(withLens))
+        withLens.flags = 3
+        XCTAssertThrowsError(try e.host.seal(.status(withLens)), "a lens block needs flags bit 2") {
+            XCTAssertEqual($0 as? VCPSealError, .payload(.lensRange))
+        }
+        withLens.flags = 7
+        withLens.appliedLens?.sensorWidthMM = 0
+        XCTAssertThrowsError(try e.host.seal(.status(withLens))) {
+            XCTAssertEqual($0 as? VCPSealError, .payload(.lensRange))
+        }
         XCTAssertNil(
             VCPEndpoint(
                 role: .host, sessionID: 0, kD2H: Array(repeating: 0, count: 32), kH2D: Array(repeating: 0, count: 32)))
@@ -299,12 +462,12 @@ final class VCPGoldenTests: XCTestCase {
     func testMalformedInputIsRejected() throws {
         let e = endpoints(try load("vcp/receive.json")["receiver"] as! [String: Any])
         var cases = (try load("vcp/messages.json")["cases"] as! [[String: Any]]).filter {
-            $0["channel"] as? String == "udp" && $0["feature"] as? String != "lens"
+            $0["channel"] as? String == "udp"
         }
         for file in ["video/fragments.json", "video/report.json"] {
             cases += (try load(file)["cases"] as! [[String: Any]]).filter { $0["accept"] as! Bool }
         }
-        XCTAssertEqual(cases.count, 10 + 4 + 5)
+        XCTAssertEqual(cases.count, 15 + 4 + 5)
         for c in cases {
             let bytes = hex(c["hex"] as! String)
             let (rx, _) = pair(c["direction"] as! String, e)

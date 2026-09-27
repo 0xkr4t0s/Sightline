@@ -117,13 +117,22 @@ final class SightlineUITests: XCTestCase {
                 "\(id) covers picture centre: \(item.frame), viewfinder \(viewfinder.frame)"
             )
         }
+        // The host reports its camera's lens in STATUS; the HUD shows it with FOV and equivalent.
+        expect(
+            element(app, "hud.lens"),
+            NSPredicate(
+                format: "value MATCHES %@",
+                "^Focal [0-9.]+ mm · Focus [0-9.]+ m · f/[0-9.]+ · FOV [0-9.]+° · Equiv [0-9]+ mm$"),
+            timeout: 10)
         let panel = element(app, "hud.panel")
         XCTAssertTrue(panel.exists, "panel background must have a measurable frame")
+        let centre = viewfinder.frame.insetBy(dx: viewfinder.frame.width / 4, dy: viewfinder.frame.height / 4)
         XCTAssertFalse(
-            panel.frame.intersects(
-                viewfinder.frame.insetBy(dx: viewfinder.frame.width / 4, dy: viewfinder.frame.height / 4)),
+            panel.frame.intersects(centre),
             "HUD panel background covers picture centre: \(panel.frame), viewfinder \(viewfinder.frame)")
-        XCTAssertEqual(element(app, "hud.lens").value as? String, "Focal — · Focus — · f/—")
+        // HUDLayout.centreMargin is 4 pt; allow half a point of pixel rounding.
+        XCTAssertGreaterThanOrEqual(
+            panel.frame.minY - centre.maxY, 3.5, "HUD panel margin above the centre: \(panel.frame), centre \(centre)")
         XCTAssertEqual(element(app, "hud.m2p").value as? String, "—")
         XCTAssertEqual(element(app, "hud.recording").value as? String, "Recording: not available (T3)")
         // Frames keep coming: no stall once they arrive (FR-VF-005).
@@ -138,7 +147,8 @@ final class SightlineUITests: XCTestCase {
         XCTAssertTrue(origin.isEnabled)
         origin.tap()
 
-        // The first control state of the run is #1; Set origin sends #2, which Blender acknowledges.
+        // The first control state of the run is #1 and the camera's lens, adopted from the first
+        // STATUS, is #2; Set origin sends #3, which Blender acknowledges.
         showControls(app)
         app.buttons["control.settings"].tap()
         // Top to bottom: the form only scrolls down to find a cell, and cells out of view leave the
@@ -147,7 +157,7 @@ final class SightlineUITests: XCTestCase {
         XCTAssertFalse(text(of: packets).hasSuffix(" 0"), "packets sent: \(text(of: packets))")
         let controlStatus = scrollTo(app, "settings.controlStatus")
         expect(
-            controlStatus, NSPredicate(format: "label CONTAINS 'Applied (#2)' OR value CONTAINS 'Applied (#2)'"),
+            controlStatus, NSPredicate(format: "label CONTAINS 'Applied (#3)' OR value CONTAINS 'Applied (#3)'"),
             timeout: 10)
         attachScreenshot(app, "3 settings while streaming")
         app.buttons["settings.done"].tap()

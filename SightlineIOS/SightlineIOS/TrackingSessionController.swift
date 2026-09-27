@@ -40,6 +40,9 @@ final class TrackingSessionController {
     private(set) var sendLeg: SendLegSummary?
     /// Stream rate and link quality, shown only during a paired session.
     private(set) var stream: StreamStats?
+    /// The Blender camera's lens as the host last reported it (vcp.md §6.4), shown instead of the
+    /// phone's own request; nil without a session or before the host sends it.
+    private(set) var appliedLens: VCPAppliedLens?
     /// The device's thermal state, kept current by the injected provider (FR-UX-004).
     private(set) var thermal = ThermalStatus(state: ProcessInfo.processInfo.thermalState)
 
@@ -369,6 +372,7 @@ final class TrackingSessionController {
             poseRate = nil
             sendLeg = nil
             stream = nil
+            appliedLens = nil
             lastReconnectSeconds = nil
             runHasVideo = false
             isTracking = true
@@ -481,6 +485,7 @@ final class TrackingSessionController {
         liveSession = nil
         sessionEndpoint = nil
         stream = nil
+        appliedLens = nil
         isTracking = false
         stallWatch.stop()
         sceneUnderstanding = nil
@@ -540,6 +545,15 @@ final class TrackingSessionController {
         stream = snapshot.stream
         controlSeq = snapshot.controlSeq
         controlAck = snapshot.controlAck
+        if snapshot.appliedLens != appliedLens {
+            appliedLens = snapshot.appliedLens
+        }
+        if let applied = snapshot.appliedLens {
+            var adopted = controls
+            if adopted.lens.adopt(applied) {
+                controls = adopted
+            }
+        }
         if let error = snapshot.sendError {
             lastError = error
             sessionStatus = "Send error"

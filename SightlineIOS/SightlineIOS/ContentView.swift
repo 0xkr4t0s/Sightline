@@ -159,8 +159,9 @@ struct ContentView: View {
                     .accessibilityValue(HUDFields.m2p)
                     .accessibilityIdentifier("hud.m2p")
             }
-            Text(HUDFields.lens)
-                .accessibilityValue(HUDFields.lens)
+            Text(HUDFields.lens(controller.appliedLens))
+                .minimumScaleFactor(0.8)
+                .accessibilityValue(HUDFields.lens(controller.appliedLens))
                 .accessibilityIdentifier("hud.lens")
             HStack(spacing: 10) {
                 Text("REC n/a")

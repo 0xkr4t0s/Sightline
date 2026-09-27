@@ -201,15 +201,57 @@ final class StatusHUDTests: XCTestCase {
                     CGRect(origin: .zero, size: viewport).insetBy(dx: viewport.width / 4, dy: viewport.height / 4)),
                 "panel background overlaps full viewfinder centre")
             XCTAssertLessThanOrEqual(layout.dataPanel.maxY, inset.height)
-            XCTAssertEqual(layout.dataPanel.minY, viewport.height * 0.75, accuracy: 0.01)
+            XCTAssertEqual(layout.dataPanel.minY, viewport.height * 0.75 + HUDLayout.centreMargin, accuracy: 0.01)
         }
+    }
+
+    /// VAL-HUD-011: pixel rounding once put the panel 0.17 pt from the centre; it now keeps a margin.
+    func testPanelKeepsAMarginAboveTheCentre() throws {
+        XCTAssertGreaterThanOrEqual(HUDLayout.centreMargin, 4)
+        let viewport = CGSize(width: 874, height: 402)
+        let inset = CGRect(x: 59, y: 0, width: 756, height: 381)
+        for size in [
+            inset.size, viewport, CGSize(width: 667, height: 375), CGSize(width: 1376, height: 1032),
+            CGSize(width: 320, height: 180),
+        ] {
+            let layout = HUDLayout(size: size)
+            XCTAssertGreaterThanOrEqual(
+                layout.dataPanel.minY - layout.centre.maxY, HUDLayout.centreMargin - 0.001, "margin at \(size)")
+            XCTAssertLessThanOrEqual(layout.dataPanel.height, HUDLayout.panelMaxHeight)
+        }
+        let geometry = try XCTUnwrap(
+            FramingGeometry(frame: CGSize(width: 960, height: 540), view: viewport, maskAspect: nil))
+        let layout = HUDLayout(
+            size: inset.size, picture: geometry.picture.offsetBy(dx: -inset.minX, dy: 0),
+            viewfinder: CGRect(x: -inset.minX, y: 0, width: viewport.width, height: viewport.height))
+        // Four caption rows need about 60 pt; the iPhone panel must still hold them.
+        XCTAssertGreaterThanOrEqual(layout.dataPanel.height, 64)
+    }
+
+    /// FR-VF-004, LNS-002: the HUD shows the applied lens from STATUS with FOV and equivalent, and
+    /// says FOV is unknown rather than guess it for a vertical or auto fit.
+    func testLensFieldShowsTheAppliedLens() {
+        XCTAssertEqual(HUDFields.lens(nil), "Focal — · Focus — · f/— · FOV —")
+        var lens = VCPAppliedLens(
+            lensMM: 50, focusDistanceM: 4, fstop: 2.8, dofOn: true, sensorFit: 0, sensorWidthMM: 36, renderAspect: 1.5)
+        XCTAssertEqual(HUDFields.lens(lens), "Focal 50 mm · Focus 4.00 m · f/2.8 · FOV 39.6° · Equiv 50 mm")
+        lens = VCPAppliedLens(
+            lensMM: 35, focusDistanceM: 3, fstop: 4, dofOn: false, sensorFit: 0, sensorWidthMM: 24.89,
+            renderAspect: 16 / 9)
+        XCTAssertEqual(HUDFields.lens(lens), "Focal 35 mm · Focus 3.00 m · f/4 · FOV 39.1° · Equiv 53 mm")
+        lens.lensMM = 24.5
+        lens.focusDistanceM = 12.345
+        lens.fstop = 1.4
+        lens.sensorFit = 1
+        XCTAssertEqual(HUDFields.lens(lens), "Focal 24.5 mm · Focus 12.35 m · f/1.4 · FOV —")
+        lens.sensorFit = 2
+        XCTAssertEqual(HUDFields.lens(lens), "Focal 24.5 mm · Focus 12.35 m · f/1.4 · FOV —")
     }
 
     func testDisplayedFrameLevelAndUnavailableFields() {
         XCTAssertEqual(HUDFields.level(quality: 70, size: CGSize(width: 960, height: 540)), "q70 · 960×540")
         XCTAssertEqual(HUDFields.level(quality: 50, size: CGSize(width: 640, height: 360)), "q50 · 640×360")
         XCTAssertEqual(HUDFields.level(quality: 0, size: CGSize(width: 960, height: 540)), "q— · 960×540")
-        XCTAssertEqual(HUDFields.lens, "Focal — · Focus — · f/—")
         XCTAssertEqual(HUDFields.m2p, "—")
         XCTAssertEqual(HUDFields.recording, "Recording: not available (T3)")
         XCTAssertEqual(HUDFields.tracking(running: false, state: 5), "Stopped")
