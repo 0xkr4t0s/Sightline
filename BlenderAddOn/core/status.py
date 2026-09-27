@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .lens import effective_fit, fov_and_equivalent
 from .render import adapted_resolution
 from .rig import LOCK_HEIGHT, LOCK_ROLL, PAN_ONLY
 
@@ -71,6 +72,31 @@ def thermal_label(thermal_state: int | None, resolution: tuple[int, int], fps: i
     if thermal_state >= 2:
         label += f" — stream reduced to {resolution[0]}×{resolution[1]} @ {fps} fps"
     return label
+
+
+def lens_labels(
+    lens_mm: float,
+    focus_distance_m: float,
+    fstop: float,
+    dof_on: bool,
+    sensor_width_mm: float,
+    sensor_fit: str,
+    aspect: float,
+) -> list[str]:
+    """FR-BL-005/LNS-002: the target camera's lens as Blender has it, with the FOV the device shows."""
+    fit = effective_fit(sensor_fit, aspect).lower()
+    fit_label = f"auto fit ({fit})" if sensor_fit == 'AUTO' else f"{fit} fit"
+    derived = fov_and_equivalent(lens_mm, sensor_width_mm, sensor_fit, aspect)
+    return [
+        f"Focal length: {lens_mm:.4g} mm",
+        f"Focus distance: {focus_distance_m:.2f} m",
+        f"Aperture: f/{fstop:.3g}",
+        f"Depth of field: {'on' if dof_on else 'off'}",
+        f"Sensor: {sensor_width_mm:.4g} mm, {fit_label}",
+        f"FOV {derived[0]:.1f}°, 35 mm equivalent {derived[1]:.0f} mm"
+        if derived is not None
+        else f"FOV: unavailable ({fit} fit)",
+    ]
 
 
 def _level_label(quality: int, resolution_key: str, drop: int) -> str:

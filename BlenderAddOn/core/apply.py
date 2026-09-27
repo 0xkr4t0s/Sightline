@@ -11,10 +11,15 @@ motion scale from `CONTROL_STATE`. The pose is canonical (vcp.md §7, Blender's 
 no axis conversion here. The zero is stored on the origin object, so it survives reconnects and
 saving the file.
 
+Lens (task 2.4; FR-BL-005, FR-CTL-001/003): the device's changed lens, focus distance, f-stop
+and DoF requests (merged in `rig.Controls` / `lens.LensControls`) are written to the target
+camera's data in the same tick. A request that arrives while there is no camera waits for one.
+The scene's sensor preset is written when it or the target camera changes (`properties/`).
+
 STATUS reports what the host actually applied: the pose `seq`, the merged `state_seq` as
-`control_ack`, the camera, and the camera's lens as Blender has it (task 2.4, `core/lens.py`).
-It goes out at once on a camera/error/ack/lens change, and otherwise at most every
-`STATUS_INTERVAL` for the pose sequence.
+`control_ack`, the camera, and the camera's lens as Blender has it, including edits made in
+Blender (`core/lens.py`). It goes out at once on a camera/error/ack/lens change, and otherwise
+at most every `STATUS_INTERVAL` for the pose sequence.
 
 Hold last good pose (FR-TRK-002, the scene's `hold_last_good`, on by default): while the newest
 pose isn't normal, the camera shows the session's last normal pose (`rig.PoseHold`) and
@@ -23,7 +28,7 @@ pose isn't normal, the camera shows the session's last normal pose (`rig.PoseHol
 
 from __future__ import annotations
 
-from .lens import render_aspect, status_lens
+from .lens import preset_sensor, render_aspect, status_lens
 from .rig import Controls, PoseHold, local_pose, zero_from_pose
 
 STATUS_INTERVAL = 0.5
@@ -75,14 +80,49 @@ def camera_status(scene):
     return obj, None
 
 
-def applied_lens(scene, camera) -> dict | None:
-    """The camera's current lens as `update_status` keyword arguments, or None (vcp.md §6.4)."""
+def camera_lens(scene, camera) -> tuple:
+    """(lens, focus distance, f-stop, DoF on, sensor width, sensor fit, render aspect) as Blender has them."""
     data, render = camera.data, scene.render
     aspect = render_aspect(render.resolution_x, render.resolution_y, render.pixel_aspect_x, render.pixel_aspect_y)
     dof = data.dof
-    return status_lens(
-        data.lens, dof.focus_distance, dof.aperture_fstop, dof.use_dof, data.sensor_width, data.sensor_fit, aspect
-    )
+    return data.lens, dof.focus_distance, dof.aperture_fstop, dof.use_dof, data.sensor_width, data.sensor_fit, aspect
+
+
+def applied_lens(scene, camera) -> dict | None:
+    """The camera's current lens as `update_status` keyword arguments, or None (vcp.md §6.4)."""
+    return status_lens(*camera_lens(scene, camera))
+
+
+def apply_lens(camera, changes) -> dict:
+    """Writes the device's changed lens requests (`LensControls.take()`) to the camera's data.
+
+    Main thread only. A value the camera already has isn't written again. Returns what changed.
+    """
+    data = camera.data
+    targets = {
+        "lens_mm": (data, "lens"),
+        "focus_distance_m": (data.dof, "focus_distance"),
+        "fstop": (data.dof, "aperture_fstop"),
+        "dof_on": (data.dof, "use_dof"),
+    }
+    written = {}
+    for key, value in changes.items():
+        owner, name = targets[key]
+        if getattr(owner, name) != value:
+            setattr(owner, name, value)
+            written[key] = value
+    return written
+
+
+def apply_sensor_preset(scene) -> bool:
+    """Sets the scene's sensor preset (LNS-002) on the target camera; False if nothing to set."""
+    props = getattr(scene, "vcam_props", None)
+    camera = target_camera(scene)
+    sensor = preset_sensor(props.sensor_preset, props.sensor_custom_width) if props is not None else None
+    if camera is None or sensor is None:
+        return False
+    camera.data.sensor_width, camera.data.sensor_fit = sensor
+    return True
 
 
 def target_camera(scene):
@@ -181,6 +221,8 @@ class Applier:
         camera = target_camera(scene)
         changed, set_origin = self.controls.update(session.latest_control()) if session_id else (False, False)
         self._set_origin |= set_origin
+        if camera is not None and self.controls.lens.pending:
+            apply_lens(camera, self.controls.lens.take())
         pose = session.latest_pose()
         handled = None
         due = pose is not None and (pose["seq"] != self._seen_seq or changed or self._set_origin or self._force)

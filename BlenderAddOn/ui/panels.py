@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""N-panel (tasks 1.3.3, 1.3.6, 2.2c2b; FR-BL-004, FR-TRK-002, NET-VID-001): session on/off,
-pairing code, connected device, pose rate, loss, latency, video stream counters, tracking state
-and hold, camera selection, and origin/scale/lock settings.
+"""N-panel (tasks 1.3.3, 1.3.6, 2.2c2b, 2.4; FR-BL-004, FR-BL-005, FR-TRK-002, NET-VID-001,
+LNS-002): session on/off, pairing code, connected device, pose rate, loss, latency, video stream
+counters, tracking state and hold, camera selection, the camera's lens with the sensor preset,
+and origin/scale/lock settings.
+
+The Lens section shows the target camera's values as Blender has them (whether the device or
+the user set them), and the FOV and 35 mm equivalent the device shows for them.
 
 Scale and locks come from the iPhone (`CONTROL_STATE` is the device's idempotent state,
 FR-CTL-009), so they are shown, not edited, here. Set/Clear origin act on the host-side zero.
@@ -13,9 +17,18 @@ from __future__ import annotations
 import bpy
 
 from ..core import session
-from ..core.apply import camera_status, find_origin
+from ..core.apply import camera_lens, camera_status, find_origin
 from ..core.render import thermal_stream_settings
-from ..core.status import code_label, hold_label, locks_label, scale_label, thermal_label, tracking_label, video_labels
+from ..core.status import (
+    code_label,
+    hold_label,
+    lens_labels,
+    locks_label,
+    scale_label,
+    thermal_label,
+    tracking_label,
+    video_labels,
+)
 
 
 class VCAM_PT_main_panel(bpy.types.Panel):
@@ -55,6 +68,15 @@ class VCAM_PT_main_panel(bpy.types.Panel):
         if props.stream_shading == 'RENDERED':
             col.label(text="EEVEE: UI may lag", icon='ERROR')
             col.label(text="Stream fps may drop")
+        lens = layout.box()
+        lens.label(text="Lens", icon='OUTLINER_DATA_CAMERA')
+        col = lens.column(align=True)
+        col.prop(props, "sensor_preset", text="Sensor")
+        if props.sensor_preset == 'CUSTOM':
+            col.prop(props, "sensor_custom_width", text="Width (mm)")
+        if camera is not None:
+            for line in lens_labels(*camera_lens(context.scene, camera)):
+                col.label(text=line)
 
         if live is None:
             op = layout.operator("vcam.session_start", text="Start Session", icon='PLAY')

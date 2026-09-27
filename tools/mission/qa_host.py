@@ -592,6 +592,8 @@ class Host:
                 "dof_use": camera.data.dof.use_dof,
                 "focus_distance": camera.data.dof.focus_distance,
                 "fstop": camera.data.dof.aperture_fstop,
+                # The applied-lens STATUS arguments (sensor_fit as the wire code, AUTO resolved).
+                "status_lens": apply.applied_lens(scene, camera),
             },
             "camera_warning": warning,
             "origin": None

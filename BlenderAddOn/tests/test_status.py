@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.status import (  # noqa: E402
     code_label,
+    lens_labels,
     locks_label,
     pose_latency_ms,
     scale_label,
@@ -122,3 +123,32 @@ def test_adaptation_shows_the_level_as_a_size_below_the_users_and_why_it_changed
     ]
     adapt["last_change"].update(reason="recovered", m2p_p95_ms=None, from_resolution_drop=2, to_resolution_drop=1)
     assert video_labels(stats, '720p')[3] == "Last change: q50 640×360 → q50 960×540 (link clear)"
+
+
+def test_lens_labels_show_the_camera_values_and_derived_fov():
+    # Blender stores floats as binary32: 2.8 arrives as 2.799999952316284.
+    assert lens_labels(85.0, 2.0, 2.799999952316284, True, 24.889999389648438, 'HORIZONTAL', 16 / 9) == [
+        "Focal length: 85 mm",
+        "Focus distance: 2.00 m",
+        "Aperture: f/2.8",
+        "Depth of field: on",
+        "Sensor: 24.89 mm, horizontal fit",
+        "FOV 16.7°, 35 mm equivalent 129 mm",
+    ]
+
+
+def test_lens_labels_resolve_auto_fit_and_mark_unavailable_fov():
+    labels = lens_labels(24.0, 10.0, 1.4, False, 36.0, 'AUTO', 16 / 9)
+    assert labels[3:] == [
+        "Depth of field: off",
+        "Sensor: 36 mm, auto fit (horizontal)",
+        "FOV 73.7°, 35 mm equivalent 25 mm",
+    ]
+    assert lens_labels(24.0, 10.0, 1.4, False, 36.0, 'AUTO', 9 / 16)[4:] == [
+        "Sensor: 36 mm, auto fit (vertical)",
+        "FOV: unavailable (vertical fit)",
+    ]
+    assert lens_labels(24.0, 10.0, 1.4, False, 36.0, 'VERTICAL', 16 / 9)[4:] == [
+        "Sensor: 36 mm, vertical fit",
+        "FOV: unavailable (vertical fit)",
+    ]

@@ -208,8 +208,8 @@ for name in hs["hidden_keyposes"]:  # applied as ARKit reported it
     assert name in seen and max_diff(seen[name][0], keys[name]["matrix_world"]) < 1e-5, sorted(seen)
 bpy.context.scene.vcam_props.hold_last_good = True
 
-# Run 5 (task 2.4): lens controls over the real wire, and the applied lens in STATUS. The host
-# doesn't apply lens requests yet, so STATUS reports the camera's own values, not the request.
+# Run 5 (task 2.4): lens controls over the real wire, and the applied lens in STATUS: the camera's
+# values after the host applied the request (`addon_lens.py` covers the application itself).
 LENS_KEYS = (
     "lens_mm",
     "focus_distance_m",
@@ -289,6 +289,7 @@ actual = {
     "aspect": f32(aspect),
 }
 assert lens_fields["applied_lens"] == "1" and reported == actual, (lens_fields, actual)
+assert (actual["lens_mm"], actual["focus_m"], cam.dof.use_dof) == (85.0, 3.0, True), actual
 assert (lens_fields["dof"], lens_fields["sensor_fit"]) == ("1", "0"), lens_fields
 width, lens_mm = actual["sensor_width_mm"], actual["lens_mm"]
 fov = math.degrees(2 * math.atan(width / (2 * lens_mm)))
