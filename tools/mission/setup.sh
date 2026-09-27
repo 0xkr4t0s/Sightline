@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prepare a fresh checkout or worktree for local checks and mission work:
-#   1. the project venv (.venv.nosync) with the pytest and maturin versions CI uses;
+#   1. the project venv (.venv.nosync) with the Python tools and maturin versions CI uses;
 #   2. the vcam_native wheel for Blender's Python 3.13, in BlenderAddOn/wheels/;
 #   3. the fake iPhone (debug build) used by the headless Blender tests;
 #   4. the extension zip, installed into an isolated Blender user dir under .mission/.
@@ -17,11 +17,19 @@ run() { "$@" >> "${LOG}" 2>&1 || { echo "FAILED: $* (see ${LOG})" >&2; tail -30 
 [ -x "${BLENDER}" ] || { echo "Blender not found at ${BLENDER} (set BLENDER)" >&2; exit 1; }
 [ -n "${BLENDER_PY}" ] || { echo "Blender's python3.13 not found (set BLENDER_PY)" >&2; exit 1; }
 
+step "git hooks (tools/hooks)"
+hooks_path="$(git -C "${ROOT}" config --get core.hooksPath || true)"
+if [ -z "${hooks_path}" ]; then
+  run git -C "${ROOT}" config core.hooksPath tools/hooks
+elif [ "${hooks_path}" != "tools/hooks" ]; then
+  echo "core.hooksPath is already '${hooks_path}'; not changing it (see tools/hooks/README.md)" | tee -a "${LOG}"
+fi
+
 step "venv"
 if [ ! -x "${VENV}/bin/python" ]; then
   run python3 -m venv "${VENV}"
 fi
-run "${VENV}/bin/python" -m pip install --quiet pytest==9.1.1 maturin==1.15.0
+run "${VENV}/bin/python" -m pip install --quiet pytest==9.1.1 pytest-cov==7.1.0 pytest-randomly==5.0.0 ruff==0.16.9 mypy==2.3.1 maturin==1.15.0
 
 # Debug profile on purpose: the local macOS 27 linker can leave a release .so with a string pool
 # dyld rejects ("mis-aligned LINKEDIT string pool", docs/LOOP_LOG.md). CI builds release wheels.

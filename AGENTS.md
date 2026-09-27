@@ -17,7 +17,7 @@ The product is called **Sightline** (renamed from "VCam for Blender" on 2026-09-
 - `SightlineIOS/`: Swift 6, iOS 26+. ARKit tracking, viewfinder display, controls.
 - `BlenderAddOn/`: Blender 5.2 LTS extension (Python 3.13) that bundles a **Rust** native module (`native/`, PyO3/maturin, per-platform wheels) for networking, protocol, clock sync, and video encoding. Runs on Windows, Linux, and macOS.
 - Protocol: the project's own versioned protocol "VCP" (`docs/protocol/vcp.md`), not FreeD. FreeD/OpenTrackIO are optional T4 exports only.
-- `DesktopReceiver/` (C++, CMIO) is being retired. Don't extend it.
+- `legacy/DesktopReceiver/` (C++, CMIO) is being retired. Don't extend it.
 
 ## Rules
 
@@ -28,9 +28,29 @@ The product is called **Sightline** (renamed from "VCam for Blender" on 2026-09-
 
 ## Local checks and Missions
 
-- `tools/mission/setup.sh` prepares a fresh checkout or worktree: the `.venv.nosync/` venv, a debug `vcam_native` wheel for Blender's Python 3.13 (the local linker can break release wheels; see `docs/LOOP_LOG.md`), the fake iPhone, and the extension installed into an isolated Blender user dir under `.mission/`. Re-run it after changing `native/` or `BlenderAddOn/`.
-- `tools/mission/check.sh [rust|python|blender|ios ...]` runs the suites CI runs, plus the GPU-only render checks. It prints one PASS/FAIL line per suite and writes the full output to `.mission/logs/<suite>.log`. `BLENDER_TESTS="addon_apply video_native"` limits the Blender scripts.
-- The user surface is exercised without hardware: `vcam-fake-iphone` pairs with headless Blender, streams scripted motion and receives video (`tests/blender/`). Anything needing a real iPhone, ARKit, Wi-Fi or Apple signing is owner-only: note it as not verified instead of attempting it. iOS runs unit tests in the iPhone 17 simulator only.
+- `tools/mission/setup.sh` prepares a fresh checkout or worktree:
+  - the Git hooks;
+  - the `.venv.nosync/` venv with pinned pytest, ruff, mypy and maturin;
+  - a debug `vcam_native` wheel for Blender's Python 3.13 (the local linker can break release wheels; see `docs/LOOP_LOG.md`);
+  - the fake iPhone;
+  - the extension, installed into an isolated Blender user dir under `.mission/`.
+
+  Re-run it after changing `native/` or `BlenderAddOn/`. No environment variables or secrets are needed. `tools/mission/env.sh` lists the overridable paths (`BLENDER`, `DEVELOPER_DIR`, `IOS_DESTINATION`, …).
+- `tools/mission/check.sh [rust|python|blender|ios|coverage ...]` runs the suites CI runs, plus the GPU-only render checks. It prints one PASS/FAIL line per suite and writes the full output to `.mission/logs/<suite>.log`. `BLENDER_TESTS="addon_apply video_native"` limits the Blender scripts. The `.factory/skills/sightline-validate` skill maps changed paths to suites.
+- Gates CI enforces:
+  - Rust: rustfmt; Clippy with complexity ceilings in `native/clippy.toml`; `cargo machete`; line coverage ≥ 80 %.
+  - Python: ruff lint and format, mypy strict on the pure modules, coverage `fail_under` (all in `pyproject.toml`).
+  - Swift: swift-format (`.swift-format`) and the iOS coverage gate.
+
+  Fix the code rather than loosening a threshold. A TODO must name an issue or plan task (`TODO(#12)`, `TODO(2.3f)`; `tools/check_todos.py`).
+- Tests are named `BlenderAddOn/tests/test_*.py` (pytest, random order), `tests/blender/<area>_<what>.py` (headless Blender scripts that print a `VCAM_*_OK` line), `native/<crate>/tests/*.rs` plus `#[cfg(test)]` modules, and `SightlineIOS/SightlineIOSTests/<Type>Tests.swift` / `SightlineIOS/SightlineIOSUITests/`.
+- The user surface is exercised without hardware:
+  - **Blender:** `tools/mission/qa_blender.sh` runs a long-lived headless host. You pair and stream it with the fake iPhone, change settings through a command queue, and read `.mission/qa/state.json` (camera, rig, panel text, video stats), the streamed frame and logs in `.mission/`. See `.factory/skills/sightline-qa-blender`.
+  - **iPhone:** `tools/mission/qa_ios.sh` runs the real app in the iPhone 17 simulator in a QA mode: scripted poses replace ARKit, and it pairs with that host. UI tests and screenshots cover the screens. See `.factory/skills/sightline-qa-ios`.
+
+  Anything needing a real iPhone, ARKit, Wi-Fi or Apple signing is owner-only: note it as not verified instead of attempting it.
+- The add-on logs through `BlenderAddOn/core/log.py`. It writes to a file only when `SIGHTLINE_LOG_FILE` is set or the QA host enables it, and it redacts the home path and host name. The iOS app logs with `os.Logger` (subsystem `kr8t0s.Sightline`). Never log pairing codes or keys.
+- CI failures, local setup problems and rollback are covered in `docs/RUNBOOK.md`.
 - Mission work stays on local `mission/*` branches unless the owner asks otherwise: don't push, open PRs or run the agent loop's GitHub flow (`docs/AGENT_LOOP_PROMPT.md`). The Privacy rules below still apply to every commit, and `.mission/` logs can contain host and device names, so don't paste them anywhere unredacted.
 
 ## Privacy (public repository)
@@ -45,6 +65,6 @@ Rules:
 
 - The Team ID lives only in the git-ignored `SightlineIOS/Signing.local.xcconfig`. Never write `DEVELOPMENT_TEAM` into `project.pbxproj` (Xcode adds it when a team is picked in the UI; remove it before committing). Don't commit `xcuserdata/`.
 - Don't add `Created by <name>` headers to new Swift files.
-- Before every commit, check that `git config user.email` is the noreply address above and read the staged diff (`git diff --cached`) for the items listed. Before `gh pr create/edit/comment` or `gh issue create`, check the text the same way.
+- Before every commit, check that `git config user.email` is the noreply address above and read the staged diff (`git diff --cached`) for the items listed. The `tools/hooks/` pre-commit and commit-msg hooks (installed by `tools/mission/setup.sh`) catch the common cases, and also check size, format and TODOs. They don't replace reading the diff, and they must never be bypassed. Before `gh pr create/edit/comment` or `gh issue create`, check the text the same way.
 - Redact rather than drop evidence: replace the value with `<host>`, `<path>` or `<team>` and keep the rest of the output line.
 - If private data has already been pushed, stop and tell the owner. Don't rewrite history yourself.
