@@ -64,6 +64,25 @@ def sent_width():
     return ((stats or {}).get("last_sent") or {}).get("width")
 
 
+def sent_size():
+    last = (live.video_stats() or {}).get("last_sent") or {}
+    return last.get("width"), last.get("height")
+
+
+def jpeg_size(path):
+    """(width, height) from the baseline SOF0 header of the device's newest frame, or None while
+    the file is missing or being rewritten."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except FileNotFoundError:
+        return None
+    at = data.find(b"\xff\xc0")
+    if at < 0 or len(data) < at + 9:
+        return None
+    return int.from_bytes(data[at + 7 : at + 9], "big"), int.from_bytes(data[at + 5 : at + 7], "big")
+
+
 try:
     with tempfile.TemporaryDirectory() as tmp:
         key, frame = os.path.join(tmp, "thermal.key"), os.path.join(tmp, "thermal.jpg")
@@ -89,6 +108,15 @@ try:
             time.sleep(0.004)
         elapsed = time.monotonic() - start
         assert live.video_stats()["sent"] - sent <= 24 * elapsed + 1, live.video_stats()
+        # LNS-003 under thermal reduction: at 2.39:1 the serious step is the next box down at that
+        # aspect, and the device receives frames of that size.
+        scene.render.resolution_x, scene.render.resolution_y = 2048, 858
+        poll_until("serious stream at 2.39:1", lambda: sent_size() == (640, 268) and jpeg_size(frame) == (640, 268))
+        assert (session._stream.renderer.width, session._stream.renderer.height) == (640, 268)
+        assert session._stream.pacer.fps == 24
+        scope_frame = jpeg_size(frame)
+        scene.render.resolution_x, scene.render.resolution_y = 1920, 1080
+        poll_until("serious stream back at 16:9", lambda: sent_size() == (640, 360))
         child.terminate()
         child.communicate(timeout=5)
         # New device session, still using the same pairing and host, restores nominal policy.
@@ -113,4 +141,7 @@ finally:
     session.stop()
     addon_utils.disable(MODULE, default_set=True)
 
-print("VCAM_RENDER_THERMAL_OK nominal=960x540@30 serious=640x360@24 restored=960x540@30")
+print(
+    "VCAM_RENDER_THERMAL_OK nominal=960x540@30 serious=640x360@24 "
+    f"serious_2.39=640x268@24 device_jpeg={scope_frame[0]}x{scope_frame[1]} restored=960x540@30"
+)

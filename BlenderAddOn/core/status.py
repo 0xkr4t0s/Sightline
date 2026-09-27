@@ -74,6 +74,11 @@ def thermal_label(thermal_state: int | None, resolution: tuple[int, int], fps: i
     return label
 
 
+def frame_label(size: tuple[int, int], aspect: float) -> str:
+    """LNS-003: the stream frame the selected size box gives at the scene's render aspect."""
+    return f"Frame: {size[0]}×{size[1]} (render {aspect:.2f}:1)"
+
+
 def lens_labels(
     lens_mm: float,
     focus_distance_m: float,
@@ -112,18 +117,19 @@ def focus_labels(last_tap: tuple[float | None, str | None] | None, rack: FocusRa
     return lines
 
 
-def _level_label(quality: int, resolution_key: str, drop: int) -> str:
-    width, height = adapted_resolution(resolution_key, drop)
+def _level_label(quality: int, resolution_key: str, drop: int, aspect: float | None) -> str:
+    width, height = adapted_resolution(resolution_key, drop, aspect)
     return f"q{quality} {width}×{height}"
 
 
-def adapt_labels(stats: dict[str, Any], resolution_key: str) -> list[str]:
+def adapt_labels(stats: dict[str, Any], resolution_key: str, aspect: float | None = None) -> list[str]:
     """NET-VID-005: the level the stream adapted to, the link's loss and the last change, with
-    resolution steps shown as sizes below the user's `resolution_key`."""
+    resolution steps shown as sizes below the user's `resolution_key` (fitted to the render
+    `aspect` when given, LNS-003)."""
     adapt = stats["adapt"]
     if adapt is None:
         return []
-    level = _level_label(adapt["quality"], resolution_key, adapt["resolution_drop"])
+    level = _level_label(adapt["quality"], resolution_key, adapt["resolution_drop"], aspect)
     if (adapt["quality"], adapt["resolution_drop"]) == (stats["user_quality"], 0):
         lines = [f"Adaptive: full, {level}"]
     else:
@@ -140,14 +146,13 @@ def adapt_labels(stats: dict[str, Any], resolution_key: str) -> list[str]:
             "m2p": f"M2P {change['m2p_p95_ms']} ms",
             "recovered": "link clear",
         }[change["reason"]]
-        lines.append(
-            f"Last change: {_level_label(change['from_quality'], resolution_key, change['from_resolution_drop'])}"
-            f" → {_level_label(change['to_quality'], resolution_key, change['to_resolution_drop'])} ({reason})"
-        )
+        before = _level_label(change['from_quality'], resolution_key, change['from_resolution_drop'], aspect)
+        after = _level_label(change['to_quality'], resolution_key, change['to_resolution_drop'], aspect)
+        lines.append(f"Last change: {before} → {after} ({reason})")
     return lines
 
 
-def video_labels(stats: dict[str, Any] | None, resolution_key: str) -> list[str]:
+def video_labels(stats: dict[str, Any] | None, resolution_key: str, aspect: float | None = None) -> list[str]:
     """Viewfinder stream counters (`Session.video_stats()`, NET-VID-001/005) as N-panel lines."""
     if stats is None:
         return ["Video: not streaming"]
@@ -158,7 +163,7 @@ def video_labels(stats: dict[str, Any] | None, resolution_key: str) -> list[str]
             f"Last: {last['width']}×{last['height']}, {last['jpeg_bytes'] / 1024:.0f} KB, "
             f"encode {last['encode_ns'] / 1e6:.1f} ms, send {last['send_ns'] / 1e6:.1f} ms"
         )
-    lines += adapt_labels(stats, resolution_key)
+    lines += adapt_labels(stats, resolution_key, aspect)
     failed = stats["send_failed"] + stats["encode_failed"]
     if failed:
         error = stats["last_error"]

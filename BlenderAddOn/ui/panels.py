@@ -18,11 +18,12 @@ from __future__ import annotations
 import bpy
 
 from ..core import session
-from ..core.apply import camera_lens, camera_status, find_origin
-from ..core.render import thermal_stream_settings
+from ..core.apply import camera_lens, camera_status, find_origin, scene_aspect
+from ..core.render import adapted_resolution, thermal_stream_settings
 from ..core.status import (
     code_label,
     focus_labels,
+    frame_label,
     hold_label,
     lens_labels,
     locks_label,
@@ -64,6 +65,8 @@ class VCAM_PT_main_panel(bpy.types.Panel):
         stream.label(text="Stream", icon='RENDER_STILL')
         col = stream.column(align=True)
         col.prop(props, "stream_resolution", text="Size")
+        aspect = scene_aspect(context.scene)
+        col.label(text=frame_label(adapted_resolution(props.stream_resolution, 0, aspect), aspect))
         col.prop(props, "stream_fps", text="FPS")
         col.prop(props, "stream_shading", text="Shading")
         col.prop(props, "render_budget_ms")
@@ -125,9 +128,10 @@ class VCAM_PT_main_panel(bpy.types.Panel):
                 int(props.stream_fps),
                 adapt["resolution_drop"] if adapt else 0,
                 applier.controls.thermal_state,
+                aspect,
             )
             col.label(text=thermal_label(applier.controls.thermal_state, resolution, fps))
-            for line in video_labels(video_stats, props.stream_resolution):
+            for line in video_labels(video_stats, props.stream_resolution, aspect):
                 col.label(text=line)
         samples = len(session.latency_log().pose_leg_ms)
         if samples:  # kept after the device leaves, until the next device session

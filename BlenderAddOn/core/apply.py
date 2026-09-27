@@ -91,11 +91,16 @@ def camera_status(scene):
     return obj, None
 
 
+def scene_aspect(scene) -> float:
+    """The scene's render picture width / height, pixel aspect included (LNS-003)."""
+    render = scene.render
+    return render_aspect(render.resolution_x, render.resolution_y, render.pixel_aspect_x, render.pixel_aspect_y)
+
+
 def camera_lens(scene, camera) -> tuple:
     """(lens, focus distance, f-stop, DoF on, sensor width, sensor fit, render aspect) as Blender has them."""
-    data, render = camera.data, scene.render
-    aspect = render_aspect(render.resolution_x, render.resolution_y, render.pixel_aspect_x, render.pixel_aspect_y)
-    dof = data.dof
+    data, dof = camera.data, camera.data.dof
+    aspect = scene_aspect(scene)
     return data.lens, dof.focus_distance, dof.aperture_fstop, dof.use_dof, data.sensor_width, data.sensor_fit, aspect
 
 
@@ -129,8 +134,8 @@ def tap_hit(scene, camera, u: float, v: float):
     """Ray-casts through (u, v) of the camera's picture: (distance along the view axis, object
     name), or None if nothing is hit between the clip planes. Main thread only.
 
-    `view_frame` has the scene render's aspect, so (u, v) of the streamed picture map onto it
-    only while the stream has that aspect too (LNS-003).
+    `view_frame` has the scene render's aspect, and so does the streamed picture (LNS-003,
+    `render.fit_aspect`), so (u, v) of the device's viewfinder land on the same scene point.
     """
     import bpy
     from mathutils import Vector

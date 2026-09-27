@@ -8,7 +8,17 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.render import FramePacer, adapted_resolution, resolution_steps, thermal_stream_settings  # noqa: E402
+from core.lens import render_aspect  # noqa: E402
+from core.render import (  # noqa: E402
+    STREAM_RESOLUTIONS,
+    FramePacer,
+    adapted_resolution,
+    fit_aspect,
+    resolution_steps,
+    thermal_stream_settings,
+)
+
+SCOPE = render_aspect(2048, 858, 1.0, 1.0)  # 2.39:1
 
 TICK = 1_000_000_000 // 30
 
@@ -106,3 +116,72 @@ def test_thermal_stacks_with_adaptive_drop_floors_and_restores():
     assert thermal_stream_settings('360p', 30, 1, 2) == ((640, 360), 24)
     assert thermal_stream_settings('1080p', 60, 1, 1) == ((1280, 720), 60)
     assert thermal_stream_settings('540p', 24, 0, 2) == ((640, 360), 24)
+
+
+@pytest.mark.parametrize(
+    ("render", "box", "expected"),
+    [
+        ((1920, 1080, 1.0, 1.0), (960, 540), (960, 540)),
+        ((2048, 858, 1.0, 1.0), (960, 540), (960, 402)),  # 2.39: 402.19 → 402
+        ((1080, 1920, 1.0, 1.0), (960, 540), (304, 540)),  # portrait: 303.75 → 304
+        ((1440, 1080, 1.0, 1.0), (960, 540), (720, 540)),  # 4:3
+        ((1440, 1080, 1.0, 1.0), (1920, 1080), (1440, 1080)),
+        ((1440, 1080, 4.0, 3.0), (960, 540), (960, 540)),  # anamorphic pixels: 16:9 picture
+        ((1000, 1000, 1.0, 1.0), (640, 360), (360, 360)),
+        ((1001, 1000, 1.0, 1.0), (640, 360), (360, 360)),  # 360.36 → 360
+        ((1000, 999, 1.0, 1.0), (640, 360), (360, 360)),
+        ((1920, 817, 1.0, 1.0), (1280, 720), (1280, 544)),  # 544.69 → 544
+        ((2048, 858, 1.0, 1.0), (640, 360), (640, 268)),
+        ((2000, 200, 1.0, 1.0), (640, 360), (640, 64)),  # 10:1
+        ((100, 1000, 1.0, 1.0), (640, 360), (36, 360)),  # 1:10
+        ((1000, 1000, 1.0, 2.0), (640, 360), (180, 360)),  # pixel aspect y halves the width
+    ],
+)
+def test_stream_frame_is_the_render_aspect_with_even_sides_inside_the_box(render, box, expected):
+    aspect = render_aspect(*render)
+    size = fit_aspect(box, aspect)
+    assert size == expected
+    width, height = size
+    assert width % 2 == 0 and height % 2 == 0
+    assert width <= box[0] and height <= box[1]
+    assert width == box[0] or height == box[1], "the frame fills the box on one side"
+    # Nearest even sides: within one pixel pair of the exact aspect on the rounded side.
+    assert abs(width - height * aspect) <= 2 or abs(height - width / aspect) <= 2
+
+
+def test_every_box_and_any_aspect_gives_even_sides_inside_the_box():
+    for box in STREAM_RESOLUTIONS.values():
+        for n in range(1, 400):
+            aspect = 0.1 + n * 0.025  # 0.125 … 10.075
+            width, height = fit_aspect(box, aspect)
+            assert width % 2 == 0 and height % 2 == 0, (box, aspect)
+            assert 2 <= width <= box[0] and 2 <= height <= box[1], (box, aspect)
+
+
+def test_adaptive_steps_keep_the_render_aspect_through_the_boxes():
+    assert adapted_resolution('540p', 0, SCOPE) == (960, 402)
+    assert [adapted_resolution('1080p', d, SCOPE) for d in range(4)] == [
+        (1920, 804),
+        (1280, 536),
+        (960, 402),
+        (640, 268),
+    ]
+    assert adapted_resolution('540p', 3, SCOPE) == (640, 268)
+    assert adapted_resolution('540p', 0, 9 / 16) == (304, 540)
+    assert adapted_resolution('540p', 1, 9 / 16) == (202, 360)
+    assert adapted_resolution('540p', 1) == (640, 360), "no aspect: the box itself"
+
+
+@pytest.mark.parametrize(
+    ("key", "drop", "thermal", "expected"),
+    [
+        ('540p', 0, 0, ((960, 402), 30)),
+        ('540p', 0, 2, ((640, 268), 24)),
+        ('540p', 1, 2, ((640, 268), 24)),
+        ('1080p', 0, 3, ((1280, 536), 24)),
+        ('1080p', 1, 2, ((960, 402), 24)),
+        ('720p', 1, None, ((960, 402), 30)),
+    ],
+)
+def test_thermal_step_keeps_the_render_aspect(key, drop, thermal, expected):
+    assert thermal_stream_settings(key, 30, drop, thermal, SCOPE) == expected

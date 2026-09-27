@@ -40,9 +40,13 @@ Commands ({"cmd": NAME, ...}); relative paths are relative to the repository roo
   pair                                  new pairing code (also in host.json)
   cancel_pair                           withdraw the pairing code
   set        prop, value                set a scene `vcam_props` property (target_camera by object name)
+  set_render [resolution_x, resolution_y, pixel_aspect_x, pixel_aspect_y]
+                                        set the scene's render size / pixel aspect (the stream
+                                        follows its aspect, LNS-003)
   set_origin / clear_origin             the N-panel's Set/Clear Origin operators
   render_png [path, resolution, shading] draw the driven camera like the stream and save a PNG
-                                        (default .mission/qa/render.png, the stream's size and shading)
+                                        (default .mission/qa/render.png, the stream's size at the
+                                        render aspect and shading)
   save_blend path                       save a copy of the open file
   open_blend path                       open a .blend (the session keeps running)
   eval       code                       QA escape hatch: exec Python with bpy on the main thread;
@@ -662,6 +666,9 @@ class Host:
                 "resolution_x": scene.render.resolution_x,
                 "resolution_y": scene.render.resolution_y,
                 "resolution_percentage": scene.render.resolution_percentage,
+                "pixel_aspect_x": scene.render.pixel_aspect_x,
+                "pixel_aspect_y": scene.render.pixel_aspect_y,
+                "aspect": self.apply.scene_aspect(scene),
                 "fps": scene.render.fps,
                 "frame_current": scene.frame_current,
             },
@@ -774,6 +781,21 @@ class Host:
         self.log.info("set %s=%r", name, self.prop_value(props, name))
         return {"prop": name, "value": self.prop_value(props, name)}
 
+    RENDER_PROPS = ("resolution_x", "resolution_y", "pixel_aspect_x", "pixel_aspect_y")
+
+    def cmd_set_render(self, c):
+        """Output properties a user sets in Blender: render size and pixel aspect (LNS-003)."""
+        render = bpy.context.scene.render
+        given = {name: c[name] for name in self.RENDER_PROPS if name in c}
+        if not given:
+            raise ValueError(f'"set_render" needs one of {", ".join(self.RENDER_PROPS)}')
+        for name, value in given.items():
+            setattr(render, name, value)
+        result = {name: getattr(render, name) for name in self.RENDER_PROPS}
+        result["aspect"] = self.apply.scene_aspect(bpy.context.scene)
+        self.log.info("set_render %s", result)
+        return result
+
     def _operator(self, op, why: str):
         if not op.poll():
             raise RuntimeError(f"{op.idname()} is unavailable: {why}")
@@ -793,7 +815,9 @@ class Host:
         camera, warning = self.apply.camera_status(scene)
         if camera is None:
             raise RuntimeError(warning)
-        width, height = self.render.STREAM_RESOLUTIONS[c.get("resolution") or props.stream_resolution]
+        width, height = self.render.adapted_resolution(
+            c.get("resolution") or props.stream_resolution, 0, self.apply.scene_aspect(scene)
+        )
         shading = c.get("shading") or props.stream_shading
         path = resolve(c.get("path") or os.path.join(QA_DIR, "render.png"))
         frames = []

@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.status import (  # noqa: E402
     code_label,
+    frame_label,
     lens_labels,
     locks_label,
     pose_latency_ms,
@@ -52,6 +53,11 @@ def test_thermal_status_uses_actual_selected_stream_level():
     assert thermal_label(1, (960, 540), 30) == "Device thermal: fair"
     assert thermal_label(2, (640, 360), 24) == "Device thermal: serious — stream reduced to 640×360 @ 24 fps"
     assert thermal_label(3, (960, 540), 24) == "Device thermal: critical — stream reduced to 960×540 @ 24 fps"
+
+
+def test_frame_label_shows_the_fitted_frame_and_render_aspect():
+    assert frame_label((960, 402), 2048 / 858) == "Frame: 960×402 (render 2.39:1)"
+    assert frame_label((304, 540), 1080 / 1920) == "Frame: 304×540 (render 0.56:1)"
 
 
 def test_video_counters_show_the_last_frame_and_only_real_failures():
@@ -123,6 +129,12 @@ def test_adaptation_shows_the_level_as_a_size_below_the_users_and_why_it_changed
     ]
     adapt["last_change"].update(reason="recovered", m2p_p95_ms=None, from_resolution_drop=2, to_resolution_drop=1)
     assert video_labels(stats, '720p')[3] == "Last change: q50 640×360 → q50 960×540 (link clear)"
+    # LNS-003: the levels are the frame sizes actually streamed at the render aspect (2.39:1).
+    assert video_labels(stats, '720p', 2048 / 858)[1:] == [
+        "Adaptive: lowered to q50 960×402",
+        "Link: 40 of 300 frames lost, M2P p95 140 ms",
+        "Last change: q50 640×268 → q50 960×402 (link clear)",
+    ]
 
 
 def test_lens_labels_show_the_camera_values_and_derived_fov():

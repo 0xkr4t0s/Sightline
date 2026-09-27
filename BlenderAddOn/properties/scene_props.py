@@ -91,8 +91,11 @@ class VCamProperties(bpy.types.PropertyGroup):
     )
     stream_resolution: bpy.props.EnumProperty(
         name="Stream Resolution",
-        description="Offscreen viewfinder resolution",
-        items=[(key, f"{w} × {h}", f"Stream at {w} × {h}") for key, (w, h) in STREAM_RESOLUTIONS.items()],
+        description="Size box for the viewfinder stream; the frame has the scene's render aspect",
+        items=[
+            (key, f"{w} × {h}", f"Stream within {w} × {h} at the render aspect")
+            for key, (w, h) in STREAM_RESOLUTIONS.items()
+        ],
         default='540p',
     )
     stream_fps: bpy.props.EnumProperty(

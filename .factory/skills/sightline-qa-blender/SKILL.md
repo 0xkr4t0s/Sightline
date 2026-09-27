@@ -39,7 +39,10 @@ tools/mission/qa_blender.sh stop                     # always stop when done; it
 - To inspect a device that is still connected, run `drive` with a long `--linger` in the
   background, then poll `state` while it runs.
 - Commands: `ping`, `state`, `pair`, `cancel_pair`, `set` (any `vcam_props` scene property, or
-  `target_camera`), `set_origin`, `clear_origin`, `render_png`, `save_blend`, `open_blend`, `stop`.
+  `target_camera`), `set_render` (scene `resolution_x`/`resolution_y`/`pixel_aspect_x`/
+  `pixel_aspect_y`; the stream frame follows the render aspect inside the size box, and
+  `state.json` `render.aspect` shows it), `set_origin`, `clear_origin`, `render_png` (the stream's
+  fitted size), `save_blend`, `open_blend`, `stop`.
   `eval` runs Python with `bpy` on the main thread. It's an escape hatch: prefer the named
   commands and the user-facing operators so you test what users can do. The full reference is
   at the top of `tools/mission/qa_host.py`.

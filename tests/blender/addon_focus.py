@@ -22,6 +22,8 @@ with v measured from the bottom the ray would miss.
 - A stub session in the same scene: the same tap_seq after the camera moved doesn't cast
   again; a new one does; a tap keeps the device's DoF flag; an orthographic camera works; a
   manual focus change and a new tap cancel a rack; the miss is logged and in the N-panel.
+- LNS-003: with a 2.39:1 render the stream frame is 960×402, and a tap at the picture point
+  where that frame shows a small cube hits the cube.
 """
 
 import importlib
@@ -34,7 +36,7 @@ import time
 
 import addon_utils
 import bpy
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 
 MODULE = "bl_ext.user_default.vcam_blender"
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,6 +49,7 @@ addon_utils.enable(MODULE, default_set=True, handle_error=None)
 session = importlib.import_module(MODULE + ".core.session")
 apply = importlib.import_module(MODULE + ".core.apply")
 panels = importlib.import_module(MODULE + ".ui.panels")
+render_mod = importlib.import_module(MODULE + ".core.render")
 
 scene = bpy.context.scene
 camera = scene.camera
@@ -348,6 +351,36 @@ class Layout:
 panels.VCAM_PT_main_panel.draw(type("Panel", (), {"layout": Layout()})(), bpy.context)
 assert "Tap focus: nothing hit, focus kept" in labels and "Rack to A: 1.00 m over 1.0 s" in labels, labels
 
+# LNS-003: a 2.39:1 render streams 960×402, drawn with the camera's projection for that size
+# (StreamRenderer._draw). "Scope", a 0.2 m cube 3 m ahead, sits where that frame shows the
+# picture point (0.8, 0.1); a tap where the device sees it hits it. The 16:9 frame the stream
+# used before showed a different point there.
+render = scene.render
+render.resolution_x, render.resolution_y = 2048, 858
+stream_size = render_mod.adapted_resolution('540p', 0, apply.scene_aspect(scene))
+assert stream_size == (960, 402), stream_size
+SCOPE_M = 3.0
+scope_h = half_w * 858 / 2048
+scope_face = Vector((0.6 * half_w * SCOPE_M, SCOPE_M, 1.6 + 0.8 * scope_h * SCOPE_M))
+cube("Scope", scope_face + Vector((0.0, 0.1, 0.0)), size=0.2)
+depsgraph = bpy.context.evaluated_depsgraph_get()
+
+
+def picture_point(size):
+    """(u, v) of the Scope face centre in a stream frame of `size` (u from the left, v from the top)."""
+    view = camera.evaluated_get(depsgraph).matrix_world.inverted()
+    clip = camera.calc_matrix_camera(depsgraph, x=size[0], y=size[1]) @ view @ scope_face.to_4d()
+    return (clip.x / clip.w + 1) / 2, (1 - clip.y / clip.w) / 2
+
+
+scope_uv = picture_point(stream_size)
+assert abs(scope_uv[0] - 0.8) < 2e-3 and abs(scope_uv[1] - 0.1) < 2e-3, scope_uv
+old_uv = picture_point((960, 540))
+assert abs(old_uv[1] - scope_uv[1]) > 0.05, (old_uv, scope_uv)
+send(tap=(*scope_uv, 6), rack=(1.0, 6.0, 1, 1000, 4), focus_distance_m=2.5)
+assert applier.last_tap[1] == "Scope" and near(cam.dof.focus_distance, SCOPE_M), (applier.last_tap, scope_uv)
+render.resolution_x, render.resolution_y = 1920, 1080
+
 apply.tap_hit = real_tap_hit
 log_root.removeHandler(capture)
 assert bpy.ops.vcam.session_stop() == {'FINISHED'}
@@ -355,5 +388,6 @@ addon_utils.disable(MODULE, default_set=True)
 print(
     f"VCAM_ADDON_FOCUS_OK tap_axial_m={wire_tap:.4f} expected_m={FAR_M} euclidean_m={FAR_EUCLID:.4f} "
     f"dof_after_tap=off rack=1->6m_in_{rack_s:.2f}s distinct={distinct} monotonic=yes resend=no_restart "
-    f"miss=kept_6m max_poll_ms={max_poll_ms:.2f} same_tap_seq=no_cast cancel=manual,tap main_thread=all"
+    f"miss=kept_6m max_poll_ms={max_poll_ms:.2f} same_tap_seq=no_cast cancel=manual,tap main_thread=all "
+    f"aspect_tap=Scope@{stream_size[0]}x{stream_size[1]}_uv={scope_uv[0]:.3f},{scope_uv[1]:.3f}"
 )
