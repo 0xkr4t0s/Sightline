@@ -2274,3 +2274,31 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
   - no `trim`: the limits check failed (`duration 19.830000, size 6894676`).
 - **QA:** The first, middle and last GIF frames and one frame per second (8) were viewed. They show the QA scene streamed into the app's viewfinder, with the camera orbiting the totem (pillars C/A, then A/K, then back to C/A). The status strip reads "Running · Tracking · 60 Hz · Sending to Blender · Thermal: Normal", and the HUD reads "17 fps · 4.x Mbit/s · Good", "q80 · 960×540 · M2P —", "Focal 24 mm · Focus 10.00 m · f/2.8 · FOV 73.7° · Equiv 25 mm" and "REC n/a · Thermal: Normal". No host name, path, IP address, device name or pairing code appears; no host label is shown at all. With the QA host running, DNS-SD lookup of its `_vcam-ctl._tcp` instance showed TXT `host=Sightline Demo`. Host stopped; port 47000 free; app terminated.
 - **Not verified, needs owner:** a device recording to replace the simulator GIF (plan M.4, "a device recording replaces it later"). **Blocked:** none.
+
+## 2026-09-28 — Mission — 2.5 (FR-CTL-008) — partial (seams; wireup next)
+
+- **Files:** `SightlineIOS/SightlineIOS/HardwareInput.swift` and `GameControllerInput.swift` (new, in the test target's `membershipExceptions`), `LensInput.swift` (`LensAction.rackTo`, `LensPanelModel.rack(to:)`), `TrackingSessionController.swift` (logs `.rackTo` like `.rack`), `SightlineIOSTests/HardwareInputTests.swift` and `GameControllerInputTests.swift` (new), `SightlineIOS.xcodeproj/project.pbxproj`, `IMPLEMENTATION_PROGRESS.md`, this log.
+- **What:** hardware-input groundwork behind seams, not yet installed in the app.
+  - `InputMapper` (pure): an action fires when a press ends; `.began` and `.cancelled` do nothing. Camera Control full press → record, which in T2 only returns "Recording not available (T3)" and changes no control. Light press → tap at (0.5, 0.5), a new `tap_seq`. Volume down → rack to A, volume up → rack to B, each a new `rack_seq` with the stored marks and the panel's rack duration, to the pressed mark even if the focus is already there (unlike the panel's "Rack A↔B", which picks the farther mark). A volume button whose mark isn't set returns "Set focus mark A first" / "… B first" and sends nothing.
+  - `InputEventSource` and `GameControllerSource` protocols (main actor) so the real sources and test fakes are interchangeable.
+  - Game controllers: `GameControllerState` tracks connected pads; thumbsticks become a `LocomotionIntent` (left = move, right = turn) with a 0.15 radial dead zone, rescaled from the edge and clamped to length ≤ 1; non-numbers count as resting. The intent resets when the driving pad disconnects or the monitor stops, and a resting second pad doesn't cancel the one being pushed. It holds no controls, so nothing reaches the rig or `state_seq` in T2.
+- **SDK finding (documented in `HardwareInput.swift:16-27`):** from the iOS 27 SDK AVKit headers (`AVCaptureEvent.h`, `AVCaptureEventInteraction.h`, `_AVKit_SwiftUI` `onCameraCaptureEvent`) and WWDC25 session 253: primary events come from volume down, the Action button, the Camera Control click and AirPods stem clicks; secondary from volume up. `AVCaptureEvent` has only `phase` (and AirPods sound properties), not the button. So:
+  - a Camera Control full press arrives exactly like volume down. `CaptureEventHandler` maps primary → volume down (rack to A) and secondary → volume up (rack to B), so on a device the Camera Control click would rack to A, not record;
+  - a light press is not a capture event. The system uses it for the `AVCaptureControl` overlay, which needs an app-owned `AVCaptureSession` (`supportsControls`); ARKit owns the camera here. No SDK symbol mentions a light press.
+  - Both Camera Control mappings are therefore reachable only through an injected `InputEvent` (the wireup's simulator QA hook) until a device shows otherwise.
+- **Checks:** `xcrun swift-format lint --strict --configuration .swift-format -r SightlineIOS`: exit 0. Narrow run `xcodebuild test … -only-testing:SightlineIOSTests/HardwareInputTests -only-testing:SightlineIOSTests/GameControllerInputTests`: `Executed 15 tests, with 0 failures`. `tools/mission/check.sh ios`: `PASS ios (150 s)`; `SightlineIOS.app line coverage: 82.1% (5411/6594 lines); minimum 75%`; no compiler warnings in the changed files. `python3 tools/check_todos.py`: `135 source file(s), 0 marker(s)`. `tools/mission/setup.sh`: exit 0.
+- **Mutation proof:** 12 of 12 caught, one at a time, each file restored SHA-256-identical and touched:
+  - act on `.began` instead of `.ended`: `HardwareInputTests.swift:31` (`nil` is not `record` for the full press ended) and `:194` (the cancelled volume down racked).
+  - volume down racks to B: `:31`, `:98`, `:99`.
+  - light press at (0.5, 0.45): `:31`, `:76`.
+  - full press taps instead of recording: `:31`, `:195`.
+  - no message for an unset mark: `:127`, `:130`, `:136` (`nil` instead of "Set focus mark A first").
+  - primary handler is volume up: `:159`, `:161`.
+  - no dead zone: `GameControllerInputTests.swift:14` ((0.1, 0.1) gave −0.007), `:65`.
+  - no clamp: `:32` (diagonal length 1.487), `:35`, `:36`.
+  - disconnect keeps the intent: `:69`, `:74`.
+  - sticks from an unknown pad accepted: `:74`, `:75`.
+  - monitor stop keeps the state: `:89`, `:92`.
+  - `.rackTo` picks the farther mark: `HardwareInputTests.swift:153`, `:99`, `:136`.
+- **QA:** nothing on screen changed (the seams aren't installed yet), so no simulator smoke; the wireup feature adds the injection hook and the UI test.
+- **Not verified, needs owner:** whether an ARKit-only app receives capture events at all (the header: "The system sends capture events only to apps that actively use the camera"), and every hardware press (volume, Camera Control click and light press, game controller) on a device. **Open for the owner:** on a device the Camera Control click can't be told from volume down, so it would rack to A rather than show the record message. **Blocked:** none.

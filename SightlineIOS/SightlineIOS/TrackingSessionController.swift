@@ -530,7 +530,7 @@ final class TrackingSessionController {
             Log.lens.info(
                 "Tap focus u=\(u, format: .fixed(precision: 3), privacy: .public) v=\(v, format: .fixed(precision: 3), privacy: .public)"
             )
-        case .rack:
+        case .rack, .rackTo:
             let target = next.lens.rack.target == VCPRackFocus.targetA ? "A" : "B"
             Log.lens.info(
                 "Rack to \(target, privacy: .public) over \(next.lens.rack.durationMS, privacy: .public) ms")

@@ -44,6 +44,8 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				FramingOverlay.swift,
+				GameControllerInput.swift,
+				HardwareInput.swift,
 				HostDiscovery.swift,
 				LensControls.swift,
 				LensInput.swift,
