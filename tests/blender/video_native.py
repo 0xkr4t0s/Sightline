@@ -58,8 +58,8 @@ def wait_for(what, done, timeout=10.0):
 
 
 frame = np.empty((HEIGHT, WIDTH, 4), dtype=np.uint8)
-frame[:HEIGHT // 2] = BLUE  # stored bottom-up: the lower half as displayed
-frame[HEIGHT // 2:] = RED
+frame[: HEIGHT // 2] = BLUE  # stored bottom-up: the lower half as displayed
+frame[HEIGHT // 2 :] = RED
 
 with tempfile.TemporaryDirectory() as tmp:
     session = vcam_native.Session.start(0, tmp, os.urandom(16), bind="127.0.0.1")
@@ -77,10 +77,27 @@ with tempfile.TemporaryDirectory() as tmp:
 
     video_out = os.path.join(tmp, "newest.jpg")
     child = subprocess.Popen(
-        [FAKE, "--host", f"127.0.0.1:{session.port()}", "--state", os.path.join(tmp, "fake-iphone.key"),
-         "--code", session.enable_pairing(), "--motion", os.path.join(ROOT, "testdata", "motion", "scripted.bin"),
-         "--rate", "60", "--linger", "1", "--video-out", video_out],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        [
+            FAKE,
+            "--host",
+            f"127.0.0.1:{session.port()}",
+            "--state",
+            os.path.join(tmp, "fake-iphone.key"),
+            "--code",
+            session.enable_pairing(),
+            "--motion",
+            os.path.join(ROOT, "testdata", "motion", "scripted.bin"),
+            "--rate",
+            "60",
+            "--linger",
+            "1",
+            "--video-out",
+            video_out,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     try:
         wait_for("no authenticated device source", lambda: session.stats()["source"] is not None, timeout=20)
         deadline = time.monotonic() + 20
@@ -92,8 +109,10 @@ with tempfile.TemporaryDirectory() as tmp:
             last_id = slot.submit(frame, pose["seq"] if pose else 0, session.host_clock_ns())
             time.sleep(1 / 30)
         # Nothing newer replaces the last frame, so it is encoded and sent in turn.
-        wait_for("last submitted frame was not sent",
-                 lambda: (session.video_stats()["last_sent"] or {}).get("source_frame_id") == last_id)
+        wait_for(
+            "last submitted frame was not sent",
+            lambda: (session.video_stats()["last_sent"] or {}).get("source_frame_id") == last_id,
+        )
         stats = session.video_stats()
         out, err = child.communicate(timeout=30)
     finally:
@@ -109,7 +128,10 @@ with tempfile.TemporaryDirectory() as tmp:
     assert (last["width"], last["height"]) == (WIDTH, HEIGHT), last
     assert int(done["session_id"]) == last["session_id"], (done, last)
     assert (int(done["video_last_id"]), int(done["video_last_len"]), int(done["video_last_pose_seq"])) == (
-        last["wire_frame_id"], last["jpeg_bytes"], last["pose_seq"]), (done, last)
+        last["wire_frame_id"],
+        last["jpeg_bytes"],
+        last["pose_seq"],
+    ), (done, last)
     # Loopback: allow a little loss, but most frames must arrive whole.
     received, lost = int(done["video_frames"]), int(done["video_lost"])
     assert received >= stats["sent"] * 0.9 and lost <= stats["sent"] * 0.1, (done, stats)
@@ -128,10 +150,25 @@ with tempfile.TemporaryDirectory() as tmp:
     session.start_video(slot, quality=80, max_resolution_drop=1)
     assert session.video_stats()["adapt"] is None
     child = subprocess.Popen(
-        [FAKE, "--host", f"127.0.0.1:{session.port()}", "--state", os.path.join(tmp, "fake-iphone.key"),
-         "--motion", os.path.join(ROOT, "testdata", "motion", "scripted.bin"),
-         "--rate", "60", "--linger", "20", "--m2p", "150"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        [
+            FAKE,
+            "--host",
+            f"127.0.0.1:{session.port()}",
+            "--state",
+            os.path.join(tmp, "fake-iphone.key"),
+            "--motion",
+            os.path.join(ROOT, "testdata", "motion", "scripted.bin"),
+            "--rate",
+            "60",
+            "--linger",
+            "20",
+            "--m2p",
+            "150",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     try:
         deadline = time.monotonic() + 20
         while (session.video_stats()["adapt"] or {}).get("changes", 0) < 2:
@@ -154,7 +191,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert (change["from_quality"], change["to_quality"], change["to_resolution_drop"]) == (70, 60, 0), adapted
     assert (change["reason"], change["m2p_p95_ms"], change["lost"]) == ("m2p", 150, None), adapted
     assert (adapted["quality"], adapted["user_quality"], adapt["quality"], adapt["resolution_drop"]) == (
-        60, 80, 60, 0), adapted
+        60,
+        80,
+        60,
+        0,
+    ), adapted
     assert adapt["session_id"] not in (0, last["session_id"]), (adapt, last)
     report = adapt["report"]
     assert report["m2p_p95_ms"] == 150 and 0 < report["frames_complete"] <= report["newest_frame_id"], adapt
@@ -177,9 +218,11 @@ with tempfile.TemporaryDirectory() as tmp:
     session.stop_video()
 
 addon_utils.disable(MODULE, default_set=True)
-print(f"VCAM_VIDEO_OK sent={stats['sent']} received={received} lost={lost} unsent={stats['unsent']} "
-      f"skipped={stats['encoded_skipped']} last_id={last['wire_frame_id']} jpeg_bytes={last['jpeg_bytes']} "
-      f"fragments={last['fragments']} encode_ms={last['encode_ns'] / 1e6:.2f} send_ms={last['send_ns'] / 1e6:.2f} "
-      f"quality={last['quality']} decoded={WIDTH}x{HEIGHT} top={top.astype(int).tolist()} "
-      f"bottom={bottom.astype(int).tolist()} stop_ms={stop_ms:.0f} adapt_changes={adapt['changes']} "
-      f"adapt_quality={adapted['quality']} adapt_report_seq={report['report_seq']}")
+print(
+    f"VCAM_VIDEO_OK sent={stats['sent']} received={received} lost={lost} unsent={stats['unsent']} "
+    f"skipped={stats['encoded_skipped']} last_id={last['wire_frame_id']} jpeg_bytes={last['jpeg_bytes']} "
+    f"fragments={last['fragments']} encode_ms={last['encode_ns'] / 1e6:.2f} send_ms={last['send_ns'] / 1e6:.2f} "
+    f"quality={last['quality']} decoded={WIDTH}x{HEIGHT} top={top.astype(int).tolist()} "
+    f"bottom={bottom.astype(int).tolist()} stop_ms={stop_ms:.0f} adapt_changes={adapt['changes']} "
+    f"adapt_quality={adapted['quality']} adapt_report_seq={report['report_seq']}"
+)

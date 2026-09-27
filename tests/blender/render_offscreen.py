@@ -65,8 +65,12 @@ def reference(yaw_deg, mode='SOLID', color_management=True):
     saved = space.shading.type, space.overlay.show_overlays
     space.shading.type, space.overlay.show_overlays = mode, False
     offscreen.draw_view3d(
-        scene, view_layer, space, region,
-        camera.matrix_world.inverted(), camera.calc_matrix_camera(depsgraph, x=W, y=H),
+        scene,
+        view_layer,
+        space,
+        region,
+        camera.matrix_world.inverted(),
+        camera.calc_matrix_camera(depsgraph, x=W, y=H),
         do_color_management=color_management,
     )
     space.shading.type, space.overlay.show_overlays = saved
@@ -178,13 +182,15 @@ try:
     scene.display_settings.display_device = 'Display P3'
     wide = stream_color(27)
     assert max_rgb_diff(wide, agx) <= 2, max_rgb_diff(wide, agx)
-    assert (scene.display_settings.display_device, scene.view_settings.view_transform,
-            scene.view_settings.look) == ('Display P3', 'AgX', 'AgX - Medium High Contrast')
+    assert (scene.display_settings.display_device, scene.view_settings.view_transform, scene.view_settings.look) == (
+        'Display P3',
+        'AgX',
+        'AgX - Medium High Contrast',
+    )
     gamut_diff = max_rgb_diff(wide, reference(0.0, 'MATERIAL'))
     assert gamut_diff > 5, gamut_diff
 finally:
-    (scene.display_settings.display_device, scene.view_settings.view_transform,
-     scene.view_settings.look) = saved_color
+    (scene.display_settings.display_device, scene.view_settings.view_transform, scene.view_settings.look) = saved_color
 
 renderer.free()
 
@@ -200,5 +206,7 @@ for bad in (np.zeros((H, W, 3), np.uint8), np.zeros(W * H * 4, np.uint8), np.zer
         raise AssertionError(f"shape {bad.shape} accepted")
 
 print(f"VCAM_RENDER_OK size={W}x{H} frames=7 modes=Solid/Material/EEVEE colours={colours} views_checked={len(spaces)}")
-print(f"VCAM_COLOR_OK unmanaged_max={unmanaged_diff} look_max={look_diff} view_max={view_diff} "
-      f"gamut_max={gamut_diff} display_restored=true tag=sRGB/Rec.709")
+print(
+    f"VCAM_COLOR_OK unmanaged_max={unmanaged_diff} look_max={look_diff} view_max={view_diff} "
+    f"gamut_max={gamut_diff} display_restored=true tag=sRGB/Rec.709"
+)

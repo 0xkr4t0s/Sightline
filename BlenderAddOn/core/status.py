@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from .render import adapted_resolution
 from .rig import LOCK_HEIGHT, LOCK_ROLL, PAN_ONLY
 
@@ -40,8 +42,9 @@ def scale_label(motion_scale: float) -> str:
 
 
 def locks_label(lock_flags: int) -> str:
-    names = [name for bit, name in ((PAN_ONLY, "Pan only"), (LOCK_HEIGHT, "Height"), (LOCK_ROLL, "Roll"))
-             if lock_flags & bit]
+    names = [
+        name for bit, name in ((PAN_ONLY, "Pan only"), (LOCK_HEIGHT, "Height"), (LOCK_ROLL, "Roll")) if lock_flags & bit
+    ]
     return ", ".join(names) if names else "None"
 
 
@@ -64,7 +67,7 @@ def _level_label(quality: int, resolution_key: str, drop: int) -> str:
     return f"q{quality} {width}×{height}"
 
 
-def adapt_labels(stats: dict, resolution_key: str) -> list[str]:
+def adapt_labels(stats: dict[str, Any], resolution_key: str) -> list[str]:
     """NET-VID-005: the level the stream adapted to, the link's loss and the last change, with
     resolution steps shown as sizes below the user's `resolution_key`."""
     adapt = stats["adapt"]
@@ -94,15 +97,17 @@ def adapt_labels(stats: dict, resolution_key: str) -> list[str]:
     return lines
 
 
-def video_labels(stats: dict | None, resolution_key: str) -> list[str]:
+def video_labels(stats: dict[str, Any] | None, resolution_key: str) -> list[str]:
     """Viewfinder stream counters (`Session.video_stats()`, NET-VID-001/005) as N-panel lines."""
     if stats is None:
         return ["Video: not streaming"]
     lines = [f"Video: {stats['sent']} sent, {stats['encoded_skipped']} skipped, q{stats['quality']}"]
     last = stats["last_sent"]
     if last is not None:
-        lines.append(f"Last: {last['width']}×{last['height']}, {last['jpeg_bytes'] / 1024:.0f} KB, "
-                     f"encode {last['encode_ns'] / 1e6:.1f} ms, send {last['send_ns'] / 1e6:.1f} ms")
+        lines.append(
+            f"Last: {last['width']}×{last['height']}, {last['jpeg_bytes'] / 1024:.0f} KB, "
+            f"encode {last['encode_ns'] / 1e6:.1f} ms, send {last['send_ns'] / 1e6:.1f} ms"
+        )
     lines += adapt_labels(stats, resolution_key)
     failed = stats["send_failed"] + stats["encode_failed"]
     if failed:

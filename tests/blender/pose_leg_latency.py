@@ -30,9 +30,10 @@ MODULE = "bl_ext.user_default.vcam_blender"
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 FAKE = os.environ["FAKE_IPHONE"]
 
-argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-report_path = argv[argv.index("--report") + 1] if "--report" in argv else os.path.join(
-    tempfile.mkdtemp(), "latency.json")
+argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
+report_path = (
+    argv[argv.index("--report") + 1] if "--report" in argv else os.path.join(tempfile.mkdtemp(), "latency.json")
+)
 
 addon_utils.enable(MODULE, default_set=True, handle_error=None)
 session = importlib.import_module(MODULE + ".core.session")
@@ -40,10 +41,25 @@ session = importlib.import_module(MODULE + ".core.session")
 assert bpy.ops.vcam.session_start(port=0, bind="127.0.0.1") == {'FINISHED'}
 live = session.current()
 child = subprocess.Popen(
-    [FAKE, "--host", f"127.0.0.1:{live.port()}", "--state", os.path.join(session.config_dir(), "fake-iphone.key"),
-     "--code", live.enable_pairing(), "--motion", os.path.join(ROOT, "testdata", "motion", "scripted.bin"),
-     "--rate", "60", "--linger", "0.5"],
-    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    [
+        FAKE,
+        "--host",
+        f"127.0.0.1:{live.port()}",
+        "--state",
+        os.path.join(session.config_dir(), "fake-iphone.key"),
+        "--code",
+        live.enable_pairing(),
+        "--motion",
+        os.path.join(ROOT, "testdata", "motion", "scripted.bin"),
+        "--rate",
+        "60",
+        "--linger",
+        "0.5",
+    ],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
 deadline = time.monotonic() + 60
 tick = time.monotonic()
 while child.poll() is None:
@@ -77,6 +93,8 @@ assert sum(leg["histogram"]["counts"]) + leg["histogram"]["underflow"] + leg["hi
 
 assert bpy.ops.vcam.session_stop() == {'FINISHED'}
 addon_utils.disable(MODULE, default_set=True)
-print(f"VCAM_POSE_LEG_OK report={report_path} poses={apply['count']} not_applied={report['poses_not_applied']} "
-      f"pose_leg_p50={leg['p50']:.2f} p95={leg['p95']:.2f} p99={leg['p99']:.2f} max={leg['max']:.2f} "
-      f"apply_p95={apply['p95']:.3f} apply_max={apply['max']:.3f} meets={report['meets']}")
+print(
+    f"VCAM_POSE_LEG_OK report={report_path} poses={apply['count']} not_applied={report['poses_not_applied']} "
+    f"pose_leg_p50={leg['p50']:.2f} p95={leg['p95']:.2f} p99={leg['p99']:.2f} max={leg['max']:.2f} "
+    f"apply_p95={apply['p95']:.3f} apply_max={apply['max']:.3f} meets={report['meets']}"
+)

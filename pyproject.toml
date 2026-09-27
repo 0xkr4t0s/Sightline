@@ -1,0 +1,74 @@
+# Tool configuration only. This is not a package: the Rust module builds from
+# native/vcam-py/pyproject.toml and the Blender extension from BlenderAddOn/blender_manifest.toml.
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+extend-exclude = ["legacy", "native", ".mission", ".venv.nosync"]
+
+[tool.ruff.format]
+# Blender enum identifiers are conventionally single-quoted ('CAMERA', 'VIEW_3D'); keep existing quotes.
+quote-style = "preserve"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B", "UP", "C90", "SIM"]
+
+[tool.ruff.lint.mccabe]
+# The current maximum (tools/gen_testdata.py build_rig); lower it as functions are split.
+max-complexity = 22
+
+[tool.ruff.lint.per-file-ignores]
+# The package directory name is fixed by the repo layout; bpy classes are named PREFIX_TYPE_name
+# (VCAM_OT_start) by Blender convention.
+"BlenderAddOn/**" = ["N801", "N999"]
+# Math notation from the specs (SRP's N/H/I/P, Kalman K, tracking-state constants).
+"tools/gen_testdata.py" = ["N803", "N806", "E741"]
+
+[tool.pytest.ini_options]
+testpaths = ["BlenderAddOn/tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = ["-p", "no:cacheprovider"]
+
+[tool.coverage.run]
+source = ["BlenderAddOn"]
+# These import bpy at module level, so only the Blender scripts in tests/blender/ can run them.
+omit = [
+    "BlenderAddOn/tests/*",
+    "BlenderAddOn/__init__.py",
+    "BlenderAddOn/operators/*",
+    "BlenderAddOn/properties/*",
+    "BlenderAddOn/ui/*",
+]
+
+[tool.coverage.report]
+fail_under = 50
+show_missing = true
+skip_covered = false
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+# The modules that don't import bpy at module level. Out of scope: BlenderAddOn/__init__.py,
+# core/apply.py, core/session.py, operators/, properties/, ui/ (bpy has no type stubs), the
+# Blender scripts in tests/ and tools/mission/qa_host.py, and tools/gen_testdata.py (untyped).
+files = [
+    "BlenderAddOn/core/latency.py",
+    "BlenderAddOn/core/log.py",
+    "BlenderAddOn/core/render.py",
+    "BlenderAddOn/core/rig.py",
+    "BlenderAddOn/core/status.py",
+    "tools/check_agents_md.py",
+    "tools/check_large_files.py",
+    "tools/check_todos.py",
+    "tools/set_manifest_wheels.py",
+    "tools/hooks/privacy_scan.py",
+]
+# Resolves the add-on's modules as `core.*`, the way its unit tests import them.
+mypy_path = ["BlenderAddOn"]
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+# Blender's modules and the Rust extension ship no type information.
+module = ["bpy", "bpy.*", "gpu", "gpu.*", "mathutils", "vcam_native"]
+ignore_missing_imports = true

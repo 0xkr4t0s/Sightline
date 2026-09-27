@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import bpy
+
 from .session import (
     VCAM_OT_latency_report_save,
     VCAM_OT_origin_clear,
