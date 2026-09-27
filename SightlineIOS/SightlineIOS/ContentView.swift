@@ -88,9 +88,17 @@ struct ContentView: View {
                 .accessibilityIdentifier("status.connection")
             if let stream = controller.stream {
                 Text(stream.label)
-                Label(stream.quality.label, systemImage: "wifi")
+                    .accessibilityValue(stream.label)
+                    .accessibilityIdentifier("hud.stream")
+                Text(stream.quality.label)
                     .foregroundStyle(qualityColor(stream.quality))
-                    .accessibilityLabel("Connection \(stream.quality.label)")
+                    .accessibilityValue(stream.quality.label)
+                    .accessibilityIdentifier("hud.quality")
+            } else if controller.isReconnecting {
+                Text(ConnectionQuality.poor.label)
+                    .foregroundStyle(qualityColor(.poor))
+                    .accessibilityValue(ConnectionQuality.poor.label)
+                    .accessibilityIdentifier("hud.quality")
             }
             Label("Thermal: \(controller.thermal.label)", systemImage: "thermometer.medium")
                 .foregroundStyle(controller.thermal.isWarning ? Color.orange : Color.white)

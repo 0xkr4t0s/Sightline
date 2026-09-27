@@ -16,8 +16,7 @@ nonisolated struct TrackingSnapshot: Equatable, Sendable {
     var controlAck: UInt32 = 0
     /// NFR-LAT-002's send leg over this run's poses; nil until one has been sent.
     var sendLeg: SendLegSummary?
-    /// The viewfinder stream and connection quality (FR-VF-004); nil until a full second of the
-    /// session has passed, and without a session.
+    /// Viewfinder rate and authenticated host link, absent without an active session.
     var stream: StreamStats?
 }
 
@@ -191,7 +190,9 @@ actor TrackingPipeline {
     private var sendLeg = SendLegMeter()
     /// This session's viewfinder frames (§6.5); the report timer runs once the first fragment arrived.
     private var video = VCPVideoReassembler()
-    private var streamMeter = StreamMeter(nowNs: 0)
+    private var streamMeter: StreamMeter?
+    private var streamTimer: DispatchSourceTimer?
+    private var lastPosePublishNs: UInt64 = 0
     private var reportSeq: UInt32 = 0
     private var reportTimer: DispatchSourceTimer?
     /// Bumped by every start and stop, so a host name resolved after its run ended is ignored.
@@ -221,6 +222,7 @@ actor TrackingPipeline {
             assumeIsolated { pipeline in
                 pipeline.sender.close()
                 pipeline.cancelLivenessTimer()
+                pipeline.cancelStreamTimer()
                 pipeline.run &+= 1
                 let run = pipeline.run
                 pipeline.sender.onReceive = { [weak pipeline] data in
@@ -239,11 +241,15 @@ actor TrackingPipeline {
                 // §6.6: report_seq and both counters start again with each session.
                 pipeline.cancelReportTimer()
                 pipeline.video = VCPVideoReassembler()
+                pipeline.streamMeter =
+                    destination.endpoint == nil
+                    ? nil : StreamMeter(startNs: clock_gettime_nsec_np(CLOCK_UPTIME_RAW))
+                pipeline.lastPosePublishNs = 0
                 pipeline.reportSeq = 0
-                pipeline.streamMeter = StreamMeter(nowNs: clock_gettime_nsec_np(CLOCK_UPTIME_RAW))
                 pipeline.connect()
                 pipeline.sendNewControlState()
                 pipeline.startLivenessTimer()
+                pipeline.startStreamTimer()
             }
         }
     }
@@ -254,8 +260,10 @@ actor TrackingPipeline {
             assumeIsolated { pipeline in
                 pipeline.run &+= 1
                 pipeline.destination = nil
+                pipeline.streamMeter = nil
                 pipeline.cancelControlTimer()
                 pipeline.cancelLivenessTimer()
+                pipeline.cancelStreamTimer()
                 pipeline.cancelReportTimer()
                 pipeline.sender.close()
             }
@@ -310,11 +318,11 @@ actor TrackingPipeline {
         }
         if throttle.shouldPublish(at: timestamp) {
             snapshot.sendLeg = sendLeg.summary
-            if destination?.endpoint != nil {
-                snapshot.stream = streamMeter.stats(
-                    atNs: clock_gettime_nsec_np(CLOCK_UPTIME_RAW),
-                    framesComplete: video.stats.complete,
-                    framesLost: video.stats.lost)
+            lastPosePublishNs = arrived
+            if var meter = streamMeter {
+                snapshot.stream = meter.snapshot(
+                    atNs: arrived, complete: video.stats.complete, lost: video.stats.lost)
+                streamMeter = meter
             }
             publish(snapshot)
         }
@@ -418,8 +426,10 @@ actor TrackingPipeline {
                 guard pipeline.run == run else { return }
                 pipeline.run &+= 1
                 pipeline.destination = nil
+                pipeline.streamMeter = nil
                 pipeline.cancelControlTimer()
                 pipeline.cancelLivenessTimer()
+                pipeline.cancelStreamTimer()
                 pipeline.cancelReportTimer()
                 pipeline.sender.close()
                 pipeline.snapshot.sessionLost = true
@@ -433,6 +443,37 @@ actor TrackingPipeline {
     private func cancelLivenessTimer() {
         livenessTimer?.cancel()
         livenessTimer = nil
+    }
+
+    /// Host silence must update the HUD even if ARKit stops delivering poses. This low-rate timer
+    /// is per session and never runs for unpaired tracking.
+    private func startStreamTimer() {
+        guard streamMeter != nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100))
+        timer.setEventHandler { [weak self] in
+            self?.assumeIsolated { pipeline in
+                guard var meter = pipeline.streamMeter else { return }
+                let prior = pipeline.snapshot.stream
+                let nowNs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+                pipeline.snapshot.stream = meter.snapshot(
+                    atNs: nowNs,
+                    complete: pipeline.video.stats.complete, lost: pipeline.video.stats.lost)
+                pipeline.streamMeter = meter
+                if pipeline.snapshot.stream != prior,
+                    nowNs - pipeline.lastPosePublishNs >= 100_000_000
+                {
+                    pipeline.publish(pipeline.snapshot)
+                }
+            }
+        }
+        timer.resume()
+        streamTimer = timer
+    }
+
+    private func cancelStreamTimer() {
+        streamTimer?.cancel()
+        streamTimer = nil
     }
 
     /// §6.6: every 500 ms from the first valid `VIDEO_FRAGMENT` until the session ends; the totals
@@ -467,7 +508,7 @@ actor TrackingPipeline {
             return
         }
         livenessTimer?.schedule(deadline: .now() + .seconds(3))
-        streamMeter.hostDatagram(atNs: received)
+        streamMeter?.hostDatagram(atNs: received)
         switch message {
         case let .clock(.request(t1)):
             // Uptime is the candidate ARFrame clock; O-1 still needs a physical-device
@@ -479,15 +520,15 @@ actor TrackingPipeline {
                         t3: clock_gettime_nsec_np(CLOCK_UPTIME_RAW))))
         case let .status(status):
             guard statusFilter.accept(status.statusSeq) else { return }
-            streamMeter.status(seq: status.statusSeq)
+            streamMeter?.status(seq: status.statusSeq)
             snapshot.controlAck = max(snapshot.controlAck, status.controlAck)
             if snapshot.controlAck >= snapshot.controlSeq {
                 cancelControlTimer()
             }
         case let .videoFragment(fragment):
+            streamMeter?.fragment(dataBytes: fragment.data.count)
             // Stale, duplicate and inconsistent fragments still count as the stream arriving.
             // A completed frame is copied out, as the reassembler reuses its buffer (FR-VF-001).
-            streamMeter.fragment(bytes: fragment.data.count)
             if video.push(fragment) == .complete, let frame = video.frame {
                 videoFrame(frame.info, Data(frame.data))
             }

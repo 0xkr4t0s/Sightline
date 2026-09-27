@@ -36,6 +36,8 @@ final class SightlineUITests: XCTestCase {
         XCTAssertTrue(status.waitForExistence(timeout: 20), "status strip")
         XCTAssertTrue(app.staticTexts["status.connection"].exists)
         XCTAssertTrue(app.staticTexts["status.rate"].exists)
+        XCTAssertFalse(element(app, "hud.stream").exists, "without a session there is no stream meter")
+        XCTAssertFalse(element(app, "hud.quality").exists)
         let startStop = app.buttons["control.startStop"]
         XCTAssertTrue(startStop.exists)
         XCTAssertEqual(startStop.label, "Start")
@@ -95,6 +97,11 @@ final class SightlineUITests: XCTestCase {
         // A frame is on screen once the viewfinder reports its size instead of "No video".
         let viewfinder = element(app, "viewfinder")
         expect(viewfinder, NSPredicate(format: "value MATCHES %@", "^[0-9]+x[0-9]+; .*"), timeout: 30)
+        let stream = element(app, "hud.stream")
+        expect(
+            stream, NSPredicate(format: "value MATCHES %@", "^[1-9][0-9]* fps · [0-9]+\\.[0-9] Mbit/s$"), timeout: 15)
+        let quality = element(app, "hud.quality")
+        wait(for: quality, value: "Good", timeout: 15)
         // Frames keep coming: no stall once they arrive (FR-VF-005).
         sleep(2)
         XCTAssertFalse(app.descendants(matching: .any)["video.stalled"].exists, "video stalled while streaming")
@@ -129,6 +136,7 @@ final class SightlineUITests: XCTestCase {
         XCTAssertEqual(startStop.label, "Stop")
         startStop.tap()
         wait(for: status, label: "Stopped")
+        XCTAssertFalse(stream.exists, "a stopped session must not show old stream measurements")
         attachScreenshot(app, "5 stopped")
     }
 

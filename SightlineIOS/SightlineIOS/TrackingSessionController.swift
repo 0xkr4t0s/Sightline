@@ -38,7 +38,7 @@ final class TrackingSessionController {
     private(set) var poseRate: Double?
     /// NFR-LAT-002's send leg over this run's sent poses, nil until one has been sent.
     private(set) var sendLeg: SendLegSummary?
-    /// Viewfinder stream rate and connection quality (FR-VF-004), nil until known and without a session.
+    /// Stream rate and link quality, shown only during a paired session.
     private(set) var stream: StreamStats?
     /// The device's thermal state, kept current from `ProcessInfo` notifications (FR-UX-004).
     private(set) var thermal = ThermalStatus(state: ProcessInfo.processInfo.thermalState)
@@ -393,6 +393,7 @@ final class TrackingSessionController {
         liveSession?.close()
         liveSession = nil
         sessionEndpoint = nil
+        stream = nil
         pipeline.start(TrackingDestination(host: "", port: 0, endpoint: nil))
         lastError = reason
         sessionStatus = "Reconnecting to Blender"
@@ -425,6 +426,7 @@ final class TrackingSessionController {
         case let .success(link):
             liveSession = link
             sessionEndpoint = link.endpoint
+            stream = nil
             pipeline.start(link.destination)
             watch(link)
             controlSeq = 0
@@ -462,11 +464,11 @@ final class TrackingSessionController {
         liveSession?.close()
         liveSession = nil
         sessionEndpoint = nil
+        stream = nil
         isTracking = false
         stallWatch.stop()
         sceneUnderstanding = nil
         poseRate = nil
-        stream = nil
         if let reason {
             sessionStatus = reason
         } else if lastError == nil {
