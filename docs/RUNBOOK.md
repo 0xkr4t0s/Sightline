@@ -63,6 +63,12 @@ a single run rarely fails.
 - **`Unable to find a device matching the provided destination specifier`:** the simulator
   named in the destination isn't installed. The project uses `iPhone 17`
   (`IOS_DESTINATION` in `env.sh`).
+- **Fake iPhone fails with `Can't assign requested address (os error 49)`:** `ifconfig lo0`
+  probably shows an extra IPv4 alias besides `127.0.0.1` (some device drivers add one, e.g.
+  `127.51.68.120/8`). macOS may then pick the alias as the source for a UDP socket bound to
+  `0.0.0.0` and refuse to `connect()` it to `127.0.0.1`. The fake iPhone binds `127.0.0.1:0`
+  (or `[::1]:0`) when `--host` is loopback, so this only affects older builds: run `setup.sh`
+  again. Leave the alias alone; it belongs to the software that added it.
 - **Git hooks fail:** see `tools/hooks/README.md`. Fix the reported problem rather than
   bypassing the hook.
 

@@ -26,7 +26,7 @@ use std::error::Error;
 use std::fmt::Debug;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpStream, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -477,6 +477,19 @@ impl Stream {
     }
 }
 
+/// Local address for the UDP socket. For a loopback host this is the loopback address itself:
+/// with an extra alias on `lo0` (e.g. `127.51.68.120/8`), macOS can pick that alias as the source
+/// for a wildcard-bound socket and `connect()` to `127.0.0.1` fails with `EADDRNOTAVAIL`.
+fn udp_bind_addr(host: IpAddr) -> SocketAddr {
+    let local = match host {
+        IpAddr::V4(ip) if ip.is_loopback() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        IpAddr::V6(ip) if ip.is_loopback() => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+    };
+    SocketAddr::new(local, 0)
+}
+
 fn run(args: &Args) -> Result<String> {
     let motion = parse_motion(&fs::read(&args.motion)?)?;
     let rate = args.rate.unwrap_or(f64::from(motion.rate_hz));
@@ -502,11 +515,7 @@ fn run(args: &Args) -> Result<String> {
     );
     io::stdout().flush()?;
 
-    let udp = UdpSocket::bind(if args.host.is_ipv4() {
-        "0.0.0.0:0"
-    } else {
-        "[::]:0"
-    })?;
+    let udp = UdpSocket::bind(udp_bind_addr(args.host.ip()))?;
     udp.connect(SocketAddr::new(args.host.ip(), udp_port))?;
     let mut s = Stream {
         udp,
@@ -670,6 +679,16 @@ mod tests {
             args(&["--thermal-at", "60:4"]).unwrap_err().to_string(),
             "--thermal must be in [0, 3]"
         );
+    }
+
+    #[test]
+    fn udp_binds_loopback_for_a_loopback_host_and_unspecified_otherwise() {
+        let bind = |host: &str| udp_bind_addr(host.parse().unwrap()).to_string();
+        assert_eq!(bind("127.0.0.1"), "127.0.0.1:0");
+        assert_eq!(bind("127.0.0.2"), "127.0.0.1:0");
+        assert_eq!(bind("::1"), "[::1]:0");
+        assert_eq!(bind("192.0.2.10"), "0.0.0.0:0");
+        assert_eq!(bind("fe80::1"), "[::]:0");
     }
 
     #[test]

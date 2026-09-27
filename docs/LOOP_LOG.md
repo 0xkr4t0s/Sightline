@@ -2226,3 +2226,16 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
   - The render aspect test still passes at 2.39:1, and the render was restored to 1920×1080. `errors` stayed empty. Host stopped; port 47000 free.
 - **Notes:** In the landscape simulator, the Dynamic Island swallows touches at the leading edge around mid-height, so the UI tests tap the pillar bar at a quarter height. Control-state ack numbers are read relative to the current state (Set origin is `#3`).
 - **Not verified, needs owner:** physical iPhone touch, ARKit and Wi-Fi. **Remaining:** none for M2. **Blocked:** none.
+
+## 2026-09-27 — Mission — 2.4 (NFR-QA-001, test tooling) — done
+
+- **Files:** `native/vcam-fake-iphone/src/main.rs`, `docs/RUNBOOK.md` (Local checks), this log.
+- **What:** With an extra IPv4 alias on `lo0` (here `127.51.68.120/8`, added by a device driver), a UDP socket bound to `0.0.0.0:0` got `EADDRNOTAVAIL` (os error 49) on `connect()` to `127.0.0.1`, so the fake iPhone could pair but not stream: 5 of 6 `fake_iphone.rs` tests failed, and so did the Blender scripts and coverage that use it. `udp_bind_addr` (`main.rs:483`, used at `:518`) now binds `127.0.0.1:0` for a loopback IPv4 host, `[::1]:0` for a loopback IPv6 host, and the unspecified address otherwise. Production bind behaviour is unchanged (add-on session defaults, `vcam-net`, iOS `UDPSender`). The other test helpers already bind `127.0.0.1:0` (`vcam-net/tests/{control_server,udp_receiver}.rs`) or use TCP only (`tests/blender/*`), and none failed. The system network configuration was left alone.
+- **Checks:** before the fix, `cargo test -p vcam-fake-iphone --test fake_iphone`: `test result: FAILED. 1 passed; 5 failed` (`Can't assign requested address (os error 49)`). After: `test result: ok. 6 passed`; unit `test result: ok. 7 passed`. `tools/mission/setup.sh`: exit 0. `tools/mission/check.sh rust blender coverage`: `PASS rust (23 s)`, `PASS blender (107 s)`, `PASS coverage (30 s)`. `python3 tools/check_todos.py`: `133 source file(s), 0 marker(s)`.
+- **Mutation proof:** 4 of 4 caught, one at a time, file restored and `cmp`-identical:
+  - loopback v4 → unspecified: unit test `left: "0.0.0.0:0"`.
+  - loopback v6 → unspecified: unit test `left: "[::]:0"`.
+  - non-loopback v4 → `127.0.0.1`: unit test `left: "127.0.0.1:0"`.
+  - call site back to `"0.0.0.0:0"`: 4 of the `fake_iphone.rs` integration tests failed (only on a machine with the alias; the unit test covers the choice everywhere).
+- **QA:** with the alias present, QA host on 127.0.0.1:47000, `qa_blender.sh drive --linger 8`: `FAKE_IPHONE_PAIRED`, then `FAKE_IPHONE_DONE … poses=390 … applied_pose_seq=390 control_ack=1 video_frames=243 video_lost=0`. `state.json` while live: `video.sent` 77, `send_failed` 0, `errors` `[]`. The streamed frame showed the QA scene. Host stopped; port 47000 free.
+- **Not verified, needs owner:** none (test tooling only). **Blocked:** none.
