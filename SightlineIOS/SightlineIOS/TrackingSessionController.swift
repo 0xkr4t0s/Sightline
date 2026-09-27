@@ -40,10 +40,11 @@ final class TrackingSessionController {
     private(set) var sendLeg: SendLegSummary?
     /// Stream rate and link quality, shown only during a paired session.
     private(set) var stream: StreamStats?
-    /// The device's thermal state, kept current from `ProcessInfo` notifications (FR-UX-004).
+    /// The device's thermal state, kept current by the injected provider (FR-UX-004).
     private(set) var thermal = ThermalStatus(state: ProcessInfo.processInfo.thermalState)
 
     @ObservationIgnored private let pipeline: TrackingPipeline
+    @ObservationIgnored private let thermalProvider: any ThermalStateProvider
     /// ARKit, or a scripted path in simulator QA runs; its frames go straight into `pipeline`.
     @ObservationIgnored private let poseSource: any PoseSource
     /// Draws the newest decoded viewfinder frame (FR-VF-001/002); nil without Metal.
@@ -68,7 +69,6 @@ final class TrackingSessionController {
         return HorizonLevel.angle(orientation: latestPose.orientation, lockFlags: controls.lockFlags)
     }
     @ObservationIgnored private var rateMeter = PoseRateMeter()
-    @ObservationIgnored private var thermalObserver: (any NSObjectProtocol)?
     @ObservationIgnored private let device = DeviceIdentityStore.load()
     /// The session of the current run; its TCP connection stays open until the run stops.
     @ObservationIgnored private var liveSession: VCPLiveSession?
@@ -95,7 +95,18 @@ final class TrackingSessionController {
     @ObservationIgnored private var qaLaunchHandled = false
     #endif
 
-    init() {
+    init(thermalProvider: (any ThermalStateProvider)? = nil) {
+        #if targetEnvironment(simulator) && DEBUG
+        let source: any ThermalStateProvider =
+            thermalProvider ?? QALaunchOptions.current.thermal.map { QAThermalStateProvider($0) }
+            ?? ProcessThermalStateProvider()
+        if QALaunchOptions.current.thermal != nil, thermalProvider == nil {
+            Log.qa.notice("QA thermal override: \(ThermalStatus(state: source.state).label, privacy: .public)")
+        }
+        #else
+        let source: any ThermalStateProvider = thermalProvider ?? ProcessThermalStateProvider()
+        #endif
+        self.thermalProvider = source
         let settings = TrackingSettings.load()
         host = settings.host
         portText = String(settings.port)
@@ -120,6 +131,7 @@ final class TrackingSessionController {
         #else
         poseSource = ARKitPoseSource(pipeline: pipeline, onEvent: onEvent)
         #endif
+        updateThermal(source.state)
         reloadPairing()
         stallWatch.onChange = { [weak self] stalled in
             guard let self else { return }
@@ -158,13 +170,15 @@ final class TrackingSessionController {
                 self.handle(event)
             }
         }
-        thermalObserver = NotificationCenter.default.addObserver(
-            forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.thermal = ThermalStatus(state: ProcessInfo.processInfo.thermalState)
-            }
+        source.onChange = { [weak self] state in
+            self?.updateThermal(state)
         }
+        source.startObserving()
+    }
+
+    private func updateThermal(_ state: ProcessInfo.ThermalState) {
+        thermal = ThermalStatus(state: state)
+        controls.thermalState = thermal.code
     }
 
     private var pairingAccount: String? {

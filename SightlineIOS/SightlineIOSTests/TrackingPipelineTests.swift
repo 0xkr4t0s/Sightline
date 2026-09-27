@@ -419,8 +419,7 @@ final class TrackingPipelineTests: XCTestCase {
     }
 
     /// vcp.md §6.2: a run opens with its complete state as `state_seq` 1, every real change is the
-    /// next `state_seq` and leaves at once, and the bytes are those of the golden vector the Rust
-    /// host is tested with (`control_state_full`: seq 7, scale 10, lock roll, origin_epoch 3).
+    /// next `state_seq` and leaves at once, with the complete rig and thermal state.
     func testControlChangesAreNumberedAndSentAsTheGoldenControlState() throws {
         let (device, blender) = try goldenSession()
         let host = try LoopbackReceiver()
@@ -428,7 +427,9 @@ final class TrackingPipelineTests: XCTestCase {
         pipeline.start(TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device))
 
         let first = try controlState(next(VCPMessageType.controlState, from: host), blender)
-        XCTAssertEqual(first, VCPControlState(stateSeq: 1, motionScale: 1, lockFlags: 0, originEpoch: 0))
+        XCTAssertEqual(
+            first,
+            VCPControlState(stateSeq: 1, motionScale: 1, lockFlags: 0, originEpoch: 0, thermalState: 0))
 
         var controls = DeviceControls()
         var changes: [DeviceControls] = []
@@ -454,7 +455,9 @@ final class TrackingPipelineTests: XCTestCase {
             last = datagram
         }
         XCTAssertEqual(seen, [1, 2, 3, 4, 5, 6, 7])
-        XCTAssertEqual(last, hex(try goldenHex("control_state_full")))
+        XCTAssertEqual(
+            try controlState(last, blender),
+            VCPControlState(stateSeq: 7, motionScale: 10, lockFlags: 2, originEpoch: 3, thermalState: 0))
         pipeline.stop()
     }
 
@@ -497,6 +500,58 @@ final class TrackingPipelineTests: XCTestCase {
             try controlState(next(VCPMessageType.controlState, from: host, timeout: 1), blender).stateSeq, 2,
             "a new state repeats again until acknowledged")
         pipeline.stop()
+    }
+
+    @MainActor
+    func testThermalProviderChangesSendCompleteStateUntilAcknowledged() throws {
+        let (device, blender) = try goldenSession()
+        let host = try LoopbackReceiver()
+        let pipeline = TrackingPipeline(publish: { _ in })
+        let provider = FakeThermalStateProvider(.nominal)
+        var controls = DeviceControls()
+        controls.thermalState = ThermalStatus(state: provider.state).code
+        provider.onChange = { state in
+            controls.thermalState = ThermalStatus(state: state).code
+            pipeline.setControls(controls)
+        }
+        pipeline.setControls(controls)
+        pipeline.start(TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device))
+        defer { pipeline.stop() }
+        let first = try controlState(next(VCPMessageType.controlState, from: host), blender)
+        XCTAssertEqual(first.stateSeq, 1)
+        XCTAssertEqual(first.thermalState, 0, "the first state must include nominal thermal")
+
+        provider.change(to: .serious)
+        let changed = try controlState(next(VCPMessageType.controlState, from: host, timeout: 0.3), blender)
+        XCTAssertEqual(changed.stateSeq, 2)
+        XCTAssertEqual(changed.thermalState, 2)
+        provider.change(to: .serious)
+        let resent = try controlState(next(VCPMessageType.controlState, from: host, timeout: 1), blender)
+        XCTAssertEqual(resent.stateSeq, 2, "an unchanged reading must not bump the sequence")
+        let status = VCPStatus(
+            statusSeq: 1, appliedPoseSeq: 0, controlAck: 2, errorCode: 0,
+            flags: 3, cameraName: "Camera")
+        host.reply(try blender.seal(.status(status)))
+        XCTAssertNil(
+            next(VCPMessageType.controlState, from: host, timeout: 0.8),
+            "thermal control retransmissions stop after an authenticated acknowledgement")
+    }
+
+    func testDeviceControlsThermalBytesMatchGoldenVectors() throws {
+        let (device, _) = try goldenSession()
+        var controls = DeviceControls()
+        controls.motionScale = 10
+        controls.lockFlags = 2
+        controls.originEpoch = 3
+        for (code, seq, vector) in [
+            (UInt8(2), UInt32(9), "control_state_thermal_serious"),
+            (UInt8(0), UInt32(10), "control_state_thermal_nominal"),
+        ] {
+            controls.thermalState = code
+            XCTAssertEqual(
+                try device.seal(.controlState(controls.message(seq: seq))),
+                hex(try goldenHex(vector)), vector)
+        }
     }
 
     /// vcp.md §6.5/§6.6: authentic `VIDEO_FRAGMENT`s go through newest-frame-wins reassembly, and

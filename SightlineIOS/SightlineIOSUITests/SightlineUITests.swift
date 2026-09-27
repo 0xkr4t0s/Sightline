@@ -159,6 +159,42 @@ final class SightlineUITests: XCTestCase {
         attachScreenshot(app, "5 stopped")
     }
 
+    func testThermalOverrideReducesStreamAndNominalRestoresIt() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let host = env["SIGHTLINE_QA_HOST"], !host.isEmpty else {
+            throw XCTSkip("requires the Blender QA host")
+        }
+        continueAfterFailure = false
+        let app = landscapeApp()
+        let base =
+            [
+                "-SightlineQAHost", host,
+                "-SightlineQACode", env["SIGHTLINE_QA_CODE"] ?? "",
+                "-SightlineQAMotion", "orbit",
+                "-SightlineQAAutoStart", "YES",
+            ] + Self.framingOff
+
+        app.launchArguments = base + ["-SightlineQAThermal", "serious"]
+        app.launch()
+        let viewfinder = element(app, "viewfinder")
+        wait(for: element(app, "status.connection"), label: "Sending to Blender", timeout: 45)
+        wait(for: element(app, "hud.thermal"), value: "Stream reduced (thermal)", timeout: 15)
+        wait(for: app.staticTexts["status.thermal"], label: "Thermal: Serious", timeout: 15)
+        expect(viewfinder, NSPredicate(format: "value BEGINSWITH '640x360'"), timeout: 35)
+        expect(element(app, "hud.level"), NSPredicate(format: "value CONTAINS '640×360'"), timeout: 15)
+        attachScreenshot(app, "1 thermal serious, stream reduced")
+
+        app.terminate()
+        app.launchArguments = base + ["-SightlineQAThermal", "nominal"]
+        app.launch()
+        wait(for: element(app, "status.connection"), label: "Sending to Blender", timeout: 45)
+        wait(for: app.staticTexts["status.thermal"], label: "Thermal: Normal", timeout: 15)
+        wait(for: element(app, "hud.thermal"), value: "Thermal: Normal", timeout: 15)
+        expect(viewfinder, NSPredicate(format: "value BEGINSWITH '960x540'"), timeout: 35)
+        expect(element(app, "hud.level"), NSPredicate(format: "value CONTAINS '960×540'"), timeout: 15)
+        attachScreenshot(app, "2 thermal nominal, stream restored")
+    }
+
     // MARK: - Helpers
 
     private func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {

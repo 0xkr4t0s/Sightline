@@ -48,6 +48,7 @@
 				PairingStore.swift,
 				SceneUnderstanding.swift,
 				StatusHUD.swift,
+				ThermalStateProvider.swift,
 				TrackingPipeline.swift,
 				UDPSender.swift,
 				VCP/VCPControl.swift,

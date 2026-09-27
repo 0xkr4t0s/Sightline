@@ -123,6 +123,16 @@ nonisolated struct StreamMeter: Sendable {
 nonisolated struct ThermalStatus: Equatable, Sendable {
     var state: ProcessInfo.ThermalState
 
+    var code: UInt8 {
+        switch state {
+        case .nominal: 0
+        case .fair: 1
+        case .serious: 2
+        case .critical: 3
+        @unknown default: 0
+        }
+    }
+
     var label: String {
         switch state {
         case .nominal: "Normal"

@@ -29,8 +29,7 @@ nonisolated struct TrackingDestination: Sendable {
     var endpoint: VCPEndpoint?
 }
 
-/// The operator's rig controls, sent to Blender as the complete v1 `CONTROL_STATE` (vcp.md §6.2):
-/// motion scale and axis locks (FR-CTL-004), and the Set origin counter (FR-TRK-003).
+/// Absolute rig and device controls sent as a complete `CONTROL_STATE` (vcp.md §6.2).
 nonisolated struct DeviceControls: Equatable, Sendable {
     static let scaleRange: ClosedRange<Float> = 0.001...1000
     static let lockHeight: UInt8 = 1 << 0
@@ -41,6 +40,8 @@ nonisolated struct DeviceControls: Equatable, Sendable {
     var motionScale: Float = 1
     var lockFlags: UInt8 = 0
     var originEpoch: UInt16 = 0
+    /// 0 nominal, 1 fair, 2 serious, 3 critical (FR-UX-004).
+    var thermalState: UInt8 = 0
 
     /// Asks the host to re-zero position and yaw at the current pose; the host reacts to any
     /// change, so the counter simply wraps.
@@ -65,10 +66,12 @@ nonisolated struct DeviceControls: Equatable, Sendable {
         return value
     }
 
-    /// Every v1 field is present: the first state of a session must carry them all, and sending
+    /// Every field is present: the first state of a session must carry them all, and sending
     /// the full state every time keeps a lost datagram from leaving the ends out of sync.
     func message(seq: UInt32) -> VCPControlState {
-        VCPControlState(stateSeq: seq, motionScale: motionScale, lockFlags: lockFlags, originEpoch: originEpoch)
+        VCPControlState(
+            stateSeq: seq, motionScale: motionScale, lockFlags: lockFlags,
+            originEpoch: originEpoch, thermalState: thermalState)
     }
 }
 
