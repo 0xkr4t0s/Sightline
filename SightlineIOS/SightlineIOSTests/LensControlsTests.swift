@@ -93,6 +93,47 @@ final class LensControlsTests: XCTestCase {
         XCTAssertEqual(lens.dofOn, false)
         XCTAssertFalse(lens.adopt(camera))
     }
+
+    /// After a tap or a rack the host owns the focus: bit 5 goes out clear, STATUS doesn't refill
+    /// it, and the operator's next focus is a change even at the earlier distance (vcp.md §6.2).
+    func testATapOrARackHandsTheFocusToTheHost() {
+        func camera(focus: Float) -> VCPAppliedLens {
+            VCPAppliedLens(
+                lensMM: 24, focusDistanceM: focus, fstop: 2.8, dofOn: false, sensorFit: 0, sensorWidthMM: 36,
+                renderAspect: 16 / 9)
+        }
+        func sentFocus(_ lens: LensControls) -> Float? {
+            var state = VCPControlState(stateSeq: 1, motionScale: nil, lockFlags: nil, originEpoch: nil)
+            lens.fill(&state)
+            return state.focusDistanceM
+        }
+        var lens = LensControls()
+        lens.adopt(camera(focus: 10))
+        lens.setFocus(1)
+        XCTAssertFalse(lens.tap(u: .nan, v: 0.5))
+        XCTAssertEqual(sentFocus(lens), 1, "a refused tap keeps the manual focus")
+
+        XCTAssertTrue(lens.tap(u: 0.5, v: 0.5))
+        XCTAssertNil(sentFocus(lens), "the tap's state leaves bit 5 clear")
+        XCTAssertFalse(lens.adopt(camera(focus: 2.2)), "the tapped distance doesn't become the request")
+        XCTAssertNil(sentFocus(lens))
+        let tapped = lens
+        lens.setFocus(1)
+        XCTAssertNotEqual(lens, tapped, "the earlier distance again is a new state")
+        XCTAssertEqual(sentFocus(lens), 1)
+
+        lens.setMark(VCPRackFocus.targetB, to: 6)
+        XCTAssertFalse(lens.startRack(to: VCPRackFocus.targetA, durationMS: 2000), "A isn't set")
+        XCTAssertEqual(sentFocus(lens), 1, "a refused rack keeps the manual focus")
+        XCTAssertTrue(lens.startRack(to: VCPRackFocus.targetB, durationMS: 2000))
+        XCTAssertNil(sentFocus(lens), "the rack's state leaves bit 5 clear")
+        XCTAssertFalse(lens.adopt(camera(focus: 3.4)), "a mid-rack STATUS doesn't cancel the rack")
+        XCTAssertNil(sentFocus(lens))
+        lens.setFocus(1)
+        XCTAssertEqual(sentFocus(lens), 1, "the same distance again cancels the rack on the host")
+        XCTAssertFalse(lens.adopt(camera(focus: 1)))
+        XCTAssertEqual(sentFocus(lens), 1)
+    }
 }
 
 extension VCPMessage {

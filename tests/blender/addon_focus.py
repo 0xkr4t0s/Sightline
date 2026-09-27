@@ -21,7 +21,8 @@ with v measured from the bottom the ray would miss.
   poll during the rack or the taps takes 50 ms or more.
 - A stub session in the same scene: the same tap_seq after the camera moved doesn't cast
   again; a new one does; a tap keeps the device's DoF flag; an orthographic camera works; a
-  manual focus change and a new tap cancel a rack; the miss is logged and in the N-panel.
+  manual focus change (or the same manual distance again after a tap or rack) and a new tap
+  cancel a rack; the miss is logged and in the N-panel.
 - LNS-003: with a 2.39:1 render the stream frame is 960×402, and a tap at the picture point
   where that frame shows a small cube hits the cube.
 """
@@ -270,23 +271,23 @@ pose(FORWARD)
 send(focus_distance_m=3.0, dof_on=True)
 tick()
 assert cam.dof.focus_distance == 3.0 and not casts
-send(tap=(0.5, 0.5, 1), focus_distance_m=3.0, dof_on=True)
+send(tap=(0.5, 0.5, 1), dof_on=True)
 assert near(cam.dof.focus_distance, NEAR_M) and cam.dof.use_dof is True, cam.dof.focus_distance
 near_focus = cam.dof.focus_distance
 # The camera turns away; the same tap_seq in a newer state doesn't cast again.
 pose(LEFT)
 tick()
-send(tap=(0.5, 0.5, 1), focus_distance_m=3.0, dof_on=True)
+send(tap=(0.5, 0.5, 1), dof_on=True)
 tick()
 assert len(casts) == 1 and cam.dof.focus_distance == near_focus
 # A new tap_seq casts from the new view: empty sky, a miss, the distance is kept.
-send(tap=(0.5, 0.5, 2), focus_distance_m=3.0, dof_on=True)
+send(tap=(0.5, 0.5, 2), dof_on=True)
 assert len(casts) == 2 and casts[-1][2] is None and cam.dof.focus_distance == near_focus
 assert applier.last_tap == (None, None)
 # Back to the front; DoF off from the device, then a tap: the distance changes, DoF stays off.
 pose(FORWARD)
 tick()
-send(tap=(0.75, 0.25, 3), focus_distance_m=3.0, dof_on=False)
+send(tap=(0.75, 0.25, 3), dof_on=False)
 assert near(cam.dof.focus_distance, FAR_M) and cam.dof.use_dof is False
 assert applier.last_tap[1] == "Far"
 # An orthographic camera (4 m × 2.25 m picture): the parallel ray through Far's front-face centre
@@ -294,14 +295,14 @@ assert applier.last_tap[1] == "Far"
 cam.type, cam.ortho_scale = 'ORTHO', 4.0
 cam.dof.focus_distance = 3.0
 far_x, far_z = 0.5 * half_w * FAR_M, 0.5 * half_h * FAR_M
-send(tap=(0.5 + far_x / 4.0, 0.5 - far_z / 2.25, 4), focus_distance_m=3.0, dof_on=False)
+send(tap=(0.5 + far_x / 4.0, 0.5 - far_z / 2.25, 4), dof_on=False)
 assert near(cam.dof.focus_distance, FAR_M) and applier.last_tap[1] == "Far", (cam.dof.focus_distance, applier.last_tap)
 cam.type = 'PERSP'
 
 # A rack, cancelled by a manual focus change; then a rack cancelled by a tap.
 send(tap=(0.5, 0.5, 4), rack=(1.0, 6.0, 0, 1000, 1), focus_distance_m=1.0)
 assert cam.dof.focus_distance == 1.0
-send(tap=(0.5, 0.5, 4), rack=(1.0, 6.0, 2, 1000, 2), focus_distance_m=1.0)
+send(tap=(0.5, 0.5, 4), rack=(1.0, 6.0, 2, 1000, 2))
 for _ in range(20):
     tick()
 racked = cam.dof.focus_distance
@@ -311,21 +312,33 @@ assert applier.rack is None and cam.dof.focus_distance == 2.5
 for _ in range(90):
     tick()
 assert cam.dof.focus_distance == 2.5, "the cancelled rack continued"
-send(tap=(0.5, 0.5, 4), rack=(1.0, 6.0, 2, 1000, 3), focus_distance_m=2.5)
+send(tap=(0.5, 0.5, 4), rack=(1.0, 6.0, 2, 1000, 3))
 for _ in range(20):
     tick()
 assert 2.5 < cam.dof.focus_distance < 6.0 and applier.rack is not None
-send(tap=(0.5, 0.5, 5), rack=(1.0, 6.0, 2, 1000, 3), focus_distance_m=2.5)
+send(tap=(0.5, 0.5, 5), rack=(1.0, 6.0, 2, 1000, 3))
 assert applier.rack is None and near(cam.dof.focus_distance, NEAR_M)
 for _ in range(90):
     tick()
 assert near(cam.dof.focus_distance, NEAR_M), "the rack continued after a tap"
 assert all(main for main, _, _ in casts)
+# The device leaves the focus out after a tap or rack, so the earlier manual 2.5 m again is a new
+# request: it overrides the tap, and cancels a running rack.
+send(tap=(0.5, 0.5, 5), rack=(1.0, 6.0, 2, 1000, 3), fstop=4.0)
+assert near(cam.dof.focus_distance, NEAR_M), "a change without the focus keeps the tap's distance"
+send(tap=(0.5, 0.5, 5), rack=(1.0, 6.0, 2, 1000, 3), focus_distance_m=2.5)
+assert cam.dof.focus_distance == 2.5, "the same manual focus again overrides the tap"
+send(tap=(0.5, 0.5, 5), rack=(1.0, 6.0, 2, 1000, 4))
+for _ in range(20):
+    tick()
+assert 2.5 < cam.dof.focus_distance < 6.0 and applier.rack is not None
+send(tap=(0.5, 0.5, 5), rack=(1.0, 6.0, 2, 1000, 4), focus_distance_m=2.5)
+assert applier.rack is None and cam.dof.focus_distance == 2.5, "the same manual focus again cancels the rack"
 
 # The N-panel shows the last tap (a miss here) and a running rack.
 session._applier = applier
 applier.last_tap = (None, None)
-send(tap=(0.5, 0.5, 5), rack=(1.0, 6.0, 1, 1000, 4), focus_distance_m=2.5)
+send(tap=(0.5, 0.5, 5), rack=(1.0, 6.0, 1, 1000, 5))
 labels = []
 
 

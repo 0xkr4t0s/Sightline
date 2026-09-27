@@ -309,6 +309,8 @@ final class SightlineUITests: XCTestCase {
         attachScreenshot(app, "5 DoF on f2")
         openLensPanel(app)
         setSwitch(app.switches["lens.dof"], on: false)
+        // Closed now, well inside the 4 s auto-hide that the waits below would run into.
+        closeLensPanel(app)
         if hostDirectory != nil {
             waitForHost("DoF off") { camera($0)["dof_use"] as? Bool == false }
         }
@@ -317,7 +319,6 @@ final class SightlineUITests: XCTestCase {
         // asserted (VAL-LENSI-011 allows that as a documented limitation).
         print("LENS_DOF_FRAME_DIFF on→off \(difference(dofOn, try XCTUnwrap(pictureArea())))")
         attachScreenshot(app, "6 DoF off")
-        closeLensPanel(app)
     }
 
     /// VAL-LENSI-009 / VAL-CROSS-005: a tap on the picture focuses Blender's camera on what's
@@ -780,16 +781,18 @@ final class SightlineUITests: XCTestCase {
         XCTFail("lens panel")
     }
 
+    /// A hidden panel comes back with the next reveal (which restarts the 4 s timer), so it is
+    /// revealed and closed with Done. Done is tapped only while it exists; if the panel isn't there
+    /// after the reveal it counts as closed. Close right after the last panel tap: a panel that has
+    /// been open for almost 4 s can still hide between the check and the tap.
     private func closeLensPanel(_ app: XCUIApplication) {
         let panel = element(app, "lens.panel")
         let done = app.buttons["lens.done"]
         for _ in 0..<3 {
             revealChrome(app)
-            guard panel.exists else { return }
-            if done.exists {
-                done.tap()
-                if panel.waitForNonExistence(timeout: 3) { break }
-            }
+            guard panel.exists, done.exists else { return }
+            done.tap()
+            if panel.waitForNonExistence(timeout: 3) { return }
         }
         XCTAssertFalse(panel.exists, "lens panel closed")
     }

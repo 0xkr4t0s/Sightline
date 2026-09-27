@@ -406,10 +406,11 @@ fn lens_controls_reach_the_host_and_the_applied_lens_is_reported() {
             (3, Some(1), Some((2, 1)))
         ]
     );
+    // The tap handed the focus to the host, so the later states leave it out (vcp.md §6.2).
     let last = last.unwrap();
     assert_eq!(
         (last.lens_mm, last.focus_distance_m, last.fstop, last.dof_on),
-        (Some(85.0), Some(3.0), Some(2.8), Some(true))
+        (Some(85.0), None, Some(2.8), Some(true))
     );
     assert_eq!(
         last.tap,

@@ -517,6 +517,8 @@ final class TrackingPipelineTests: XCTestCase {
         let tap = try state()
         XCTAssertEqual(tap.stateSeq, 4)
         XCTAssertEqual(tap.tap, VCPTapFocus(u: 0.25, v: 0.75, seq: 1))
+        XCTAssertNil(tap.focusDistanceM, "the tap hands the focus to the host: bit 5 clear")
+        XCTAssertEqual(tap.fstop, 4)
         let resent = try state(timeout: 1)
         XCTAssertEqual(resent, tap, "a repeat reuses the same state_seq and tap_seq")
 
@@ -551,7 +553,7 @@ final class TrackingPipelineTests: XCTestCase {
         let reopened = try state(timeout: 5)
         XCTAssertEqual(reopened.stateSeq, 1)
         XCTAssertEqual(reopened.lensMM, 35, "the new session gets the phone's full lens state")
-        XCTAssertEqual(reopened.focusDistanceM, 3)
+        XCTAssertNil(reopened.focusDistanceM, "the host kept the focus since the tap")
         XCTAssertEqual(reopened.fstop, 4)
         XCTAssertEqual(reopened.dofOn, true)
         XCTAssertEqual(reopened.tap?.seq, 1, "same tap identity: the host takes it as its baseline")

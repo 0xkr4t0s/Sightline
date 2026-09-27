@@ -335,8 +335,9 @@ struct ContentView: View {
     private var pinch: some Gesture {
         MagnifyGesture()
             .onChanged { value in
-                guard controller.lensGesturesEnabled else { return }
-                let start = pinchStartMM ?? controller.shownLens.lensMM ?? 50
+                guard controller.lensGesturesEnabled, let start = pinchStartMM ?? controller.pinchBaseMM else {
+                    return
+                }
                 pinchStartMM = start
                 controller.performLens(.lens(LensInput.pinch(from: start, magnification: value.magnification)))
             }

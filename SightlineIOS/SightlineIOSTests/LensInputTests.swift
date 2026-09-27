@@ -184,4 +184,23 @@ final class LensInputTests: XCTestCase {
         XCTAssertEqual(panel.rack(&lens, applied: applied(focus: 3)), VCPRackFocus.targetA)
         XCTAssertEqual(lens.rack.seq, 2)
     }
+
+    /// A pinch scales the camera's lens, so it waits for STATUS to report it; a second pinch
+    /// before STATUS catches up starts from the first one's request, not the older camera value.
+    func testPinchStartsFromTheShownLensOnlyOnceTheCameraIsKnown() {
+        var panel = LensPanelModel()
+        var lens = LensControls()
+        XCTAssertNil(panel.pinchBase(lens, applied: nil), "nothing known")
+        lens.setLens(35)
+        XCTAssertNil(panel.pinchBase(lens, applied: nil), "an old request before STATUS would overwrite the camera")
+        XCTAssertEqual(panel.pinchBase(lens, applied: applied(lens: 24)), 24, "the camera's lens")
+
+        panel.setLens(LensInput.pinch(from: 24, magnification: 2), &lens)
+        XCTAssertEqual(panel.pinchBase(lens, applied: applied(lens: 24)), 48, "no jump back to the stale 24 mm")
+        panel.statusChanged(lens, applied: applied(lens: 24))
+        XCTAssertEqual(panel.pinchBase(lens, applied: applied(lens: 24)), 48)
+        panel.statusChanged(lens, applied: applied(lens: 48))
+        XCTAssertEqual(panel.pinchBase(lens, applied: applied(lens: 48)), 48)
+        XCTAssertEqual(panel.pinchBase(lens, applied: applied(lens: 60)), 60, "settled: a host edit shows")
+    }
 }

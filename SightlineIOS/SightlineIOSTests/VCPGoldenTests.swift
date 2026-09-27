@@ -254,13 +254,13 @@ final class VCPGoldenTests: XCTestCase {
                 .first { $0["name"] as? String == "control_state_lens_full" })
         var controls = DeviceControls(motionScale: 10, lockFlags: 2, originEpoch: 3, thermalState: 0)
         controls.lens.setLens(50)
-        controls.lens.setFocus(4)
         controls.lens.setFstop(2.8)
         controls.lens.setDoF(true)
         for _ in 0..<12 { controls.lens.tap(u: 0.25, v: 0.75) }
         controls.lens.setMark(VCPRackFocus.targetA, to: 2)
         controls.lens.setMark(VCPRackFocus.targetB, to: 8)
         for _ in 0..<7 { controls.lens.startRack(to: VCPRackFocus.targetB, durationMS: 1200) }
+        controls.lens.setFocus(4)  // after the taps and racks, which hand the focus to the host
         XCTAssertEqual(
             try e.device.seal(.controlState(controls.message(seq: 11))), hex(vector["hex"] as! String),
             "DeviceControls must encode the complete T2 state byte-exact")

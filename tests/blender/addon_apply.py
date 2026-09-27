@@ -264,9 +264,10 @@ first, last = lens_watch.controls[0], lens_watch.controls[-1]
 assert all(key in first for key in LENS_KEYS), sorted(first)
 assert (first["tap_seq"], first["rack_seq"], first["rack_target"]) == (0, 0, 0), first
 assert (last["state_seq"], last["tap_seq"], last["rack_seq"]) == (3, 1, 1), last
+assert first["focus_distance_m"] == 3.0, first
 want = {
     "lens_mm": 85.0,
-    "focus_distance_m": 3.0,
+    "focus_distance_m": None,  # a tap or rack hands the focus to the host (vcp.md §6.2)
     "fstop": f32(2.8),
     "dof_on": True,
     "tap_u": 0.25,

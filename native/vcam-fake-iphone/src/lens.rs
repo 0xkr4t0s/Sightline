@@ -5,7 +5,8 @@
 //! `CONTROL_STATE`. `--tap` and `--rack` send their group from the first state with sequence 0,
 //! which only sets the host's baseline, then change the sequence to 1 at `FRAME` (default
 //! [`DEFAULT_REQUEST_FRAME`]), which is one tap or one rack request. Groups for flags that
-//! aren't given are left out, so the host keeps its own values.
+//! aren't given are left out, so the host keeps its own values. Like the app, the state that
+//! starts a tap or rack and every later one leave the manual focus out (vcp.md §6.2).
 
 use std::fmt::Write as _;
 
@@ -152,6 +153,9 @@ impl LensArgs {
             rack.seq = rack.seq.wrapping_add(1);
             changed = true;
         }
+        if changed {
+            state.focus_distance_m = None;
+        }
         changed
     }
 }
@@ -277,6 +281,20 @@ mod tests {
                 ..rack
             })
         );
+    }
+
+    #[test]
+    fn a_tap_or_rack_clears_the_manual_focus_like_the_app() {
+        for flags in [["--tap", "0.5,0.5@2"], ["--rack", "1,4,B,0@2"]] {
+            let lens = parse(&["--focus", "3", flags[0], flags[1]]).unwrap();
+            let mut state = ControlState::default();
+            lens.initial(&mut state);
+            assert_eq!(state.focus_distance_m, Some(3.0));
+            assert!(!lens.change_at(1, &mut state));
+            assert_eq!(state.focus_distance_m, Some(3.0), "{flags:?}");
+            assert!(lens.change_at(2, &mut state));
+            assert_eq!(state.focus_distance_m, None, "{flags:?}");
+        }
     }
 
     #[test]

@@ -506,10 +506,15 @@ final class TrackingSessionController {
         lensPanel.shown(controls.lens, applied: appliedLens)
     }
 
-    /// Viewfinder taps focus and pinches zoom only on a frame Blender streams in a live session;
-    /// before the camera's lens is known a pinch would overwrite it.
+    /// Viewfinder taps focus and pinches zoom only on a frame Blender streams in a live session.
     var lensGesturesEnabled: Bool {
         isTracking && sessionEndpoint != nil && videoFrameSize != nil
+    }
+
+    /// Where a new pinch starts, or nil while pinches do nothing (no stream, or the camera's lens
+    /// not known yet in this session).
+    var pinchBaseMM: Float? {
+        lensGesturesEnabled ? lensPanel.pinchBase(controls.lens, applied: appliedLens) : nil
     }
 
     /// Carries out a lens panel or viewfinder request; the pipeline sends the new state.

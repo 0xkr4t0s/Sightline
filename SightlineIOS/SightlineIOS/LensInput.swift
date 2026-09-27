@@ -148,6 +148,14 @@ nonisolated struct LensPanelModel: Equatable, Sendable {
             dofOn: pick(.dof, lens.dofOn, applied?.dofOn))
     }
 
+    /// The focal length a pinch scales: the shown one, but only once STATUS has reported the
+    /// camera's lens. Before that (at connect, or after a reconnect with an old request) a pinch
+    /// would scale a guess and overwrite the camera.
+    func pinchBase(_ lens: LensControls, applied: VCPAppliedLens?) -> Float? {
+        guard applied != nil else { return nil }
+        return shown(lens, applied: applied).lensMM
+    }
+
     /// A new STATUS: requests the camera now shows are settled.
     mutating func statusChanged(_ lens: LensControls, applied: VCPAppliedLens) {
         func settle(_ field: Field, _ request: Float?, _ camera: Float) {

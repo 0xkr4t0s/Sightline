@@ -8,6 +8,10 @@ import Foundation
 /// operator sets them or `adopt` copies what the camera has, so connecting never changes the
 /// camera. The tap and rack groups always go out: the host takes the first sequence it sees in a
 /// session as a baseline, so they must be there before the first real request.
+///
+/// A tap or a rack hands the focus to the host: the focus request is cleared (bit 5 goes out
+/// clear) and `adopt` doesn't refill it, so later changes don't undo the tap or rack, and the
+/// operator's next focus, even at the earlier distance, is a new request that the host applies.
 nonisolated struct LensControls: Equatable, Sendable {
     /// What an unset A/B mark goes out as. A rack to an unset mark is refused, so the host never
     /// uses it.
@@ -16,6 +20,8 @@ nonisolated struct LensControls: Equatable, Sendable {
 
     private(set) var lensMM: Float?
     private(set) var focusDistanceM: Float?
+    /// True after a tap or rack until the operator sets a focus again.
+    private(set) var focusFromHost = false
     private(set) var fstop: Float?
     private(set) var dofOn: Bool?
     private(set) var markA: Float?
@@ -45,7 +51,9 @@ nonisolated struct LensControls: Equatable, Sendable {
 
     /// A manual focus distance; on the host it also cancels a running rack (§6.2).
     mutating func setFocus(_ metres: Float) {
-        if let metres = Self.clamp(metres, VCPLensRange.distanceM) { focusDistanceM = metres }
+        guard let metres = Self.clamp(metres, VCPLensRange.distanceM) else { return }
+        focusDistanceM = metres
+        focusFromHost = false
     }
 
     mutating func setFstop(_ fstop: Float) {
@@ -62,6 +70,7 @@ nonisolated struct LensControls: Equatable, Sendable {
     mutating func tap(u: Float, v: Float) -> Bool {
         guard let u = Self.clamp(u, VCPLensRange.tap), let v = Self.clamp(v, VCPLensRange.tap) else { return false }
         tap = VCPTapFocus(u: u, v: v, seq: tap.seq &+ 1)
+        handFocusToHost()
         return true
     }
 
@@ -90,17 +99,24 @@ nonisolated struct LensControls: Equatable, Sendable {
         rackTarget = target
         rackDurationMS = UInt16(min(max(durationMS, Int(range.lowerBound)), Int(range.upperBound)))
         rackSeq &+= 1
+        handFocusToHost()
         return true
     }
 
-    /// Fills the values the operator hasn't set from the camera's applied lens. Returns true if
+    private mutating func handFocusToHost() {
+        focusDistanceM = nil
+        focusFromHost = true
+    }
+
+    /// Fills the values the operator hasn't set (nor handed to the host with a tap or rack) from
+    /// the camera's applied lens. Returns true if
     /// anything changed. Set values are never replaced: a host-side edit shows on the phone from
     /// STATUS without becoming the phone's request.
     @discardableResult
     mutating func adopt(_ applied: VCPAppliedLens) -> Bool {
         let before = self
         if lensMM == nil { setLens(applied.lensMM) }
-        if focusDistanceM == nil { setFocus(applied.focusDistanceM) }
+        if focusDistanceM == nil, !focusFromHost { setFocus(applied.focusDistanceM) }
         if fstop == nil { setFstop(applied.fstop) }
         if dofOn == nil { dofOn = applied.dofOn }
         return self != before

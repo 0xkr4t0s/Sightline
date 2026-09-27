@@ -35,6 +35,11 @@ A rack (`FocusRack`) moves the focus distance from the camera's value when it st
 selected mark over `rack_duration_ms`, eased with smoothstep 3t² − 2t³ (monotonic, starts and
 ends at rest); a duration of 0 jumps. Requests of one message are handled in the order manual
 focus, tap, rack. A changed manual focus request or a new tap cancels a running rack.
+
+A tap or a rack moves the focus away from the manual request, so it ends that request: the next
+manual focus is written (and cancels a running rack) even if it repeats the earlier distance.
+The device leaves bit 5 clear after a tap or a rack until the operator sets a focus again
+(vcp.md §6.2), so a later unrelated change doesn't undo the tap or the rack.
 """
 
 from __future__ import annotations
@@ -319,6 +324,8 @@ class LensControls:
                 self.rack = (target, mark, rack["rack_duration_ms"] / 1000.0)
                 started = True
             self.rack_seq = rack["rack_seq"]
+        if started:
+            self.requested.pop("focus_distance_m", None)
         return bool(changed) or started
 
     def waiting(self) -> bool:

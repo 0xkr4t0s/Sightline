@@ -181,6 +181,27 @@ def test_absent_groups_keep_the_request_identities() -> None:
     assert lens.take_tap() == (0.5, 0.5) and lens.rack_seq == 4
 
 
+def test_a_tap_or_a_rack_ends_the_manual_focus_request() -> None:
+    lens = LensControls()
+    lens.merge(control(focus_distance_m=1.0, **tap(0.5, 0.5, 0), **rack(1.0, 6.0, RACK_NONE, 500, 0)))
+    assert lens.take() == {"focus_distance_m": 1.0}
+    assert not lens.merge(control(focus_distance_m=1.0))  # a repeat before any tap or rack
+    # A tap moves the focus; the same manual distance afterwards is a new request.
+    assert lens.merge(control(**tap(0.2, 0.3, 1)))
+    assert lens.take_tap() == (0.2, 0.3) and "focus_distance_m" not in lens.requested
+    assert lens.merge(control(fstop=4.0))  # the device leaves bit 5 clear after a tap
+    assert lens.take() == {"fstop": 4.0}
+    assert lens.merge(control(focus_distance_m=1.0))
+    assert lens.take() == {"focus_distance_m": 1.0}
+    # The same for a rack; a rack_seq change without a target moves no focus and keeps the request.
+    assert not lens.merge(control(focus_distance_m=1.0, **rack(1.0, 6.0, RACK_NONE, 500, 1)))
+    assert lens.requested["focus_distance_m"] == 1.0
+    assert lens.merge(control(**rack(1.0, 6.0, RACK_B, 500, 2)))
+    assert lens.take_rack() == (RACK_B, 6.0, 0.5) and "focus_distance_m" not in lens.requested
+    assert lens.merge(control(focus_distance_m=1.0))
+    assert lens.take() == {"focus_distance_m": 1.0}
+
+
 @pytest.mark.parametrize(
     "bad",
     [
@@ -289,15 +310,15 @@ def test_tap_sets_focus_on_a_hit_and_keeps_it_on_a_miss(monkeypatch: pytest.Monk
     host = Host(monkeypatch, [1.3, None])
     host.send(0.0, focus_distance_m=3.0, dof_on=False, **BASE)
     assert host.casts == [] and host.focus == 3.0  # the baseline tap_seq isn't replayed
-    host.send(0.1, focus_distance_m=3.0, dof_on=False, **{**BASE, **tap(0.5, 0.5, 1)})
+    host.send(0.1, dof_on=False, **{**BASE, **tap(0.5, 0.5, 1)})
     assert host.focus == 1.3 and host.applier.last_tap == (1.3, "Thing")
     assert host.camera.data.dof.use_dof is False  # a tap never turns DoF on
-    host.send(0.2, focus_distance_m=3.0, dof_on=False, **{**BASE, **tap(0.05, 0.95, 2)})
+    host.send(0.2, dof_on=False, **{**BASE, **tap(0.05, 0.95, 2)})
     assert host.focus == 1.3 and host.applier.last_tap == (None, None)
     assert host.log[-1] == "tap focus u=0.050 v=0.950: nothing hit, focus kept at 1.300 m"
     assert host.casts == [(0.5, 0.5), (0.05, 0.95)]
     # The same tap_seq again (a newer state_seq, the camera moved or not): no new ray cast.
-    host.send(0.3, focus_distance_m=3.0, dof_on=False, **{**BASE, **tap(0.05, 0.95, 2)})
+    host.send(0.3, dof_on=False, **{**BASE, **tap(0.05, 0.95, 2)})
     assert host.casts == [(0.5, 0.5), (0.05, 0.95)] and host.focus == 1.3
 
 
@@ -312,7 +333,7 @@ def test_rack_runs_once_over_its_duration_and_ignores_resends(monkeypatch: pytes
     host = Host(monkeypatch)
     host.send(0.0, focus_distance_m=1.0, **BASE)
     assert host.focus == 1.0
-    host.send(1.0, focus_distance_m=1.0, **{**BASE, **rack(1.0, 6.0, RACK_B, 2000, 1)})
+    host.send(1.0, **{**BASE, **rack(1.0, 6.0, RACK_B, 2000, 1)})
     assert host.focus == 1.0 and host.applier.rack is not None
     samples = []
     for i in range(1, 25):
@@ -320,7 +341,7 @@ def test_rack_runs_once_over_its_duration_and_ignores_resends(monkeypatch: pytes
         if i % 5 == 0:  # the device's 500 ms resend (same state_seq), and a newer state repeating it
             host.session.control = dict(host.session.control or {})
             host.tick(now)
-            host.send(now, focus_distance_m=1.0, **{**BASE, **rack(1.0, 6.0, RACK_B, 2000, 1)})
+            host.send(now, **{**BASE, **rack(1.0, 6.0, RACK_B, 2000, 1)})
         else:
             host.tick(now)
         samples.append(host.focus)
@@ -334,7 +355,7 @@ def test_rack_runs_once_over_its_duration_and_ignores_resends(monkeypatch: pytes
 def test_manual_focus_or_a_tap_cancels_a_running_rack(monkeypatch: pytest.MonkeyPatch) -> None:
     host = Host(monkeypatch, [2.2])
     host.send(0.0, focus_distance_m=1.0, **BASE)
-    host.send(1.0, focus_distance_m=1.0, **{**BASE, **rack(1.0, 6.0, RACK_B, 2000, 1)})
+    host.send(1.0, **{**BASE, **rack(1.0, 6.0, RACK_B, 2000, 1)})
     host.tick(1.5)
     assert 1.0 < host.focus < 6.0
     host.send(1.6, focus_distance_m=4.0, **{**BASE, **rack(1.0, 6.0, RACK_B, 2000, 1)})
@@ -344,20 +365,37 @@ def test_manual_focus_or_a_tap_cancels_a_running_rack(monkeypatch: pytest.Monkey
         host.tick(now)
     assert host.focus == 4.0
     # A new rack, then a tap.
-    host.send(5.0, focus_distance_m=4.0, **{**BASE, **rack(1.0, 6.0, RACK_A, 2000, 2)})
+    host.send(5.0, **{**BASE, **rack(1.0, 6.0, RACK_A, 2000, 2)})
     host.tick(5.5)
     assert 1.0 < host.focus < 4.0
-    host.send(5.6, focus_distance_m=4.0, **{**BASE, **tap(0.5, 0.5, 1), **rack(1.0, 6.0, RACK_A, 2000, 2)})
+    host.send(5.6, **{**BASE, **tap(0.5, 0.5, 1), **rack(1.0, 6.0, RACK_A, 2000, 2)})
     assert host.applier.rack is None and host.focus == 2.2
     assert host.log[-2:] == ["rack to A cancelled: tap", "tap focus u=0.500 v=0.500: hit 'Thing', focus 2.200 m"]
     host.tick(8.0)
     assert host.focus == 2.2
 
 
+def test_the_same_manual_focus_again_cancels_a_rack_and_overrides_a_tap(monkeypatch: pytest.MonkeyPatch) -> None:
+    host = Host(monkeypatch, [2.2])
+    host.send(0.0, focus_distance_m=1.0, **BASE)
+    host.send(1.0, **{**BASE, **rack(1.0, 6.0, RACK_B, 2000, 1)})
+    host.tick(1.5)
+    assert 1.0 < host.focus < 6.0
+    host.send(1.6, focus_distance_m=1.0, **{**BASE, **rack(1.0, 6.0, RACK_B, 2000, 1)})
+    assert host.applier.rack is None and host.focus == 1.0
+    assert host.log[-1] == "rack to B cancelled: manual focus", host.log
+    host.send(2.0, **{**BASE, **tap(0.5, 0.5, 1), **rack(1.0, 6.0, RACK_B, 2000, 1)})
+    assert host.focus == 2.2
+    host.send(2.5, fstop=4.0, **{**BASE, **tap(0.5, 0.5, 1), **rack(1.0, 6.0, RACK_B, 2000, 1)})
+    assert host.focus == 2.2, "a later state without bit 5 keeps the tap's focus"
+    host.send(3.0, focus_distance_m=1.0, **{**BASE, **tap(0.5, 0.5, 1), **rack(1.0, 6.0, RACK_B, 2000, 1)})
+    assert host.focus == 1.0, "the earlier manual distance again overrides the tap"
+
+
 def test_a_focus_edit_in_blender_cancels_a_running_rack(monkeypatch: pytest.MonkeyPatch) -> None:
     host = Host(monkeypatch)
     host.send(0.0, focus_distance_m=1.0, **BASE)
-    host.send(1.0, focus_distance_m=1.0, **{**BASE, **rack(1.0, 6.0, RACK_B, 2000, 1)})
+    host.send(1.0, **{**BASE, **rack(1.0, 6.0, RACK_B, 2000, 1)})
     host.tick(1.5)
     host.camera.data.dof.focus_distance = 9.0
     host.tick(1.6)
@@ -368,7 +406,7 @@ def test_a_focus_edit_in_blender_cancels_a_running_rack(monkeypatch: pytest.Monk
 def test_zero_duration_rack_jumps_in_one_tick(monkeypatch: pytest.MonkeyPatch) -> None:
     host = Host(monkeypatch)
     host.send(0.0, focus_distance_m=5.0, **BASE)
-    host.send(1.0, focus_distance_m=5.0, **{**BASE, **rack(1.5, 6.0, RACK_A, 0, 1)})
+    host.send(1.0, **{**BASE, **rack(1.5, 6.0, RACK_A, 0, 1)})
     assert host.focus == 1.5 and host.applier.rack is None
 
 
