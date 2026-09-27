@@ -6,9 +6,13 @@ Sightline is an open-source iPhone/iPad virtual camera for Blender. ARKit tracks
 
 **Current status: early development, no prebuilt releases.**
 
-- **Working in CI:** the Blender 5.2 extension and Rust native module run on Windows, Linux and macOS. The Blender tracking path, rig controls and pairing are tested with a simulated iPhone; discovery has separate tests. The iOS app has VCP tracking and a status screen, not a video viewfinder.
-- **In progress:** the complete T1 phone-to-Blender workflow still needs verification on real devices and networks. The simulated client is the reproducible way to exercise the tracking path for now.
-- **Planned:** T2's streamed viewfinder is designed and benchmarked, but not built. T3 take recording and T4 extras are later work.
+- **Working in CI:** the Blender 5.2 extension and Rust native module run on Windows, Linux and macOS. The Blender tracking path, rig controls and pairing are tested with a simulated iPhone; discovery has separate tests. The iOS app has VCP tracking and a status screen.
+- **In progress:** the complete T1 phone-to-Blender workflow still needs verification on real devices and networks. The simulated client is the reproducible way to exercise the tracking path for now. T2's streamed viewfinder runs in the iPhone simulator (below) but hasn't been checked on a real iPhone.
+- **Planned:** T3 take recording and T4 extras are later work.
+
+![The Sightline app in the iPhone simulator, showing Blender's render of the tracked camera with the status strip and HUD](docs/media/viewfinder.gif)
+
+*The viewfinder in the iPhone simulator: scripted poses move the Blender camera, and Blender streams its render back to the app. Made with `tools/media/record_viewfinder.sh`.*
 
 [Requirement-level progress](IMPLEMENTATION_PROGRESS.md) records what has been tested and what remains.
 
