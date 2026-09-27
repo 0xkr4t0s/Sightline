@@ -160,7 +160,7 @@ nonisolated enum VCPControlMessage: Equatable, Sendable {
     static func frameLength(header: ArraySlice<UInt8>) throws(VCPControlError) -> Int {
         var r = VCPReader(header)
         guard let magic = r.bytes(4), let version = r.u8(), r.skip(1), let sid = r.u32(), let len = r.u16(),
-              Array(magic) == VCPEndpoint.magic, sid == 0, Int(len) <= maxPayload
+            Array(magic) == VCPEndpoint.magic, sid == 0, Int(len) <= maxPayload
         else { throw .frame }
         guard version == VCPEndpoint.version else { throw .version }
         return VCPEndpoint.headerLength + Int(len)
@@ -176,36 +176,47 @@ nonisolated enum VCPControlMessage: Equatable, Sendable {
         let message: VCPControlMessage?
         switch f[f.startIndex + 5] {
         case VCPControlType.hello:
-            message = if let mode = r.u8(), let lo = r.u8(), let hi = r.u8(), r.skip(1),
-                         let id = r.bytes(idLength), let nonce = r.bytes(idLength),
-                         let name = str8(&r, max: VCPHello.maxName) {
-                .hello(VCPHello(mode: mode, protoMin: lo, protoMax: hi, deviceID: Array(id), nonceD: Array(nonce),
-                                deviceName: name))
-            } else { nil }
+            message =
+                if let mode = r.u8(), let lo = r.u8(), let hi = r.u8(), r.skip(1),
+                    let id = r.bytes(idLength), let nonce = r.bytes(idLength),
+                    let name = str8(&r, max: VCPHello.maxName)
+                {
+                    .hello(
+                        VCPHello(
+                            mode: mode, protoMin: lo, protoMax: hi, deviceID: Array(id), nonceD: Array(nonce),
+                            deviceName: name))
+                } else { nil }
         case VCPControlType.pairChallenge:
-            message = if let id = r.bytes(idLength), let salt = r.bytes(idLength), let b = r.bytes(srpPublicLength) {
-                .pairChallenge(VCPPairChallenge(hostID: Array(id), salt: Array(salt), bPub: Array(b)))
-            } else { nil }
+            message =
+                if let id = r.bytes(idLength), let salt = r.bytes(idLength), let b = r.bytes(srpPublicLength) {
+                    .pairChallenge(VCPPairChallenge(hostID: Array(id), salt: Array(salt), bPub: Array(b)))
+                } else { nil }
         case VCPControlType.pairProof:
-            message = if let a = r.bytes(srpPublicLength), let m1 = r.bytes(proofLength) {
-                .pairProof(VCPPairProof(aPub: Array(a), m1: Array(m1)))
-            } else { nil }
+            message =
+                if let a = r.bytes(srpPublicLength), let m1 = r.bytes(proofLength) {
+                    .pairProof(VCPPairProof(aPub: Array(a), m1: Array(m1)))
+                } else { nil }
         case VCPControlType.pairAccept:
             message = r.bytes(proofLength).map { .pairAccept(m2: Array($0)) }
         case VCPControlType.sessionChallenge:
-            message = if let id = r.bytes(idLength), let nonce = r.bytes(idLength), let sid = r.u32(),
-                         let port = r.u16(), r.skip(2) {
-                .sessionChallenge(VCPSessionChallenge(hostID: Array(id), nonceH: Array(nonce), sessionID: sid,
-                                                      udpPort: port))
-            } else { nil }
+            message =
+                if let id = r.bytes(idLength), let nonce = r.bytes(idLength), let sid = r.u32(),
+                    let port = r.u16(), r.skip(2)
+                {
+                    .sessionChallenge(
+                        VCPSessionChallenge(
+                            hostID: Array(id), nonceH: Array(nonce), sessionID: sid,
+                            udpPort: port))
+                } else { nil }
         case VCPControlType.sessionProof:
             message = r.bytes(proofLength).map { .sessionProof(Array($0)) }
         case VCPControlType.sessionAccept:
             message = r.bytes(proofLength).map { .sessionAccept(Array($0)) }
         case VCPControlType.error:
-            message = if let code = r.u16(), r.skip(2), let text = str8(&r, max: VCPControlErrorMessage.maxMessage) {
-                .error(VCPControlErrorMessage(code: code, message: text))
-            } else { nil }
+            message =
+                if let code = r.u16(), r.skip(2), let text = str8(&r, max: VCPControlErrorMessage.maxMessage) {
+                    .error(VCPControlErrorMessage(code: code, message: text))
+                } else { nil }
         default:
             throw .unknownType
         }

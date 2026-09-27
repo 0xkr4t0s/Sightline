@@ -10,8 +10,9 @@ nonisolated struct SceneUnderstanding: Equatable, Sendable {
 
     /// Planes always; the LiDAR mesh only on devices that report support for it.
     static func best(meshSupported: Bool) -> SceneUnderstanding {
-        SceneUnderstanding(planeDetection: [.horizontal, .vertical],
-                           sceneReconstruction: meshSupported ? .mesh : [])
+        SceneUnderstanding(
+            planeDetection: [.horizontal, .vertical],
+            sceneReconstruction: meshSupported ? .mesh : [])
     }
 
     static func forThisDevice() -> SceneUnderstanding {

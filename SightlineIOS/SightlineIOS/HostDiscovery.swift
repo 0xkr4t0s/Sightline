@@ -43,7 +43,8 @@ nonisolated struct DiscoveredHost: Identifiable, Equatable, Sendable {
     /// same instance once per interface; the first is kept.
     static func list(_ services: [(name: String, txt: [String: String])]) -> [DiscoveredHost] {
         var seen = Set<String>()
-        return services
+        return
+            services
             .filter { seen.insert($0.name).inserted }
             .map { DiscoveredHost(serviceName: $0.name, txt: $0.txt) }
             .sorted { a, b in

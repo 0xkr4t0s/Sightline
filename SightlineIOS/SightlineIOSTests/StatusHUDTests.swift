@@ -54,8 +54,9 @@ final class StatusHUDTests: XCTestCase {
             meter.hostDatagram(atNs: 5 * Self.second + 500_000_000)
             meter.fragment(bytes: 50_000)
         }
-        XCTAssertNil(meter.stats(atNs: 6 * Self.second - 1, framesComplete: 30, framesLost: 0),
-                     "no rate before a full second")
+        XCTAssertNil(
+            meter.stats(atNs: 6 * Self.second - 1, framesComplete: 30, framesLost: 0),
+            "no rate before a full second")
         var stats = try XCTUnwrap(meter.stats(atNs: 6 * Self.second, framesComplete: 30, framesLost: 0))
         XCTAssertEqual(stats.framesPerSecond, 30)
         XCTAssertEqual(stats.bitsPerSecond, 12_000_000)
@@ -75,8 +76,9 @@ final class StatusHUDTests: XCTestCase {
         stats = try XCTUnwrap(meter.stats(atNs: 9 * Self.second, framesComplete: 42, framesLost: 0))
         XCTAssertEqual(stats.framesPerSecond, 0)
         XCTAssertEqual(stats.bitsPerSecond, 0)
-        XCTAssertEqual(StreamStats(framesPerSecond: 23.6, bitsPerSecond: 6_140_000, quality: .fair).label,
-                       "24 fps · 6.1 Mbit/s")
+        XCTAssertEqual(
+            StreamStats(framesPerSecond: 23.6, bitsPerSecond: 6_140_000, quality: .fair).label,
+            "24 fps · 6.1 Mbit/s")
     }
 
     /// Quality is the worse of STATUS loss (gaps in `status_seq`) and viewfinder frames lost, per
@@ -92,10 +94,14 @@ final class StatusHUDTests: XCTestCase {
         XCTAssertEqual(try quality(statusSeqs: Array(7...8), complete: 0, lost: 0), .good)
         // 100 expected after the first; 1, 2, 9 and 10 missing.
         XCTAssertEqual(try quality(statusSeqs: Array(0...100).filter { $0 != 50 }, complete: 0, lost: 0), .good)
-        XCTAssertEqual(try quality(statusSeqs: Array(0...100).filter { $0 != 50 && $0 != 60 }, complete: 0,
-                                   lost: 0), .fair)
-        XCTAssertEqual(try quality(statusSeqs: Array(0...100).filter { $0 % 10 != 5 || $0 == 95 }, complete: 0,
-                                   lost: 0), .fair, "9 %")
+        XCTAssertEqual(
+            try quality(
+                statusSeqs: Array(0...100).filter { $0 != 50 && $0 != 60 }, complete: 0,
+                lost: 0), .fair)
+        XCTAssertEqual(
+            try quality(
+                statusSeqs: Array(0...100).filter { $0 % 10 != 5 || $0 == 95 }, complete: 0,
+                lost: 0), .fair, "9 %")
         XCTAssertEqual(try quality(statusSeqs: Array(0...100).filter { $0 % 10 != 5 }, complete: 0, lost: 0), .poor)
         // Frames: 1, 2 and 10 of 100 lost.
         XCTAssertEqual(try quality(statusSeqs: [], complete: 99, lost: 1), .good)
@@ -119,8 +125,9 @@ final class StatusHUDTests: XCTestCase {
         var meter = StreamMeter(nowNs: 0)
         meter.hostDatagram(atNs: Self.second)
         XCTAssertEqual(meter.stats(atNs: Self.second, framesComplete: 0, framesLost: 0)?.quality, .good)
-        XCTAssertEqual(meter.stats(atNs: 2 * Self.second, framesComplete: 0, framesLost: 0)?.quality, .good,
-                       "exactly one second is still fine")
+        XCTAssertEqual(
+            meter.stats(atNs: 2 * Self.second, framesComplete: 0, framesLost: 0)?.quality, .good,
+            "exactly one second is still fine")
         XCTAssertEqual(meter.stats(atNs: 2 * Self.second + 1, framesComplete: 0, framesLost: 0)?.quality, .poor)
         meter.hostDatagram(atNs: 2 * Self.second + 2)
         XCTAssertEqual(meter.stats(atNs: 2 * Self.second + 3, framesComplete: 0, framesLost: 0)?.quality, .good)
@@ -152,8 +159,9 @@ final class StatusHUDTests: XCTestCase {
 
         XCTAssertTrue(chrome.isShown(at: almost, tracking: true))
         XCTAssertFalse(chrome.isShown(at: later, tracking: true), "hidden after the delay")
-        XCTAssertTrue(chrome.isShown(at: later.advanced(by: .seconds(60)), tracking: false),
-                      "Start stays reachable while not tracking")
+        XCTAssertTrue(
+            chrome.isShown(at: later.advanced(by: .seconds(60)), tracking: false),
+            "Start stays reachable while not tracking")
 
         chrome.interact(at: almost)
         XCTAssertTrue(chrome.isShown(at: later, tracking: true), "a control use restarts the delay")
@@ -171,8 +179,9 @@ final class StatusHUDTests: XCTestCase {
         let t2 = t1.advanced(by: .seconds(1))
         chrome.tapFrame(at: t2, tracking: true)
         XCTAssertTrue(chrome.isShown(at: t2, tracking: true))
-        XCTAssertTrue(chrome.isShown(at: t2.advanced(by: .milliseconds(3999)), tracking: true),
-                      "showing again restarts the delay")
+        XCTAssertTrue(
+            chrome.isShown(at: t2.advanced(by: .milliseconds(3999)), tracking: true),
+            "showing again restarts the delay")
 
         // Not tracking: a tap doesn't hide anything, now or once tracking starts.
         var idle = ChromeVisibility(now: t0)
@@ -182,11 +191,11 @@ final class StatusHUDTests: XCTestCase {
 
     func testControlsAndStatusNeverCoverTheCentre() {
         let sizes = [
-            CGSize(width: 874, height: 402),   // iPhone 17 Pro landscape
-            CGSize(width: 667, height: 375),   // iPhone SE landscape
-            CGSize(width: 1376, height: 1032), // iPad Pro 13" landscape
-            CGSize(width: 1032, height: 1376), // iPad Pro 13" portrait
-            CGSize(width: 320, height: 180),   // a small split-view window
+            CGSize(width: 874, height: 402),  // iPhone 17 Pro landscape
+            CGSize(width: 667, height: 375),  // iPhone SE landscape
+            CGSize(width: 1376, height: 1032),  // iPad Pro 13" landscape
+            CGSize(width: 1032, height: 1376),  // iPad Pro 13" portrait
+            CGSize(width: 320, height: 180),  // a small split-view window
         ]
         for size in sizes {
             let layout = HUDLayout(size: size)

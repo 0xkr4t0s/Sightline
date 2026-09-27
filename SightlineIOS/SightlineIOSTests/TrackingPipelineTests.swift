@@ -1,9 +1,9 @@
 import ARKit
 import Darwin
 import Foundation
-import simd
 import Synchronization
 import XCTest
+import simd
 
 /// The device send path (tasks 1.4.1, 1.4.2, 1.4.4): ARKit frames become VCP `POSE` datagrams off
 /// the main thread (ARC-005, FR-TRK-001/002, PR-FD-001), the UI hears about them at most 15 times a
@@ -88,7 +88,9 @@ final class TrackingPipelineTests: XCTestCase {
             var buffer = [UInt8](repeating: 0, count: 2048)
             var len = socklen_t(MemoryLayout<sockaddr_in>.size)
             let n = withUnsafeMutablePointer(to: &source) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { recvfrom(fd, &buffer, buffer.count, 0, $0, &len) }
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    recvfrom(fd, &buffer, buffer.count, 0, $0, &len)
+                }
             }
             return n > 0 ? Array(buffer[..<n]) : nil
         }
@@ -129,14 +131,18 @@ final class TrackingPipelineTests: XCTestCase {
     private func goldenSession() throws -> (device: VCPEndpoint, blender: VCPEndpoint) {
         let receiver = try load("vcp/receive.json")["receiver"] as! [String: Any]
         let sid = UInt32(receiver["session_id"] as! Int)
-        let d2h = hex(receiver["k_d2h"] as! String), h2d = hex(receiver["k_h2d"] as! String)
-        return (try XCTUnwrap(VCPEndpoint(role: .device, sessionID: sid, kD2H: d2h, kH2D: h2d)),
-                try XCTUnwrap(VCPEndpoint(role: .host, sessionID: sid, kD2H: d2h, kH2D: h2d)))
+        let d2h = hex(receiver["k_d2h"] as! String)
+        let h2d = hex(receiver["k_h2d"] as! String)
+        return (
+            try XCTUnwrap(VCPEndpoint(role: .device, sessionID: sid, kD2H: d2h, kH2D: h2d)),
+            try XCTUnwrap(VCPEndpoint(role: .host, sessionID: sid, kD2H: d2h, kH2D: h2d))
+        )
     }
 
     private func goldenHex(_ name: String) throws -> String {
-        try XCTUnwrap((try load("vcp/messages.json")["cases"] as! [[String: Any]])
-            .first { $0["name"] as? String == name }?["hex"] as? String)
+        try XCTUnwrap(
+            (try load("vcp/messages.json")["cases"] as! [[String: Any]])
+                .first { $0["name"] as? String == name }?["hex"] as? String)
     }
 
     /// The next datagram of VCP `type` (header byte 5), skipping others; nil after `timeout`.
@@ -158,8 +164,10 @@ final class TrackingPipelineTests: XCTestCase {
 
     /// Delivers frames the way ARKit does: asynchronously on the pipeline's queue (the session's
     /// delegate queue), then waits for them. (A `sync` from the test would run on the main thread.)
-    private func feed(_ pipeline: TrackingPipeline, frames: Range<Int>, rate: Double,
-                      state: UInt8 = VCPTrackingState.normal, jitter: (Int) -> Double = { _ in 0 }) {
+    private func feed(
+        _ pipeline: TrackingPipeline, frames: Range<Int>, rate: Double,
+        state: UInt8 = VCPTrackingState.normal, jitter: (Int) -> Double = { _ in 0 }
+    ) {
         for i in frames {
             let transform = translation(Float(i))
             let timestamp = 100 + Double(i) / rate + jitter(i)
@@ -216,7 +224,9 @@ final class TrackingPipelineTests: XCTestCase {
 
         // A new run restarts seq at 1; its AR clock starts elsewhere, so the first frame shows at once.
         pipeline.start(unpaired)
-        pipeline.queue.sync { pipeline.receive(transform: translation(7), timestamp: 3, trackingState: VCPTrackingState.normal) }
+        pipeline.queue.sync {
+            pipeline.receive(transform: translation(7), timestamp: 3, trackingState: VCPTrackingState.normal)
+        }
         XCTAssertEqual(recorder.poses.last?.seq, 1)
         XCTAssertEqual(recorder.poses.last?.position.x, 7)
         pipeline.stop()
@@ -240,7 +250,9 @@ final class TrackingPipelineTests: XCTestCase {
         var arkit = matrix_identity_float4x4
         arkit.columns.3 = SIMD4(0.5, 1.6, 1.25, 1)
         let transform = arkit
-        pipeline.queue.async { pipeline.receive(transform: transform, timestamp: 1.0, trackingState: VCPTrackingState.normal) }
+        pipeline.queue.async {
+            pipeline.receive(transform: transform, timestamp: 1.0, trackingState: VCPTrackingState.normal)
+        }
 
         let datagram = try XCTUnwrap(next(VCPMessageType.pose, from: host))
         XCTAssertEqual(datagram.count, goldenHex.count / 2)
@@ -288,8 +300,9 @@ final class TrackingPipelineTests: XCTestCase {
         var allocations = -1
         pipeline.queue.sync {
             let frame = { (i: Int) in
-                pipeline.receive(transform: self.translation(Float(i)), timestamp: 100 + Double(i) / 60,
-                                 trackingState: VCPTrackingState.normal)
+                pipeline.receive(
+                    transform: self.translation(Float(i)), timestamp: 100 + Double(i) / 60,
+                    trackingState: VCPTrackingState.normal)
             }
             for i in 0..<warmUp {
                 frame(i)
@@ -360,7 +373,8 @@ final class TrackingPipelineTests: XCTestCase {
         for i in 0..<100 where received == nil {
             feed(pipeline, frames: i..<i + 1, rate: 60)
             if let datagram = next(VCPMessageType.pose, from: host, timeout: 0.05),
-               case let .pose(pose) = try blender.open(datagram).get() {
+                case let .pose(pose) = try blender.open(datagram).get()
+            {
                 received = pose
             }
         }
@@ -380,7 +394,8 @@ final class TrackingPipelineTests: XCTestCase {
         for i in 0..<100 {
             meter.add(UInt64(i) * 10_000 + 5_000)  // one sample in each of bins 0...99
         }
-        XCTAssertEqual(meter.summary, SendLegSummary(count: 100, p50: 500_000, p95: 950_000, p99: 990_000, max: 995_000))
+        XCTAssertEqual(
+            meter.summary, SendLegSummary(count: 100, p50: 500_000, p95: 950_000, p99: 990_000, max: 995_000))
 
         // Ten samples: the 95th percentile's rank is 9.5, rounded up to the 10th (the maximum).
         meter = SendLegMeter()
@@ -417,12 +432,16 @@ final class TrackingPipelineTests: XCTestCase {
 
         var controls = DeviceControls()
         var changes: [DeviceControls] = []
-        controls.motionScale = 2; changes.append(controls)
-        controls.motionScale = 10; changes.append(controls)
+        controls.motionScale = 2
+        changes.append(controls)
+        controls.motionScale = 10
+        changes.append(controls)
         changes.append(controls)  // unchanged: not a new state
-        controls.setLock(DeviceControls.lockRoll, true); changes.append(controls)
+        controls.setLock(DeviceControls.lockRoll, true)
+        changes.append(controls)
         for _ in 1...3 {
-            controls.setOrigin(); changes.append(controls)
+            controls.setOrigin()
+            changes.append(controls)
         }
         var seen: [UInt32] = [1]
         var last: [UInt8] = []
@@ -447,8 +466,11 @@ final class TrackingPipelineTests: XCTestCase {
         let pipeline = TrackingPipeline(publish: { _ in })
         pipeline.start(TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device))
         func status(_ seq: UInt32, ack: UInt32) throws -> [UInt8] {
-            try blender.seal(.status(VCPStatus(statusSeq: seq, appliedPoseSeq: 0, controlAck: ack, errorCode: 0,
-                                               flags: 3, cameraName: "Camera")))
+            try blender.seal(
+                .status(
+                    VCPStatus(
+                        statusSeq: seq, appliedPoseSeq: 0, controlAck: ack, errorCode: 0,
+                        flags: 3, cameraName: "Camera")))
         }
 
         XCTAssertEqual(try controlState(next(VCPMessageType.controlState, from: host), blender).stateSeq, 1)
@@ -471,8 +493,9 @@ final class TrackingPipelineTests: XCTestCase {
         let change = try controlState(next(VCPMessageType.controlState, from: host, timeout: 0.3), blender)
         XCTAssertEqual(change.stateSeq, 2)
         XCTAssertEqual(change.originEpoch, 1)
-        XCTAssertEqual(try controlState(next(VCPMessageType.controlState, from: host, timeout: 1), blender).stateSeq, 2,
-                       "a new state repeats again until acknowledged")
+        XCTAssertEqual(
+            try controlState(next(VCPMessageType.controlState, from: host, timeout: 1), blender).stateSeq, 2,
+            "a new state repeats again until acknowledged")
         pipeline.stop()
     }
 
@@ -490,13 +513,22 @@ final class TrackingPipelineTests: XCTestCase {
         defer { pipeline.stop() }
         func fragment(_ id: UInt32, _ index: UInt16, of count: UInt16) throws -> [UInt8] {
             let data = [UInt8](repeating: UInt8(truncatingIfNeeded: id), count: 4)
-            return try blender.seal(.videoFragment(VCPVideoFragment(
-                frame: VCPVideoFrameInfo(frameID: id, renderTimeNs: 1_000 * UInt64(id), poseSeq: id, quality: 80),
-                frameLength: UInt32(count) * 4, fragIndex: index, fragCount: count, fragSize: 4, data: data[...])))
+            return try blender.seal(
+                .videoFragment(
+                    VCPVideoFragment(
+                        frame: VCPVideoFrameInfo(
+                            frameID: id, renderTimeNs: 1_000 * UInt64(id), poseSeq: id, quality: 80),
+                        frameLength: UInt32(count) * 4, fragIndex: index, fragCount: count, fragSize: 4, data: data[...]
+                    )))
         }
         func report(timeout: Double = 1) throws -> VCPVideoReport {
-            guard case let .videoReport(report) = try blender.open(XCTUnwrap(next(VCPMessageType.videoReport,
-                                                                                   from: host, timeout: timeout))).get()
+            guard
+                case let .videoReport(report) = try blender.open(
+                    XCTUnwrap(
+                        next(
+                            VCPMessageType.videoReport,
+                            from: host, timeout: timeout))
+                ).get()
             else { throw POSIXError(.EBADMSG) }
             return report
         }
@@ -518,13 +550,18 @@ final class TrackingPipelineTests: XCTestCase {
         var got = try report()
         XCTAssertGreaterThan(Date().timeIntervalSince(first), 0.4, "the first report comes one interval after")
         XCTAssertEqual(got, VCPVideoReport(reportSeq: 1, newestFrameID: 3, framesComplete: 2, m2pP95Ms: 0))
-        XCTAssertEqual(delivered.all, [.init(id: 1, poseSeq: 1, data: Data(repeating: 1, count: 8)),
-                                       .init(id: 3, poseSeq: 3, data: Data(repeating: 3, count: 4))],
-                       "each completed frame is handed on once, whole; incomplete and stale ones never")
+        XCTAssertEqual(
+            delivered.all,
+            [
+                .init(id: 1, poseSeq: 1, data: Data(repeating: 1, count: 8)),
+                .init(id: 3, poseSeq: 3, data: Data(repeating: 3, count: 4)),
+            ],
+            "each completed frame is handed on once, whole; incomplete and stale ones never")
         let sent = Date()
         got = try report()
-        XCTAssertEqual(got, VCPVideoReport(reportSeq: 2, newestFrameID: 3, framesComplete: 2, m2pP95Ms: 0),
-                       "reports repeat without new fragments")
+        XCTAssertEqual(
+            got, VCPVideoReport(reportSeq: 2, newestFrameID: 3, framesComplete: 2, m2pP95Ms: 0),
+            "reports repeat without new fragments")
         XCTAssertEqual(Date().timeIntervalSince(sent), 0.5, accuracy: 0.15)
 
         pipeline.start(destination)  // a new session
@@ -554,14 +591,20 @@ final class TrackingPipelineTests: XCTestCase {
         // The meter started before the first CONTROL_STATE was sent, so no later than this.
         let meterStarted = Date()
         func fragment(_ id: UInt32, bytes: Int = 1000) throws -> [UInt8] {
-            try blender.seal(.videoFragment(VCPVideoFragment(
-                frame: VCPVideoFrameInfo(frameID: id, renderTimeNs: 1_000 * UInt64(id), poseSeq: id, quality: 80),
-                frameLength: UInt32(bytes), fragIndex: 0, fragCount: 1, fragSize: UInt16(bytes),
-                data: [UInt8](repeating: 7, count: bytes)[...])))
+            try blender.seal(
+                .videoFragment(
+                    VCPVideoFragment(
+                        frame: VCPVideoFrameInfo(
+                            frameID: id, renderTimeNs: 1_000 * UInt64(id), poseSeq: id, quality: 80),
+                        frameLength: UInt32(bytes), fragIndex: 0, fragCount: 1, fragSize: UInt16(bytes),
+                        data: [UInt8](repeating: 7, count: bytes)[...])))
         }
         func status(_ seq: UInt32) throws -> [UInt8] {
-            try blender.seal(.status(VCPStatus(statusSeq: seq, appliedPoseSeq: 0, controlAck: 1, errorCode: 0,
-                                               flags: 3, cameraName: "Camera")))
+            try blender.seal(
+                .status(
+                    VCPStatus(
+                        statusSeq: seq, appliedPoseSeq: 0, controlAck: 1, errorCode: 0,
+                        flags: 3, cameraName: "Camera")))
         }
         /// Waits until the pipeline has handled every datagram sent before (the CLOCK reply follows them).
         func barrier() throws {
@@ -586,8 +629,9 @@ final class TrackingPipelineTests: XCTestCase {
         feed(pipeline, frames: 60..<61, rate: 60)
         let elapsed = Date().timeIntervalSince(began)
         let stream = try XCTUnwrap(latest.snapshot?.stream)
-        XCTAssertEqual(stream.bitsPerSecond / stream.framesPerSecond, 8_000, accuracy: 1e-6,
-                       "ten frames of 1000 bytes; the forged one counts for nothing")
+        XCTAssertEqual(
+            stream.bitsPerSecond / stream.framesPerSecond, 8_000, accuracy: 1e-6,
+            "ten frames of 1000 bytes; the forged one counts for nothing")
         XCTAssertLessThanOrEqual(stream.framesPerSecond, 10)
         XCTAssertGreaterThanOrEqual(stream.framesPerSecond, 10 / elapsed)
         XCTAssertEqual(stream.quality, .good)
@@ -613,8 +657,9 @@ final class TrackingPipelineTests: XCTestCase {
         pipeline.start(TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device))
         defer { pipeline.stop() }
         _ = try XCTUnwrap(next(VCPMessageType.controlState, from: host))
-        let status = VCPStatus(statusSeq: 5, appliedPoseSeq: 0, controlAck: 1, errorCode: 0,
-                               flags: 3, cameraName: "Camera")
+        let status = VCPStatus(
+            statusSeq: 5, appliedPoseSeq: 0, controlAck: 1, errorCode: 0,
+            flags: 3, cameraName: "Camera")
         host.reply(try blender.seal(.status(status)))
         Thread.sleep(forTimeInterval: 1.6)
 
@@ -658,7 +703,7 @@ final class TrackingPipelineTests: XCTestCase {
         let began = Date()
         wait(for: [lost], timeout: 3.6)
         XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(began), 2.9)
-        while host.receive(timeout: 0.02) != nil {} // drain controls sent before expiry
+        while host.receive(timeout: 0.02) != nil {}  // drain controls sent before expiry
         feed(pipeline, frames: 0..<8, rate: 60)
         pipeline.setControls(DeviceControls(motionScale: 2))
         XCTAssertNil(host.receive(timeout: 0.6), "neither poses nor control repeats leave an expired session")

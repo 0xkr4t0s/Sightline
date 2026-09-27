@@ -8,13 +8,14 @@ nonisolated enum PairingStore {
 
     static func load(_ account: String) throws -> VCPHostPairing? {
         var result: CFTypeRef?
-        let status = SecItemCopyMatching([
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: account,
-            kSecReturnData: true,
-            kSecMatchLimit: kSecMatchLimitOne,
-        ] as CFDictionary, &result)
+        let status = SecItemCopyMatching(
+            [
+                kSecClass: kSecClassGenericPassword,
+                kSecAttrService: service,
+                kSecAttrAccount: account,
+                kSecReturnData: true,
+                kSecMatchLimit: kSecMatchLimitOne,
+            ] as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess else { throw PairingStoreError.keychain(status) }
         guard let data = result as? Data, data.count == 48 else { throw PairingStoreError.invalidRecord }
@@ -42,6 +43,20 @@ nonisolated enum PairingStore {
         let added = SecItemAdd(item as CFDictionary, nil)
         guard added == errSecSuccess else { throw PairingStoreError.keychain(added) }
     }
+
+    #if targetEnvironment(simulator) && DEBUG
+    /// Deletes every stored pairing (simulator QA mode's `-SightlineQAResetPairings YES`).
+    static func removeAll() throws {
+        let status = SecItemDelete(
+            [
+                kSecClass: kSecClassGenericPassword,
+                kSecAttrService: service,
+            ] as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw PairingStoreError.keychain(status)
+        }
+    }
+    #endif
 }
 
 nonisolated enum PairingStoreError: LocalizedError {

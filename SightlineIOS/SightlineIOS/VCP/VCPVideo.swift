@@ -39,12 +39,13 @@ nonisolated struct VCPVideoFragment: Equatable, Sendable {
     static func decode(_ payload: ArraySlice<UInt8>) throws(VCPPayloadError) -> VCPVideoFragment {
         var r = VCPReader(payload)
         guard let frameID = r.u32(), let frameLength = r.u32(), let fragIndex = r.u16(), let fragCount = r.u16(),
-              let fragSize = r.u16(), let codec = r.u8(), let color = r.u8(), let renderTime = r.u64(),
-              let poseSeq = r.u32(), let quality = r.u8(), let flags = r.u8(), r.skip(2)
+            let fragSize = r.u16(), let codec = r.u8(), let color = r.u8(), let renderTime = r.u64(),
+            let poseSeq = r.u32(), let quality = r.u8(), let flags = r.u8(), r.skip(2)
         else { throw .tooShort }
         var fragment = VCPVideoFragment(
-            frame: VCPVideoFrameInfo(frameID: frameID, renderTimeNs: renderTime, poseSeq: poseSeq, codec: codec,
-                                     color: color, quality: quality, flags: flags),
+            frame: VCPVideoFrameInfo(
+                frameID: frameID, renderTimeNs: renderTime, poseSeq: poseSeq, codec: codec,
+                color: color, quality: quality, flags: flags),
             frameLength: frameLength, fragIndex: fragIndex, fragCount: fragCount, fragSize: fragSize, data: [])
         guard let data = r.bytes(try fragment.dataLength()) else { throw .tooShort }
         fragment.data = data
@@ -71,8 +72,8 @@ nonisolated struct VCPVideoFragment: Equatable, Sendable {
     private func dataLength() throws(VCPPayloadError) -> Int {
         let size = UInt32(fragSize)
         guard frame.frameID != 0, (1...Self.maxFrameLength).contains(frameLength),
-              (1...UInt16(Self.maxData)).contains(fragSize),
-              (frameLength + size - 1) / size == UInt32(fragCount), fragIndex < fragCount
+            (1...UInt16(Self.maxData)).contains(fragSize),
+            (frameLength + size - 1) / size == UInt32(fragCount), fragIndex < fragCount
         else { throw .fragmentLayout }
         guard frame.codec == Self.codecJPEG, frame.color == Self.colorSRGBRec709 else { throw .videoFormat }
         // fragIndex < fragCount = ⌈frameLength / size⌉, so the offset is below frameLength.
@@ -187,8 +188,9 @@ nonisolated struct VCPVideoReassembler: Sendable {
     /// motion-to-photon p95 (0 = not measured).
     func report(seq: UInt32, m2pP95Ms: UInt16) -> VCPVideoReport {
         // Every completed frame has a distinct id ≤ newest, so this never clamps.
-        VCPVideoReport(reportSeq: seq, newestFrameID: newest,
-                       framesComplete: UInt32(clamping: min(stats.complete, UInt64(newest))), m2pP95Ms: m2pP95Ms)
+        VCPVideoReport(
+            reportSeq: seq, newestFrameID: newest,
+            framesComplete: UInt32(clamping: min(stats.complete, UInt64(newest))), m2pP95Ms: m2pP95Ms)
     }
 
     /// Feeds one validated fragment (from `VCPEndpoint.open`).

@@ -1,8 +1,8 @@
 import BigNum
 import CryptoKit
 import Foundation
-import Security
 import SRP
+import Security
 
 // Device side of pairing (SRP-6a, docs/protocol/vcp.md §9) and session setup (§10).
 //
@@ -31,20 +31,26 @@ nonisolated struct VCPSRPClient<H: HashFunction> {
 
     /// `PAD(A)`, `A = g^a mod N`.
     func publicKey(a: [UInt8]) -> [UInt8] {
+        // swift-format-ignore: AlwaysUseLowerCamelCase
+        // RFC 5054's name: `a` is the private value, `A` the public one.
         let A = configuration.g.power(BigNum(bytes: a), modulus: configuration.N)
         return SRPKey(A.bytes, padding: configuration.sizeN).bytes
     }
 
     /// `PAD(S)`, `S = (B − k·g^x)^(a + u·x) mod N` with `x = H(s ‖ H(I ‖ ":" ‖ P))`.
-    func sharedSecret(identity: String, password: String, salt: [UInt8], a: [UInt8],
-                      bPad: [UInt8]) throws(VCPPairError) -> [UInt8] {
+    func sharedSecret(
+        identity: String, password: String, salt: [UInt8], a: [UInt8],
+        bPad: [UInt8]
+    ) throws(VCPPairError) -> [UInt8] {
         guard bPad.count == configuration.sizeN else { throw .illegalValue }
         let keys = SRPKeyPair(public: SRPKey(publicKey(a: a)), private: SRPKey(a))
         do {
             // Throws `nullServerKey` for `B mod N = 0` and for `u = 0`.
             return try SRPClient(configuration: configuration)
-                .calculateSharedSecret(username: identity, password: password, salt: salt, clientKeys: keys,
-                                       serverPublicKey: SRPKey(bPad))
+                .calculateSharedSecret(
+                    username: identity, password: password, salt: salt, clientKeys: keys,
+                    serverPublicKey: SRPKey(bPad)
+                )
                 .bytes
         } catch {
             throw .illegalValue
@@ -74,14 +80,17 @@ nonisolated enum VCPPairing {
 
     /// Answers a `PAIR_CHALLENGE` to the `HELLO(mode 0)` this device sent. `a` must be fresh
     /// CSPRNG output, used once.
-    static func devicePair(code: String, hello: VCPHello, challenge: VCPPairChallenge,
-                           a: [UInt8]) throws(VCPPairError) -> (VCPPairProof, VCPPendingPair) {
+    static func devicePair(
+        code: String, hello: VCPHello, challenge: VCPPairChallenge,
+        a: [UInt8]
+    ) throws(VCPPairError) -> (VCPPairProof, VCPPendingPair) {
         guard code.utf8.count == 6, code.utf8.allSatisfy({ (0x30...0x39).contains($0) }) else { throw .badCode }
         guard a.count == 32 else { throw .illegalValue }
         let client = client
         let aPad = client.publicKey(a: a)
-        let s = try client.sharedSecret(identity: identity, password: code, salt: challenge.salt, a: a,
-                                        bPad: challenge.bPub)
+        let s = try client.sharedSecret(
+            identity: identity, password: code, salt: challenge.salt, a: a,
+            bPad: challenge.bPub)
         let tPair = SHA256.hash(data: try payload(.hello(hello)) + payload(.pairChallenge(challenge)) + aPad)
         let pending = VCPPendingPair(k: SymmetricKey(data: SHA256.hash(data: s)), tPair: Array(tPair))
         return (VCPPairProof(aPub: aPad, m1: pending.m1), pending)
@@ -117,8 +126,9 @@ nonisolated struct VCPPendingPair: Sendable {
     /// Verifies `M2` and returns the 32-byte pairing key `PK` to store with the host's id.
     func finish(m2: [UInt8]) throws(VCPPairError) -> [UInt8] {
         guard VCPPairing.verify(m2, k, Array("VCP1 pair M2".utf8), tPair, m1) else { throw .badProof }
-        let pk = HKDF<SHA256>.deriveKey(inputKeyMaterial: k, salt: tPair, info: Array("VCP1 pairing key".utf8),
-                                        outputByteCount: 32)
+        let pk = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: k, salt: tPair, info: Array("VCP1 pairing key".utf8),
+            outputByteCount: 32)
         return pk.withUnsafeBytes { Array($0) }
     }
 }
@@ -145,8 +155,10 @@ nonisolated struct VCPSessionHandshake: Sendable {
     init(pairingKey: [UInt8], hello: VCPHello, challenge: VCPSessionChallenge) throws(VCPPairError) {
         guard pairingKey.count == 32 else { throw .illegalValue }
         pk = SymmetricKey(data: pairingKey)
-        tSess = Array(SHA256.hash(data: try VCPPairing.payload(.hello(hello))
-                + VCPPairing.payload(.sessionChallenge(challenge))))
+        tSess = Array(
+            SHA256.hash(
+                data: try VCPPairing.payload(.hello(hello))
+                    + VCPPairing.payload(.sessionChallenge(challenge))))
         sessionID = challenge.sessionID
         deviceProof = VCPPairing.mac(pk, Array("VCP1 session D".utf8), tSess)
     }

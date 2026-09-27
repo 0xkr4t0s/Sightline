@@ -103,8 +103,9 @@ nonisolated struct FramingGeometry: Equatable, Sendable {
         let scale = ViewfinderLayout.quadScale(frame: frame, drawable: view)
         guard scale != .zero else { return nil }
         let size = CGSize(width: view.width * CGFloat(scale.x), height: view.height * CGFloat(scale.y))
-        image = CGRect(x: (view.width - size.width) / 2, y: (view.height - size.height) / 2,
-                       width: size.width, height: size.height)
+        image = CGRect(
+            x: (view.width - size.width) / 2, y: (view.height - size.height) / 2,
+            width: size.width, height: size.height)
         guard let maskAspect, maskAspect > 0 else {
             picture = image
             maskBars = []
@@ -137,10 +138,11 @@ nonisolated struct FramingGeometry: Equatable, Sendable {
         return [1.0, 2.0].map { k in
             let x = p.minX + p.width * k / 3
             return (CGPoint(x: x, y: p.minY), CGPoint(x: x, y: p.maxY))
-        } + [1.0, 2.0].map { k in
-            let y = p.minY + p.height * k / 3
-            return (CGPoint(x: p.minX, y: y), CGPoint(x: p.maxX, y: y))
         }
+            + [1.0, 2.0].map { k in
+                let y = p.minY + p.height * k / 3
+                return (CGPoint(x: p.minX, y: y), CGPoint(x: p.maxX, y: y))
+            }
     }
 
     var centre: CGPoint { CGPoint(x: picture.midX, y: picture.midY) }
@@ -160,10 +162,13 @@ nonisolated struct FramingGeometry: Equatable, Sendable {
         let half = horizonHalfLength
         let gap = min(20, half / 2)
         // Screen y points down, so counter-clockwise is −y.
-        let dx = CGFloat(cos(angle)), dy = -CGFloat(sin(angle))
+        let dx = CGFloat(cos(angle))
+        let dy = -CGFloat(sin(angle))
         return [-1.0, 1.0].map { side in
-            (CGPoint(x: c.x + side * gap * dx, y: c.y + side * gap * dy),
-             CGPoint(x: c.x + side * half * dx, y: c.y + side * half * dy))
+            (
+                CGPoint(x: c.x + side * gap * dx, y: c.y + side * gap * dy),
+                CGPoint(x: c.x + side * half * dx, y: c.y + side * half * dy)
+            )
         }
     }
 
@@ -192,7 +197,7 @@ struct FramingOverlayView: View {
     var body: some View {
         Canvas { context, size in
             guard let frameSize,
-                  let geometry = FramingGeometry(frame: frameSize, view: size, maskAspect: settings.maskAspect)
+                let geometry = FramingGeometry(frame: frameSize, view: size, maskAspect: settings.maskAspect)
             else { return }
             for bar in geometry.maskBars {
                 context.fill(Path(bar), with: .color(.black.opacity(0.8)))
@@ -222,8 +227,10 @@ struct FramingOverlayView: View {
             context.stroke(guides, with: .color(.white.opacity(0.7)), lineWidth: 1)
             if settings.safeAreas {
                 let title = Path(geometry.safeArea(FramingGeometry.titleSafe))
-                context.stroke(title, with: .color(.black.opacity(0.5)), style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
-                context.stroke(title, with: .color(.white.opacity(0.7)), style: StrokeStyle(lineWidth: 1, dash: [6, 4]))
+                context.stroke(
+                    title, with: .color(.black.opacity(0.5)), style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                context.stroke(
+                    title, with: .color(.white.opacity(0.7)), style: StrokeStyle(lineWidth: 1, dash: [6, 4]))
             }
             if settings.horizon, let angle = horizonAngle {
                 var marks = Path()
