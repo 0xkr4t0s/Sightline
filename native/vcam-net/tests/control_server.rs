@@ -283,6 +283,7 @@ fn authenticated_control_refreshes_idle_timeout_but_forged_udp_does_not() {
                 motion_scale: Some(2.0),
                 lock_flags: Some(0),
                 origin_epoch: Some(1),
+                thermal_state: Some(2),
             });
             tx.send_to(&datagram(&keys, &control), server.udp_addr())
                 .unwrap();

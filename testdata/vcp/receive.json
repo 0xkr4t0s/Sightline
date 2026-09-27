@@ -204,6 +204,31 @@
       "hex": "564350310102cdab3412100001000000060000000000c07f00000000d4877054e589fdcd",
       "name": "control_scale_absent_ignored",
       "rule": "§6.2 (motion_scale not present, so its bytes are ignored)"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "hex": "564350310102cdab341214000900000008000000000000000000000004000000308dac414d72f876",
+      "name": "control_thermal_invalid",
+      "rule": "§6.2 thermal_state outside 0..3"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "hex": "564350310102cdab3412100009000000080000000000000000000000e5fa7c32a868239b",
+      "name": "control_thermal_short",
+      "rule": "§6.2 bit 3 requires offset 16"
+    },
+    {
+      "accept": true,
+      "direction": "d2h",
+      "fields": {
+        "fields": 0,
+        "state_seq": 9
+      },
+      "hex": "564350310102cdab34121400090000000000000000000000000000000400000010f990a2a93beba2",
+      "name": "control_thermal_absent_ignored",
+      "rule": "§6.2 bit 3 clear ignores thermal byte"
     }
   ],
   "receiver": {

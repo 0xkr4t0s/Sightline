@@ -523,6 +523,7 @@ class Host:
         origin = apply.find_origin(camera)
         controls = applier.controls
         pose = live.latest_pose() if live is not None else None
+        control = live.latest_control() if live is not None else None
         stream = s._stream
         log = s.latency_log()
 
@@ -588,6 +589,7 @@ class Host:
                 "lock_flags": controls.lock_flags,
                 "locks_label": status.locks_label(controls.lock_flags),
                 "origin_epoch": controls.origin_epoch,
+                "thermal_state": control["thermal_state"] if control is not None else None,
             },
             "latency": {
                 "session_id": log.session_id,

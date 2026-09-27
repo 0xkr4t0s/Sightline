@@ -143,22 +143,25 @@ tag      07 e8 fd 15 5e 7c 87 5a
 
 That is `seq=1`, `capture_time_ns=1000000000`, `position=(0.5, −1.25, 1.6)`, `orientation=(0.7071068, 0, 0, 0.7071068)`, `tracking_state=5`, `flags=0`.
 
-### 6.2 `CONTROL_STATE` (0x02), 16 bytes in v1 (FR-CTL-004, FR-CTL-009, FR-TRK-003)
+### 6.2 `CONTROL_STATE` (0x02), 16 bytes in v1, 20 bytes with thermal (FR-CTL-004, FR-CTL-009, FR-TRK-003, FR-UX-004)
 
 This message carries the **complete** current control state, never a delta, so a lost packet can't leave the two ends out of sync.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `state_seq` | u32 | +1 on every change, starting at 1 |
-| 4 | `fields` | u32 | presence bits: bit 0 `motion_scale`, bit 1 `lock_flags`, bit 2 `origin_epoch`; bits 3–31 reserved for T2/T3 fields, which will be appended after offset 16 |
+| 4 | `fields` | u32 | presence bits: bit 0 `motion_scale`, bit 1 `lock_flags`, bit 2 `origin_epoch`, bit 3 `thermal_state`; bits 4–31 reserved for later fields |
 | 8 | `motion_scale` | f32 | host metres per device metre (1:10 → `10.0`). MUST be finite and in [0.001, 1000] |
 | 12 | `lock_flags` | u8 | bit 0 lock height, bit 1 lock roll, bit 2 pan only (lock position); bits 3–7 reserved |
 | 13 | reserved | u8 | 0 |
 | 14 | `origin_epoch` | u16 | +1 each time the operator presses **Set origin**. On a change, the host re-zeros the rig's position and yaw to the current pose (FR-TRK-003, FR-BL-003) |
+| 16 | `thermal_state` | u8 | bit 3: absolute device thermal state, 0 nominal, 1 fair, 2 serious, 3 critical |
+| 17 | reserved | bytes[3] | zero; aligns the next extension at offset 20 |
 
 - The host applies a `CONTROL_STATE` only if `state_seq` is greater than the last one applied, and echoes the applied `state_seq` in `STATUS.control_ack`.
 - The device sends on every change, then repeats the latest state every 500 ms until `STATUS.control_ack` ≥ its `state_seq`.
-- A field whose presence bit is 0 keeps its previous value. The first state in a session MUST set all v1 bits.
+- A field whose presence bit is 0 keeps its previous value. The first state in a session MUST set all v1 bits; a thermal-capable device also sets bit 3 in its first state and every subsequent complete state.
+- Bit 3 requires at least 20 payload bytes. A message with bit 3 set but fewer than 20 bytes, or `thermal_state` greater than 3, MUST be rejected as a whole. If bit 3 is clear, an absent or out-of-range thermal byte is ignored. A legacy 16-byte message remains valid.
 - `origin_epoch` wraps at 65535 → 0. The host treats *any change* as a reset request; it doesn't compare magnitudes.
 
 Example: `state_seq=7`, all three fields present, scale `10.0`, lock roll, `origin_epoch=3`:
@@ -487,3 +490,4 @@ Example session keys used in the §6 examples (test values only, never used for 
 | 2026-09-25 | O-3 closed: the Swift client (`swift-srp` 2.4.0) matches RFC 5054 App. B, `pairing.json` and `session.json`. No wire change. |
 | 2026-09-26 | `VIDEO_FRAGMENT` (0x05) specified (§6.5): 32-byte fragment header, 1148-byte data limit, newest-frame-wins reassembly. Vectors in `testdata/video/`. Existing messages unchanged. |
 | 2026-09-26 | `VIDEO_REPORT` (0x07) specified (§6.6): device → host every 500 ms, session totals of the viewfinder frames received and completed plus motion-to-photon p95, for NET-VID-005. Vectors in `testdata/video/report.json`. Existing messages unchanged. |
+| 2026-09-27 | `CONTROL_STATE` bit 3 adds absolute device thermal state at offset 16 and three padding bytes (§6.2); old 16-byte messages remain valid. |

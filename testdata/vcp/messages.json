@@ -94,6 +94,44 @@
     },
     {
       "channel": "udp",
+      "description": "vcp.md §6.2 thermal serious",
+      "direction": "d2h",
+      "fields": {
+        "fields": 15,
+        "lock_flags": 2,
+        "motion_scale": 10.0,
+        "origin_epoch": 3,
+        "state_seq": 9,
+        "thermal_state": 2
+      },
+      "file": "control_state_thermal_serious.bin",
+      "hex": "564350310102cdab34121400090000000f0000000000204102000300020000009afd340042c89a1e",
+      "key": "d2h",
+      "name": "control_state_thermal_serious",
+      "session_id": 305441741,
+      "type": 2
+    },
+    {
+      "channel": "udp",
+      "description": "vcp.md §6.2 thermal nominal",
+      "direction": "d2h",
+      "fields": {
+        "fields": 15,
+        "lock_flags": 2,
+        "motion_scale": 10.0,
+        "origin_epoch": 3,
+        "state_seq": 10,
+        "thermal_state": 0
+      },
+      "file": "control_state_thermal_nominal.bin",
+      "hex": "564350310102cdab341214000a0000000f0000000000204102000300000000000e67a4364313c7a6",
+      "key": "d2h",
+      "name": "control_state_thermal_nominal",
+      "session_id": 305441741,
+      "type": 2
+    },
+    {
+      "channel": "udp",
       "description": "vcp.md §6.3 request example",
       "direction": "h2d",
       "fields": {

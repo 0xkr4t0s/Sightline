@@ -25,6 +25,8 @@ pub enum PayloadError {
     QuaternionNorm,
     /// `motion_scale` present but not finite or outside [0.001, 1000] (§6.2).
     MotionScaleRange,
+    /// `thermal_state` present but outside 0..=3 (§6.2).
+    ThermalStateRange,
     /// `STATUS.camera_name` is not UTF-8 or longer than 63 bytes (§6.4).
     BadName,
     /// `VIDEO_FRAGMENT` ids, lengths, count or index are inconsistent or out of range (§6.5).
@@ -100,7 +102,7 @@ impl Pose {
     }
 }
 
-/// `CONTROL_STATE` (0x02), T1 subset, 16 bytes (vcp.md §6.2). Absent fields are `None`.
+/// `CONTROL_STATE` (0x02), 16-byte base, 20 bytes with thermal (§6.2).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ControlState {
     pub state_seq: u32,
@@ -110,6 +112,8 @@ pub struct ControlState {
     pub lock_flags: Option<u8>,
     /// Changes (including wrap) request a Set-origin on the host.
     pub origin_epoch: Option<u16>,
+    /// Absolute device thermal state: nominal 0, fair 1, serious 2, critical 3.
+    pub thermal_state: Option<u8>,
 }
 
 impl ControlState {
@@ -117,6 +121,7 @@ impl ControlState {
     const HAS_SCALE: u32 = 1 << 0;
     const HAS_LOCKS: u32 = 1 << 1;
     const HAS_EPOCH: u32 = 1 << 2;
+    const HAS_THERMAL: u32 = 1 << 3;
 
     pub(crate) fn decode(payload: &[u8]) -> Result<Self, PayloadError> {
         let mut r = Reader::new(payload);
@@ -129,23 +134,41 @@ impl ControlState {
         {
             return Err(PayloadError::MotionScaleRange);
         }
+        let thermal_state = if fields & Self::HAS_THERMAL != 0 {
+            let value = r.bytes(4).ok_or(PayloadError::TooShort)?[0];
+            if value > 3 {
+                return Err(PayloadError::ThermalStateRange);
+            }
+            Some(value)
+        } else {
+            None
+        };
         Ok(Self {
             state_seq,
             motion_scale,
             lock_flags: (fields & Self::HAS_LOCKS != 0).then_some(locks),
             origin_epoch: (fields & Self::HAS_EPOCH != 0).then_some(epoch),
+            thermal_state,
         })
     }
 
-    pub(crate) fn encode(&self, out: &mut Vec<u8>) {
+    pub(crate) fn encode(&self, out: &mut Vec<u8>) -> Result<(), PayloadError> {
+        if self.thermal_state.is_some_and(|value| value > 3) {
+            return Err(PayloadError::ThermalStateRange);
+        }
         let fields = self.motion_scale.map_or(0, |_| Self::HAS_SCALE)
             | self.lock_flags.map_or(0, |_| Self::HAS_LOCKS)
-            | self.origin_epoch.map_or(0, |_| Self::HAS_EPOCH);
+            | self.origin_epoch.map_or(0, |_| Self::HAS_EPOCH)
+            | self.thermal_state.map_or(0, |_| Self::HAS_THERMAL);
         out.extend_from_slice(&self.state_seq.to_le_bytes());
         out.extend_from_slice(&fields.to_le_bytes());
         out.extend_from_slice(&self.motion_scale.unwrap_or(0.0).to_le_bytes());
         out.extend_from_slice(&[self.lock_flags.unwrap_or(0), 0]);
         out.extend_from_slice(&self.origin_epoch.unwrap_or(0).to_le_bytes());
+        if let Some(thermal) = self.thermal_state {
+            out.extend_from_slice(&[thermal, 0, 0, 0]);
+        }
+        Ok(())
     }
 }
 
