@@ -175,7 +175,7 @@ final class VCPGoldenTests: XCTestCase {
         let e = endpoints(try load("vcp/receive.json")["receiver"] as! [String: Any])
         var checked = 0
         for case let c as [String: Any] in try load("vcp/messages.json")["cases"] as! [Any]
-        where c["channel"] as? String == "udp" {
+        where c["channel"] as? String == "udp" && c["feature"] as? String != "lens" {
             let name = c["name"] as! String
             let bytes = hex(c["hex"] as! String)
             let (rx, tx) = pair(c["direction"] as! String, e)
@@ -191,8 +191,8 @@ final class VCPGoldenTests: XCTestCase {
         let vectors = try load("vcp/receive.json")
         let e = endpoints(vectors["receiver"] as! [String: Any])
         let cases = vectors["cases"] as! [[String: Any]]
-        XCTAssertEqual(cases.count, 29)
-        for c in cases {
+        XCTAssertEqual(cases.count, 54)
+        for c in cases where c["feature"] as? String != "lens" {
             let name = c["name"] as! String
             let (rx, _) = pair(c["direction"] as! String, e)
             let result = rx.open(hex(c["hex"] as! String))
@@ -299,7 +299,7 @@ final class VCPGoldenTests: XCTestCase {
     func testMalformedInputIsRejected() throws {
         let e = endpoints(try load("vcp/receive.json")["receiver"] as! [String: Any])
         var cases = (try load("vcp/messages.json")["cases"] as! [[String: Any]]).filter {
-            $0["channel"] as? String == "udp"
+            $0["channel"] as? String == "udp" && $0["feature"] as? String != "lens"
         }
         for file in ["video/fragments.json", "video/report.json"] {
             cases += (try load(file)["cases"] as! [[String: Any]]).filter { $0["accept"] as! Bool }

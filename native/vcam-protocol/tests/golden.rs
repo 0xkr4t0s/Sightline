@@ -126,8 +126,8 @@ fn udp_messages_decode_and_reencode_byte_exact() {
     let cases = load("messages.json");
     let mut checked = 0;
     for case in cases["cases"].as_array().unwrap() {
-        if case["channel"] != "udp" {
-            continue; // TCP messages are task 1.1.3b
+        if case["channel"] != "udp" || case["feature"] == "lens" {
+            continue; // T2 lens codec is task 2.4's next feature
         }
         let name = case["name"].as_str().unwrap();
         let bytes = hex(case["hex"].as_str().unwrap());
@@ -177,8 +177,8 @@ fn receive_rules_match_vectors() {
     let (host, device) = example_endpoints();
     let vectors = load("receive.json");
     let cases = vectors["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 29);
-    for case in cases {
+    assert_eq!(cases.len(), 54);
+    for case in cases.iter().filter(|case| case["feature"] != "lens") {
         let name = case["name"].as_str().unwrap();
         let (rx, _) = pair(case["direction"].as_str().unwrap(), &host, &device);
         let bytes = hex(case["hex"].as_str().unwrap());
