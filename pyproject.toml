@@ -25,7 +25,7 @@ max-complexity = 22
 "tools/gen_testdata.py" = ["N803", "N806", "E741"]
 
 [tool.pytest.ini_options]
-testpaths = ["BlenderAddOn/tests", "tools/latency"]
+testpaths = ["BlenderAddOn/tests", "tools/latency", "tools/soak"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = ["-p", "no:cacheprovider"]
@@ -65,10 +65,13 @@ files = [
     "tools/latency/merge_report.py",
     "tools/media/find_loop.py",
     "tools/set_manifest_wheels.py",
+    "tools/soak/run_soak.py",
+    "tools/soak/soak_probe.py",
+    "tools/soak/soak_verdict.py",
     "tools/hooks/privacy_scan.py",
 ]
-# Resolves the add-on's modules as `core.*`, the way its unit tests import them.
-mypy_path = ["BlenderAddOn"]
+# Resolves the add-on's modules as `core.*` and the soak tools' as `soak_*`, the way their tests import them.
+mypy_path = ["BlenderAddOn", "tools/soak"]
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]

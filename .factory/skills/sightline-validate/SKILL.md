@@ -18,6 +18,7 @@ staged). Then run every row below that matches a changed path.
 | `testdata/**`, `tools/gen_testdata.py`, `docs/protocol/**` | `tools/mission/check.sh python` (includes `gen_testdata.py --check`), plus `rust` and `ios`: the golden vectors are shared by all three. |
 | `tests/blender/**` | `BLENDER_TESTS="<changed scripts>" tools/mission/check.sh blender` |
 | `tools/latency/**` | `tools/mission/check.sh python` (its pytest cases live next to the tool). For a new measurement, `tools/latency/run_simulator.sh` (QA host + simulator app, ~80 s plus the build) writes `reports/latency-<date>-simulator.json`. |
+| `tools/soak/**` | `tools/mission/check.sh python` (verdict and probe tests live next to the runner). For evidence, `tools/soak/run_soak.py --duration 600 --seed 1` (QA host + impaired fake iPhone, ~11 min; no QA host may be running) writes `reports/soak-<date>-<platform>.json`. |
 | `.github/workflows/**` | Parse the YAML (`ruby -ryaml -e 'YAML.load_file(ARGV[0])' <file>`). CI itself only runs on the owner's PRs, so note that it wasn't run. |
 | `AGENTS.md`, `README.md` | `python3 tools/check_agents_md.py` |
 
