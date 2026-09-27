@@ -2,7 +2,8 @@
 """Soak the Blender host with an impaired fake iPhone and judge it (task 2.7; NFR-REL-003).
 
     tools/soak/run_soak.py [--duration 600] [--interval 5] [--warmup 60] [--loss 2] [--jitter 10]
-        [--seed N] [--no-video] [--out PATH] [--date YYYY-MM-DD] [--environment local] [--note TEXT]
+        [--seed N] [--no-video] [--out PATH] [--date YYYY-MM-DD] [--environment local] [--build TEXT]
+        [--note TEXT]
 
 It starts the headless QA host (tools/mission/qa_blender.sh start → qa_host.py, streaming on,
 127.0.0.1:47000), then runs the fake iPhone through `qa_blender.sh drive` with `--loss`,
@@ -16,9 +17,9 @@ no_crash, rss_bounded, handles_bounded and latency_bounded (tools/soak/soak_verd
 
 With `tc netem` on Linux (CI) pass `--loss 0 --jitter 0` and describe the impairment in
 `--environment`/`--note`; `--pose-p95-limit` then sets the pose-leg limit (default 20 ms plus the
-jitter). On a host without a GPU (CI runners) pass `--no-video`: the host doesn't stream and the
-latency verdict judges the pose path only. Run tools/mission/setup.sh first. It refuses to start
-while a QA host is running.
+jitter). The `soak` job in .github/workflows/ci.yml does this. On a host without a GPU (CI
+runners) pass `--no-video`: the host doesn't stream and the latency verdict judges the pose path
+only. Run tools/mission/setup.sh first. It refuses to start while a QA host is running.
 Exit status: 0 all verdicts pass, 1 a verdict failed, 2 the soak couldn't run.
 """
 
@@ -54,6 +55,7 @@ M2P_NOT_MEASURED = (
     "not measured: the fake iPhone sends VIDEO_REPORT m2p_p95_ms 0; device M2P comes from the "
     "simulator or a device (reports/latency-*-simulator.json, tools/latency/)"
 )
+LOCAL_BUILD = "debug vcam_native wheel and fake iPhone (tools/mission/setup.sh)"
 
 
 def mission_dir() -> Path:
@@ -138,6 +140,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--out", type=Path, help="default reports/soak-<date>-<platform>.json")
     p.add_argument("--date", default=datetime.date.today().isoformat(), help="YYYY-MM-DD (default today)")
     p.add_argument("--environment", default="local", help="label for the report (default local)")
+    p.add_argument("--build", default=LOCAL_BUILD, help="the wheel and fake iPhone build, for the report")
     p.add_argument("--note", action="append", default=[], help="a note for the report (repeatable)")
     return p.parse_args(argv)
 
@@ -263,7 +266,7 @@ def build(
         "platform": sv.platform_tag(soak.system, platform.machine()),
         "environment": args.environment,
         "blender_version": soak.blender_version,
-        "build": "debug vcam_native wheel and fake iPhone (tools/mission/setup.sh)",
+        "build": args.build,
         "impairment": {
             "loss_pct": args.loss,
             "jitter_ms": args.jitter,
