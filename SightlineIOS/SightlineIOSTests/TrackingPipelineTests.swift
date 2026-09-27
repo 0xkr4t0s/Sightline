@@ -539,6 +539,66 @@ final class TrackingPipelineTests: XCTestCase {
         XCTAssertNil(next(VCPMessageType.videoReport, from: host, timeout: 0.8), "a stopped session reports nothing")
     }
 
+    /// FR-VF-004: the HUD's stream rate and connection quality count only the session's authentic
+    /// host datagrams and appear once a full second of the session has passed; a run without a
+    /// session has none.
+    func testStreamStatsCountOnlyAuthenticHostDatagrams() throws {
+        let (device, blender) = try goldenSession()
+        let host = try LoopbackReceiver()
+        let latest = Latest()
+        let pipeline = TrackingPipeline(publish: latest.set)
+        let began = Date()
+        pipeline.start(TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device))
+        defer { pipeline.stop() }
+        _ = try XCTUnwrap(next(VCPMessageType.controlState, from: host))
+        // The meter started before the first CONTROL_STATE was sent, so no later than this.
+        let meterStarted = Date()
+        func fragment(_ id: UInt32, bytes: Int = 1000) throws -> [UInt8] {
+            try blender.seal(.videoFragment(VCPVideoFragment(
+                frame: VCPVideoFrameInfo(frameID: id, renderTimeNs: 1_000 * UInt64(id), poseSeq: id, quality: 80),
+                frameLength: UInt32(bytes), fragIndex: 0, fragCount: 1, fragSize: UInt16(bytes),
+                data: [UInt8](repeating: 7, count: bytes)[...])))
+        }
+        func status(_ seq: UInt32) throws -> [UInt8] {
+            try blender.seal(.status(VCPStatus(statusSeq: seq, appliedPoseSeq: 0, controlAck: 1, errorCode: 0,
+                                               flags: 3, cameraName: "Camera")))
+        }
+        /// Waits until the pipeline has handled every datagram sent before (the CLOCK reply follows them).
+        func barrier() throws {
+            host.reply(try blender.seal(.clock(.request(t1: 1))))
+            _ = try XCTUnwrap(next(VCPMessageType.clock, from: host))
+        }
+
+        host.reply(try status(1))
+        for id in UInt32(1)...10 { host.reply(try fragment(id)) }
+        var forged = try fragment(11, bytes: 100)
+        forged[forged.count - 1] ^= 1
+        host.reply(forged)
+        host.reply(try status(2))
+        try barrier()
+        feed(pipeline, frames: 0..<1, rate: 60)
+        XCTAssertNotNil(latest.snapshot?.pose)
+        XCTAssertNil(latest.snapshot?.stream, "nothing before a full second")
+
+        Thread.sleep(forTimeInterval: max(0, 1.05 - Date().timeIntervalSince(meterStarted)))
+        host.reply(try status(3))
+        try barrier()
+        feed(pipeline, frames: 60..<61, rate: 60)
+        let elapsed = Date().timeIntervalSince(began)
+        let stream = try XCTUnwrap(latest.snapshot?.stream)
+        XCTAssertEqual(stream.bitsPerSecond / stream.framesPerSecond, 8_000, accuracy: 1e-6,
+                       "ten frames of 1000 bytes; the forged one counts for nothing")
+        XCTAssertLessThanOrEqual(stream.framesPerSecond, 10)
+        XCTAssertGreaterThanOrEqual(stream.framesPerSecond, 10 / elapsed)
+        XCTAssertEqual(stream.quality, .good)
+
+        pipeline.start(unpaired)
+        Thread.sleep(forTimeInterval: 1.05)
+        feed(pipeline, frames: 0..<1, rate: 60)
+        XCTAssertNotNil(latest.snapshot?.pose)
+        XCTAssertNil(latest.snapshot?.stream, "no session, no stream stats")
+    }
+
     /// CLOCK and STATUS independently renew the deadline; authentication precedes renewal,
     /// while STATUS sequence filtering still protects control acknowledgements.
     func testHostHeartbeatsRenewLivenessButForgedTrafficDoesNot() throws {

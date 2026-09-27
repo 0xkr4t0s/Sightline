@@ -44,6 +44,92 @@ final class StatusHUDTests: XCTestCase {
         XCTAssertNil(meter.rate)
     }
 
+    private static let second: UInt64 = 1_000_000_000
+
+    /// FR-VF-004: frames completed and video bits received per second of the last full window;
+    /// nothing until one has passed, and each window counts only its own frames and bytes.
+    func testStreamRatesPerWindow() throws {
+        var meter = StreamMeter(nowNs: 5 * Self.second)
+        for _ in 0..<30 {
+            meter.hostDatagram(atNs: 5 * Self.second + 500_000_000)
+            meter.fragment(bytes: 50_000)
+        }
+        XCTAssertNil(meter.stats(atNs: 6 * Self.second - 1, framesComplete: 30, framesLost: 0),
+                     "no rate before a full second")
+        var stats = try XCTUnwrap(meter.stats(atNs: 6 * Self.second, framesComplete: 30, framesLost: 0))
+        XCTAssertEqual(stats.framesPerSecond, 30)
+        XCTAssertEqual(stats.bitsPerSecond, 12_000_000)
+        XCTAssertEqual(stats.quality, .good)
+        XCTAssertEqual(stats.label, "30 fps · 12.0 Mbit/s")
+
+        // Mid-window the last window's stats stay; a 2 s window with 12 more frames gives 6 fps.
+        meter.hostDatagram(atNs: 7 * Self.second)
+        meter.fragment(bytes: 300_000)
+        XCTAssertEqual(meter.stats(atNs: 7 * Self.second - 1, framesComplete: 36, framesLost: 0), stats)
+        stats = try XCTUnwrap(meter.stats(atNs: 8 * Self.second, framesComplete: 42, framesLost: 0))
+        XCTAssertEqual(stats.framesPerSecond, 6)
+        XCTAssertEqual(stats.bitsPerSecond, 1_200_000)
+
+        // The stream stops: the next window says so.
+        meter.hostDatagram(atNs: 9 * Self.second)
+        stats = try XCTUnwrap(meter.stats(atNs: 9 * Self.second, framesComplete: 42, framesLost: 0))
+        XCTAssertEqual(stats.framesPerSecond, 0)
+        XCTAssertEqual(stats.bitsPerSecond, 0)
+        XCTAssertEqual(StreamStats(framesPerSecond: 23.6, bitsPerSecond: 6_140_000, quality: .fair).label,
+                       "24 fps · 6.1 Mbit/s")
+    }
+
+    /// Quality is the worse of STATUS loss (gaps in `status_seq`) and viewfinder frames lost, per
+    /// window: under 2 % good, under 10 % fair, else poor.
+    func testConnectionQualityFromLoss() throws {
+        func quality(statusSeqs: [UInt32], complete: UInt64, lost: UInt64) throws -> ConnectionQuality {
+            var meter = StreamMeter(nowNs: 0)
+            meter.hostDatagram(atNs: Self.second)
+            for seq in statusSeqs { meter.status(seq: seq) }
+            return try XCTUnwrap(meter.stats(atNs: Self.second, framesComplete: complete, framesLost: lost)).quality
+        }
+        // The first STATUS has nothing before it: starting at 7 isn't loss.
+        XCTAssertEqual(try quality(statusSeqs: Array(7...8), complete: 0, lost: 0), .good)
+        // 100 expected after the first; 1, 2, 9 and 10 missing.
+        XCTAssertEqual(try quality(statusSeqs: Array(0...100).filter { $0 != 50 }, complete: 0, lost: 0), .good)
+        XCTAssertEqual(try quality(statusSeqs: Array(0...100).filter { $0 != 50 && $0 != 60 }, complete: 0,
+                                   lost: 0), .fair)
+        XCTAssertEqual(try quality(statusSeqs: Array(0...100).filter { $0 % 10 != 5 || $0 == 95 }, complete: 0,
+                                   lost: 0), .fair, "9 %")
+        XCTAssertEqual(try quality(statusSeqs: Array(0...100).filter { $0 % 10 != 5 }, complete: 0, lost: 0), .poor)
+        // Frames: 1, 2 and 10 of 100 lost.
+        XCTAssertEqual(try quality(statusSeqs: [], complete: 99, lost: 1), .good)
+        XCTAssertEqual(try quality(statusSeqs: [], complete: 98, lost: 2), .fair)
+        XCTAssertEqual(try quality(statusSeqs: [], complete: 90, lost: 10), .poor)
+        // The worse of the two counts.
+        XCTAssertEqual(try quality(statusSeqs: Array(0...100).filter { $0 % 10 != 5 }, complete: 100, lost: 0), .poor)
+        XCTAssertEqual(try quality(statusSeqs: Array(0...100), complete: 90, lost: 10), .poor)
+
+        // Loss is per window: a clean window after a lossy one is good again.
+        var meter = StreamMeter(nowNs: 0)
+        meter.hostDatagram(atNs: Self.second)
+        XCTAssertEqual(meter.stats(atNs: Self.second, framesComplete: 90, framesLost: 10)?.quality, .poor)
+        meter.hostDatagram(atNs: 2 * Self.second)
+        XCTAssertEqual(meter.stats(atNs: 2 * Self.second, framesComplete: 190, framesLost: 10)?.quality, .good)
+    }
+
+    /// More than a second without an authentic host datagram is poor at once, between windows too,
+    /// and the next datagram ends it.
+    func testHostSilenceIsPoorAtOnce() {
+        var meter = StreamMeter(nowNs: 0)
+        meter.hostDatagram(atNs: Self.second)
+        XCTAssertEqual(meter.stats(atNs: Self.second, framesComplete: 0, framesLost: 0)?.quality, .good)
+        XCTAssertEqual(meter.stats(atNs: 2 * Self.second, framesComplete: 0, framesLost: 0)?.quality, .good,
+                       "exactly one second is still fine")
+        XCTAssertEqual(meter.stats(atNs: 2 * Self.second + 1, framesComplete: 0, framesLost: 0)?.quality, .poor)
+        meter.hostDatagram(atNs: 2 * Self.second + 2)
+        XCTAssertEqual(meter.stats(atNs: 2 * Self.second + 3, framesComplete: 0, framesLost: 0)?.quality, .good)
+
+        // A session whose host never answers: silence counts from the start.
+        var silent = StreamMeter(nowNs: 10 * Self.second)
+        XCTAssertEqual(silent.stats(atNs: 11 * Self.second + 1, framesComplete: 0, framesLost: 0)?.quality, .poor)
+    }
+
     func testThermalLabelsAndWarning() {
         let expected: [(ProcessInfo.ThermalState, String, Bool)] = [
             (.nominal, "Normal", false),
