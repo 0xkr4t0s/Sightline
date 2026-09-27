@@ -6,7 +6,9 @@
 #   tools/mission/qa_ios.sh build                  # Debug simulator build into .mission/ios-build
 #   tools/mission/qa_ios.sh boot                   # boot the simulator if it isn't
 #   tools/mission/qa_ios.sh launch [--motion orbit|pan|still] [--host H:PORT] [--code CODE]
-#                          [--no-autostart] [--reset-pairings] [--limited FROM-TO] [-- APP_ARGS...]
+#                          [--no-autostart] [--reset-pairings] [--limited FROM-TO]
+#                          [-- -SightlineQAThermal nominal|fair|serious|critical]
+#                          [-- APP_ARGS...]
 #   tools/mission/qa_ios.sh screenshot [--raw] [PATH]   # upright; default .mission/qa/ios-<timestamp>.png
 #   tools/mission/qa_ios.sh terminate              # quit the app and stop the log stream
 #   tools/mission/qa_ios.sh status                 # simulator, app process, log stream

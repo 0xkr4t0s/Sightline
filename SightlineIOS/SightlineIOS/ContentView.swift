@@ -18,7 +18,19 @@ struct ContentView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let layout = HUDLayout(size: proxy.size)
+            let fullSize = CGSize(
+                width: proxy.size.width + proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing,
+                height: proxy.size.height + proxy.safeAreaInsets.top + proxy.safeAreaInsets.bottom)
+            let picture =
+                controller.videoFrameSize.flatMap {
+                    FramingGeometry(frame: $0, view: fullSize, maskAspect: controller.framing.maskAspect)?.picture
+                } ?? CGRect(origin: .zero, size: fullSize)
+            let layout = HUDLayout(
+                size: proxy.size,
+                picture: picture.offsetBy(dx: -proxy.safeAreaInsets.leading, dy: -proxy.safeAreaInsets.top),
+                viewfinder: CGRect(
+                    x: -proxy.safeAreaInsets.leading, y: -proxy.safeAreaInsets.top,
+                    width: fullSize.width, height: fullSize.height))
             let controlsShown = chrome.isShown(at: now, tracking: controller.isTracking)
             ZStack(alignment: .topLeading) {
                 Color.clear
@@ -37,6 +49,12 @@ struct ContentView: View {
                     .offset(x: layout.statusStrip.minX, y: layout.statusStrip.minY)
                 dataPanel
                     .frame(width: layout.dataPanel.width, height: layout.dataPanel.height)
+                    .clipped()
+                    .background {
+                        Color.black.opacity(0.7)
+                            .accessibilityLabel("HUD panel")
+                            .accessibilityIdentifier("hud.panel")
+                    }
                     .offset(x: layout.dataPanel.minX, y: layout.dataPanel.minY)
                 if controlsShown {
                     controlRail
@@ -160,7 +178,6 @@ struct ContentView: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-        .background(Color.black.opacity(0.7))
     }
 
     /// Centred over the stale frame; taps go through to the viewfinder.

@@ -13,28 +13,39 @@ final class ProcessThermalStateProvider: ThermalStateProvider {
     private(set) var state: ProcessInfo.ThermalState
     var onChange: ((ProcessInfo.ThermalState) -> Void)?
     private var observer: (any NSObjectProtocol)?
+    private let readState: @MainActor () -> ProcessInfo.ThermalState
+    private let notifications: NotificationCenter
 
-    init(processInfo: ProcessInfo = .processInfo) {
-        // Read first: the notification only describes changes, not the initial state.
-        state = processInfo.thermalState
+    init(
+        readState: @escaping @MainActor () -> ProcessInfo.ThermalState = { ProcessInfo.processInfo.thermalState },
+        notifications: NotificationCenter = .default
+    ) {
+        self.readState = readState
+        self.notifications = notifications
+        state = readState()
     }
 
     func startObserving() {
         guard observer == nil else { return }
-        observer = NotificationCenter.default.addObserver(
+        observer = notifications.addObserver(
             forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                let next = ProcessInfo.processInfo.thermalState
-                guard next != self.state else { return }
-                self.state = next
-                self.onChange?(next)
+                self?.refresh()
             }
         }
+        // The state may have changed after init but before the observer was registered.
+        refresh()
+    }
+
+    private func refresh() {
+        let next = readState()
+        guard next != state else { return }
+        state = next
+        onChange?(next)
     }
 
     isolated deinit {
-        if let observer { NotificationCenter.default.removeObserver(observer) }
+        if let observer { notifications.removeObserver(observer) }
     }
 }

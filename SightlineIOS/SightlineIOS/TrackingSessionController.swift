@@ -54,7 +54,7 @@ final class TrackingSessionController {
     /// No new viewfinder frame for more than 250 ms during a run (FR-VF-005).
     private(set) var videoStalled = false
     @ObservationIgnored private let stallWatch = VideoStallWatch()
-    /// Pixel size of the frame on screen, for placing the framing guides; nil before the first.
+    /// Pixel size of the frame on screen, retained across stops/reconnects while Metal shows it.
     private(set) var videoFrameSize: CGSize?
     /// Quality and decoded dimensions of the newest frame actually submitted to the drawable.
     private(set) var videoLevel: String?
@@ -369,8 +369,6 @@ final class TrackingSessionController {
             poseRate = nil
             sendLeg = nil
             stream = nil
-            videoLevel = nil
-            videoFrameSize = nil
             lastReconnectSeconds = nil
             runHasVideo = false
             isTracking = true
@@ -412,8 +410,6 @@ final class TrackingSessionController {
         liveSession = nil
         sessionEndpoint = nil
         stream = nil
-        videoLevel = nil
-        videoFrameSize = nil
         pipeline.start(TrackingDestination(host: "", port: 0, endpoint: nil))
         lastError = reason
         sessionStatus = "Reconnecting to Blender"
@@ -447,8 +443,6 @@ final class TrackingSessionController {
             liveSession = link
             sessionEndpoint = link.endpoint
             stream = nil
-            videoLevel = nil
-            videoFrameSize = nil
             pipeline.start(link.destination)
             watch(link)
             controlSeq = 0
@@ -487,8 +481,6 @@ final class TrackingSessionController {
         liveSession = nil
         sessionEndpoint = nil
         stream = nil
-        videoLevel = nil
-        videoFrameSize = nil
         isTracking = false
         stallWatch.stop()
         sceneUnderstanding = nil

@@ -181,6 +181,30 @@ final class StatusHUDTests: XCTestCase {
         XCTAssertEqual(phone.statusStrip.height, HUDLayout.statusHeight)
     }
 
+    func testPanelContainerAvoidsDisplayedPictureCentreEvenWithSafeAreaInsetsAndMask() throws {
+        let viewport = CGSize(width: 874, height: 402)
+        let frame = CGSize(width: 960, height: 540)
+        for mask in [nil, 2.39, 1.33] as [Double?] {
+            let geometry = try XCTUnwrap(FramingGeometry(frame: frame, view: viewport, maskAspect: mask))
+            // The GeometryReader inside the safe area has less room than the full-screen Metal view.
+            let inset = CGRect(x: 59, y: 0, width: 756, height: 381)
+            let layout = HUDLayout(
+                size: inset.size, picture: geometry.picture.offsetBy(dx: -inset.minX, dy: 0),
+                viewfinder: CGRect(x: -inset.minX, y: 0, width: viewport.width, height: viewport.height))
+            let pictureCentre = geometry.picture.insetBy(
+                dx: geometry.picture.width / 4, dy: geometry.picture.height / 4)
+            XCTAssertFalse(
+                layout.dataPanel.offsetBy(dx: inset.minX, dy: inset.minY).intersects(pictureCentre),
+                "panel background overlaps centre for mask \(String(describing: mask))")
+            XCTAssertFalse(
+                layout.dataPanel.offsetBy(dx: inset.minX, dy: inset.minY).intersects(
+                    CGRect(origin: .zero, size: viewport).insetBy(dx: viewport.width / 4, dy: viewport.height / 4)),
+                "panel background overlaps full viewfinder centre")
+            XCTAssertLessThanOrEqual(layout.dataPanel.maxY, inset.height)
+            XCTAssertEqual(layout.dataPanel.minY, viewport.height * 0.75, accuracy: 0.01)
+        }
+    }
+
     func testDisplayedFrameLevelAndUnavailableFields() {
         XCTAssertEqual(HUDFields.level(quality: 70, size: CGSize(width: 960, height: 540)), "q70 · 960×540")
         XCTAssertEqual(HUDFields.level(quality: 50, size: CGSize(width: 640, height: 360)), "q50 · 640×360")

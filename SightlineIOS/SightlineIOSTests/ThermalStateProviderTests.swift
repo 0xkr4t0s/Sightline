@@ -21,6 +21,23 @@ final class FakeThermalStateProvider: ThermalStateProvider {
 
 @MainActor
 final class ThermalStateProviderTests: XCTestCase {
+    func testChangeBetweenInitAndObservationIsDeliveredAndNotificationsRefreshState() {
+        var current: ProcessInfo.ThermalState = .nominal
+        let notifications = NotificationCenter()
+        let provider = ProcessThermalStateProvider(readState: { current }, notifications: notifications)
+        var received: [ProcessInfo.ThermalState] = []
+        provider.onChange = { received.append($0) }
+        current = .serious
+        provider.startObserving()
+        XCTAssertEqual(provider.state, .serious)
+        XCTAssertEqual(received, [.serious])
+        current = .critical
+        notifications.post(name: ProcessInfo.thermalStateDidChangeNotification, object: nil)
+        XCTAssertEqual(received, [.serious, .critical])
+        provider.startObserving()
+        XCTAssertEqual(received.count, 2, "observation is idempotent")
+    }
+
     func testInjectedStateMapsToVCPAndHUD() {
         let provider = FakeThermalStateProvider(.nominal)
         XCTAssertEqual(ThermalStatus(state: provider.state).code, 0)

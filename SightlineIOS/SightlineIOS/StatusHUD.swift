@@ -209,9 +209,8 @@ nonisolated struct ChromeVisibility: Hashable, Sendable {
 }
 
 /// Where the status screen puts things (FR-UX-003): a status strip along the top edge and the
-/// control rail along the trailing edge, under the right thumb in landscape. Both are capped so
-/// they stay out of `centre`, the middle half of the frame in each direction, which holds the
-/// rule-of-thirds points.
+/// control rail along the trailing edge, under the right thumb in landscape. The data panel's
+/// whole container fits below `centre`, the middle half of the displayed picture.
 nonisolated struct HUDLayout: Equatable, Sendable {
     static let statusHeight: CGFloat = 44
     static let railWidth: CGFloat = 96
@@ -223,19 +222,23 @@ nonisolated struct HUDLayout: Equatable, Sendable {
     let dataPanel: CGRect
     let centre: CGRect
 
-    init(size: CGSize) {
+    /// Both rectangles use the safe-area reader's coordinates, not global screen coordinates.
+    init(size: CGSize, picture: CGRect? = nil, viewfinder: CGRect? = nil) {
         let stripHeight = min(Self.statusHeight, size.height * Self.maxShare)
         let railWidth = min(Self.railWidth, size.width * Self.maxShare)
+        let image = picture ?? CGRect(origin: .zero, size: size)
+        let canvas = viewfinder ?? CGRect(origin: .zero, size: size)
+        // A mask can shrink the picture's centre; still leave the full viewfinder middle half
+        // clear (the UI's centre-clear contract).
+        centre = image.insetBy(dx: image.width / 4, dy: image.height / 4)
+            .union(canvas.insetBy(dx: canvas.width / 4, dy: canvas.height / 4))
         statusStrip = CGRect(x: 0, y: 0, width: size.width, height: stripHeight)
         controlRail = CGRect(
             x: size.width - railWidth, y: stripHeight,
             width: railWidth, height: size.height - stripHeight)
-        let panelHeight = min(100, size.height * 0.24)
+        let panelHeight = min(100, max(0, size.height - centre.maxY))
         dataPanel = CGRect(
             x: 0, y: size.height - panelHeight,
             width: min(430, size.width - railWidth), height: panelHeight)
-        centre = CGRect(
-            x: size.width / 4, y: size.height / 4,
-            width: size.width / 2, height: size.height / 2)
     }
 }

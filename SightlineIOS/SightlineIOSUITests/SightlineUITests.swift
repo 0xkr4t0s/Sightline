@@ -117,6 +117,12 @@ final class SightlineUITests: XCTestCase {
                 "\(id) covers picture centre: \(item.frame), viewfinder \(viewfinder.frame)"
             )
         }
+        let panel = element(app, "hud.panel")
+        XCTAssertTrue(panel.exists, "panel background must have a measurable frame")
+        XCTAssertFalse(
+            panel.frame.intersects(
+                viewfinder.frame.insetBy(dx: viewfinder.frame.width / 4, dy: viewfinder.frame.height / 4)),
+            "HUD panel background covers picture centre: \(panel.frame), viewfinder \(viewfinder.frame)")
         XCTAssertEqual(element(app, "hud.lens").value as? String, "Focal — · Focus — · f/—")
         XCTAssertEqual(element(app, "hud.m2p").value as? String, "—")
         XCTAssertEqual(element(app, "hud.recording").value as? String, "Recording: not available (T3)")
@@ -152,10 +158,15 @@ final class SightlineUITests: XCTestCase {
         showControls(app)
         let startStop = app.buttons["control.startStop"]
         XCTAssertEqual(startStop.label, "Stop")
+        let lastFrameDescription = viewfinder.value as? String
         startStop.tap()
         wait(for: status, label: "Stopped")
         wait(for: element(app, "hud.tracking"), value: "Stopped")
         XCTAssertFalse(stream.exists, "a stopped session must not show old stream measurements")
+        XCTAssertEqual(
+            viewfinder.value as? String,
+            lastFrameDescription,
+            "the still-visible last frame must keep its framing guides and accessibility size")
         attachScreenshot(app, "5 stopped")
     }
 
