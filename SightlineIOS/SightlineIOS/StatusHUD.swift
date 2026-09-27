@@ -139,6 +139,30 @@ nonisolated struct ThermalStatus: Equatable, Sendable {
     }
 }
 
+/// FR-VF-004: display only facts from the decoded frame that was handed to Metal, not the
+/// requested stream setting. Lens and latency stay unknown until their later milestones.
+nonisolated enum HUDFields {
+    static let lens = "Focal — · Focus — · f/—"
+    static let m2p = "—"
+    static let recording = "Recording: not available (T3)"
+
+    static func level(quality: UInt8, size: CGSize) -> String {
+        let q = quality == 0 ? "—" : String(quality)
+        return "q\(q) · \(Int(size.width))×\(Int(size.height))"
+    }
+
+    static func tracking(running: Bool, state: UInt8?) -> String {
+        guard running else { return "Stopped" }
+        guard let state else { return "Starting" }
+        if state == VCPPose.trackingNormal { return "Tracking" }
+        return state == 0 ? "Tracking unavailable" : "Tracking limited"
+    }
+
+    static func thermal(_ status: ThermalStatus) -> String {
+        status.isWarning ? "Stream reduced (thermal)" : "Thermal: \(status.label)"
+    }
+}
+
 /// When the status screen's controls are on screen (FR-UX-003: they auto-hide). While not
 /// tracking they stay up, so Start is always reachable.
 nonisolated struct ChromeVisibility: Hashable, Sendable {
@@ -186,6 +210,7 @@ nonisolated struct HUDLayout: Equatable, Sendable {
 
     let statusStrip: CGRect
     let controlRail: CGRect
+    let dataPanel: CGRect
     let centre: CGRect
 
     init(size: CGSize) {
@@ -195,6 +220,10 @@ nonisolated struct HUDLayout: Equatable, Sendable {
         controlRail = CGRect(
             x: size.width - railWidth, y: stripHeight,
             width: railWidth, height: size.height - stripHeight)
+        let panelHeight = min(100, size.height * 0.24)
+        dataPanel = CGRect(
+            x: 0, y: size.height - panelHeight,
+            width: min(430, size.width - railWidth), height: panelHeight)
         centre = CGRect(
             x: size.width / 4, y: size.height / 4,
             width: size.width / 2, height: size.height / 2)

@@ -167,6 +167,8 @@ final class StatusHUDTests: XCTestCase {
             XCTAssertEqual(layout.centre.height, size.height / 2)
             XCTAssertFalse(layout.controlRail.intersects(layout.centre), "rail at \(size)")
             XCTAssertFalse(layout.statusStrip.intersects(layout.centre), "strip at \(size)")
+            XCTAssertFalse(layout.dataPanel.intersects(layout.centre), "HUD data at \(size)")
+            XCTAssertFalse(layout.dataPanel.intersects(layout.controlRail), "HUD avoids controls at \(size)")
             // Edges: strip along the top, rail along the trailing edge below it.
             XCTAssertEqual(layout.statusStrip.minY, 0)
             XCTAssertEqual(layout.statusStrip.width, size.width)
@@ -177,5 +179,19 @@ final class StatusHUDTests: XCTestCase {
         let phone = HUDLayout(size: sizes[0])
         XCTAssertEqual(phone.controlRail.width, HUDLayout.railWidth, "full-size rail on a phone")
         XCTAssertEqual(phone.statusStrip.height, HUDLayout.statusHeight)
+    }
+
+    func testDisplayedFrameLevelAndUnavailableFields() {
+        XCTAssertEqual(HUDFields.level(quality: 70, size: CGSize(width: 960, height: 540)), "q70 · 960×540")
+        XCTAssertEqual(HUDFields.level(quality: 50, size: CGSize(width: 640, height: 360)), "q50 · 640×360")
+        XCTAssertEqual(HUDFields.level(quality: 0, size: CGSize(width: 960, height: 540)), "q— · 960×540")
+        XCTAssertEqual(HUDFields.lens, "Focal — · Focus — · f/—")
+        XCTAssertEqual(HUDFields.m2p, "—")
+        XCTAssertEqual(HUDFields.recording, "Recording: not available (T3)")
+        XCTAssertEqual(HUDFields.tracking(running: false, state: 5), "Stopped")
+        XCTAssertEqual(HUDFields.tracking(running: true, state: nil), "Starting")
+        XCTAssertEqual(HUDFields.tracking(running: true, state: 0), "Tracking unavailable")
+        XCTAssertEqual(HUDFields.tracking(running: true, state: 2), "Tracking limited")
+        XCTAssertEqual(HUDFields.tracking(running: true, state: VCPPose.trackingNormal), "Tracking")
     }
 }

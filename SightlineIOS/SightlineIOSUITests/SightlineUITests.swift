@@ -102,6 +102,24 @@ final class SightlineUITests: XCTestCase {
             stream, NSPredicate(format: "value MATCHES %@", "^[1-9][0-9]* fps · [0-9]+\\.[0-9] Mbit/s$"), timeout: 15)
         let quality = element(app, "hud.quality")
         wait(for: quality, value: "Good", timeout: 15)
+        let level = element(app, "hud.level")
+        expect(level, NSPredicate(format: "value MATCHES %@", "^q[0-9]+ · [0-9]+×[0-9]+$"), timeout: 15)
+        for id in [
+            "hud.tracking", "hud.connection", "hud.stream", "hud.quality", "hud.level",
+            "hud.lens", "hud.m2p", "hud.recording", "hud.thermal",
+        ] {
+            let item = element(app, id)
+            XCTAssertTrue(item.exists, "\(id) must be accessible")
+            XCTAssertFalse(
+                item.frame.intersects(
+                    viewfinder.frame.insetBy(
+                        dx: viewfinder.frame.width / 4, dy: viewfinder.frame.height / 4)),
+                "\(id) covers picture centre: \(item.frame), viewfinder \(viewfinder.frame)"
+            )
+        }
+        XCTAssertEqual(element(app, "hud.lens").value as? String, "Focal — · Focus — · f/—")
+        XCTAssertEqual(element(app, "hud.m2p").value as? String, "—")
+        XCTAssertEqual(element(app, "hud.recording").value as? String, "Recording: not available (T3)")
         // Frames keep coming: no stall once they arrive (FR-VF-005).
         sleep(2)
         XCTAssertFalse(app.descendants(matching: .any)["video.stalled"].exists, "video stalled while streaming")
@@ -136,6 +154,7 @@ final class SightlineUITests: XCTestCase {
         XCTAssertEqual(startStop.label, "Stop")
         startStop.tap()
         wait(for: status, label: "Stopped")
+        wait(for: element(app, "hud.tracking"), value: "Stopped")
         XCTAssertFalse(stream.exists, "a stopped session must not show old stream measurements")
         attachScreenshot(app, "5 stopped")
     }

@@ -55,6 +55,8 @@ final class TrackingSessionController {
     @ObservationIgnored private let stallWatch = VideoStallWatch()
     /// Pixel size of the frame on screen, for placing the framing guides; nil before the first.
     private(set) var videoFrameSize: CGSize?
+    /// Quality and decoded dimensions of the newest frame actually submitted to the drawable.
+    private(set) var videoLevel: String?
     /// Framing guides over the viewfinder (FR-VF-003), saved on every change.
     var framing = FramingSettings.load() {
         didSet { framing.save() }
@@ -128,16 +130,16 @@ final class TrackingSessionController {
                 Log.video.info("Video resumed")
             }
         }
-        viewfinder?.onShown = { [weak self] in
+        viewfinder?.onShown = { [weak self] frame in
             guard let self else { return }
             stallWatch.frameShown()
-            if let texture = viewfinder?.frame?.texture {
-                let size = CGSize(width: texture.width, height: texture.height)
-                if size != videoFrameSize { videoFrameSize = size }
-                if isTracking, !runHasVideo {
-                    runHasVideo = true
-                    Log.video.notice("First viewfinder frame: \(texture.width)x\(texture.height)")
-                }
+            guard isTracking else { return }
+            let size = CGSize(width: frame.texture.width, height: frame.texture.height)
+            if size != videoFrameSize { videoFrameSize = size }
+            videoLevel = HUDFields.level(quality: frame.info.quality, size: size)
+            if isTracking, !runHasVideo {
+                runHasVideo = true
+                Log.video.notice("First viewfinder frame: \(frame.texture.width)x\(frame.texture.height)")
             }
         }
         Task { [weak self] in
@@ -353,6 +355,8 @@ final class TrackingSessionController {
             poseRate = nil
             sendLeg = nil
             stream = nil
+            videoLevel = nil
+            videoFrameSize = nil
             lastReconnectSeconds = nil
             runHasVideo = false
             isTracking = true
@@ -394,6 +398,8 @@ final class TrackingSessionController {
         liveSession = nil
         sessionEndpoint = nil
         stream = nil
+        videoLevel = nil
+        videoFrameSize = nil
         pipeline.start(TrackingDestination(host: "", port: 0, endpoint: nil))
         lastError = reason
         sessionStatus = "Reconnecting to Blender"
@@ -427,6 +433,8 @@ final class TrackingSessionController {
             liveSession = link
             sessionEndpoint = link.endpoint
             stream = nil
+            videoLevel = nil
+            videoFrameSize = nil
             pipeline.start(link.destination)
             watch(link)
             controlSeq = 0
@@ -465,6 +473,8 @@ final class TrackingSessionController {
         liveSession = nil
         sessionEndpoint = nil
         stream = nil
+        videoLevel = nil
+        videoFrameSize = nil
         isTracking = false
         stallWatch.stop()
         sceneUnderstanding = nil
