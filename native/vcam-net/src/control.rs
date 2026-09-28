@@ -383,6 +383,17 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>, events: &Sender<Con
     }
 }
 
+/// Blocking reads and writes that give up after `POLL`, so the connection loop can check `stop`.
+/// On macOS and Windows an accepted socket inherits the listener's non-blocking mode: without
+/// `set_nonblocking(false)` the timeouts don't apply and every read returns `WouldBlock` at once,
+/// so an idle connection spins a CPU core.
+fn configure_stream(stream: &TcpStream) -> io::Result<()> {
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(POLL))?;
+    stream.set_write_timeout(Some(POLL))?;
+    stream.set_nodelay(true)
+}
+
 /// Why a connection ended.
 enum End {
     /// Peer closed, timed out, the server is stopping, or an I/O error: just close.
@@ -418,10 +429,7 @@ struct Conn<'a> {
 
 impl Conn<'_> {
     fn serve(&mut self) {
-        if self.stream.set_read_timeout(Some(POLL)).is_err()
-            || self.stream.set_write_timeout(Some(POLL)).is_err()
-            || self.stream.set_nodelay(true).is_err()
-        {
+        if configure_stream(&self.stream).is_err() {
             return;
         }
         if let Err(End::Error(code, message)) = self.run() {
@@ -733,5 +741,43 @@ impl From<End> for PairFailure {
 impl From<io::Error> for PairFailure {
     fn from(_: io::Error) -> Self {
         PairFailure::End(End::Close)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_idle_accepted_connection_waits_for_the_read_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(e) => panic!("accept: {e}"),
+            }
+        };
+        configure_stream(&stream).unwrap();
+        let started = Instant::now();
+        let err = (&stream).read(&mut [0u8; 1]).unwrap_err();
+        assert!(
+            matches!(
+                err.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ),
+            "{err}"
+        );
+        // A non-blocking socket returns at once; a blocking one waits for POLL (50 ms).
+        assert!(
+            started.elapsed() >= POLL / 2,
+            "read returned after {:?}",
+            started.elapsed()
+        );
     }
 }
