@@ -27,8 +27,9 @@ EXCLUDED_PREFIXES = ("legacy/", "testdata/")
 EXCLUDED_FILES = {"tools/check_todos.py"}
 
 MARKER = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b(?:\(([^)]*)\))?")
-# `#123` (issue/PR) or a plan task ID such as 2.3f, 1.1.3c or 2.2d2b.
-LINK = re.compile(r"^(#\d+|\d+(?:\.\d+[a-z0-9]*)+)$")
+# `#123` (issue/PR) or a plan task ID such as 2.3f, 1.1.3c or 2.2d2b. A letter must start the
+# suffix, so each digit belongs to one group only (no exponential backtracking; CodeQL alert 1).
+LINK = re.compile(r"^(#\d+|\d+(?:\.\d+(?:[a-z][a-z0-9]*)?)+)$")
 
 # Unlinked markers that predate this check, as (path, line text stripped). Remove an entry when
 # its marker is linked or resolved; never add new ones.

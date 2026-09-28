@@ -7,8 +7,8 @@
 Looks for this machine's home path, user name in /Users/ or /home/ paths, host names, the
 Apple Team ID from the git-ignored SightlineIOS/Signing.local.xcconfig, a non-empty
 DEVELOPMENT_TEAM in project.pbxproj, staged xcuserdata/ paths, and email addresses other than
-GitHub noreply addresses. The values are read at run time and printed only as placeholders,
-so the hook's own output is safe to paste.
+GitHub noreply addresses. The values are read at run time and printed only as placeholders
+(blocked email addresses as <email>), so the hook's own output is safe to paste.
 """
 
 from __future__ import annotations
@@ -76,7 +76,11 @@ def redact(text: str, values: list[tuple[str, str]]) -> str:
             return p
 
         text = re.sub(re.escape(value), literal, text, flags=re.IGNORECASE)
-    return text
+
+    def email(m: re.Match[str]) -> str:
+        return m.group(0) if ALLOWED_EMAIL.match(m.group(0)) else "<email>"
+
+    return EMAIL.sub(email, text)
 
 
 def scan_line(line: str, values: list[tuple[str, str]]) -> list[str]:
@@ -145,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
             if "xcuserdata/" in path or path.endswith(".xcuserstate"):
                 problems.append(f"{redact(path, values)}: per-user Xcode state must not be committed")
             if path.endswith("Signing.local.xcconfig"):
-                problems.append(f"{path}: the local signing file holds the Team ID; it stays untracked")
+                problems.append(f"{redact(path, values)}: the local signing file holds the Team ID; it stays untracked")
         for path, n, line in added_lines(root):
             where = f"{redact(path, values)}:{n}"
             if path.endswith(".pbxproj") and TEAM_IN_PBXPROJ.search(line):
