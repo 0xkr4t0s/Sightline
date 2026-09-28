@@ -15,7 +15,10 @@ set -euo pipefail
 bundle="$1"
 min="${2:-0}"
 [ -d "${bundle}" ] || { echo "coverage_check: no result bundle at ${bundle}" >&2; exit 2; }
-export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-27.0.0.app/Contents/Developer}"
+# The pinned local Xcode when it's installed; elsewhere (CI) the selected Xcode.
+if [ -z "${DEVELOPER_DIR:-}" ] && [ -d /Applications/Xcode-27.0.0.app/Contents/Developer ]; then
+  export DEVELOPER_DIR=/Applications/Xcode-27.0.0.app/Contents/Developer
+fi
 
 report="$(mktemp "${TMPDIR:-/tmp}/coverage.XXXXXX")"
 trap 'rm -f "${report}"' EXIT

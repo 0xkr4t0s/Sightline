@@ -328,6 +328,10 @@ jobs:
   ios:
     if: github.event.pull_request.draft != true
     runs-on: xcode-27  # GitHub preview image: macOS 27, Xcode 27.0 default (matches local builds)
+    # An explicit bash adds -o pipefail, so `coverage_check.sh ... | tee` fails the step.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
       - name: swift-format lint (.swift-format)

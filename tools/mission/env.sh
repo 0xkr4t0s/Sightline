@@ -8,8 +8,11 @@ LOG_DIR="${MISSION_DIR}/logs"
 BLENDER="${BLENDER:-/Applications/Blender.app/Contents/MacOS/Blender}"
 # Blender's bundled Python 3.13: the interpreter the vcam_native wheel must target.
 BLENDER_PY="${BLENDER_PY:-$(ls /Applications/Blender.app/Contents/Resources/*/python/bin/python3.13 2>/dev/null | head -1)}"
-# The system default developer dir is Command Line Tools, which can't run xcodebuild.
-export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-27.0.0.app/Contents/Developer}"
+# The system default developer dir is Command Line Tools, which can't run xcodebuild. Prefer the
+# pinned Xcode when it's installed; otherwise keep the system's choice (`xcode-select`).
+if [ -z "${DEVELOPER_DIR:-}" ] && [ -d /Applications/Xcode-27.0.0.app/Contents/Developer ]; then
+  export DEVELOPER_DIR=/Applications/Xcode-27.0.0.app/Contents/Developer
+fi
 IOS_DESTINATION="${IOS_DESTINATION:-platform=iOS Simulator,name=iPhone 17}"
 
 VENV="${ROOT}/.venv.nosync"
