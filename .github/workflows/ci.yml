@@ -328,6 +328,8 @@ jobs:
   ios:
     if: github.event.pull_request.draft != true
     runs-on: xcode-27  # GitHub preview image: macOS 27, Xcode 27.0 default (matches local builds)
+    # A healthy run takes 10-13 minutes; a hung simulator would otherwise hold the runner for 6 hours.
+    timeout-minutes: 45
     # An explicit bash adds -o pipefail, so `coverage_check.sh ... | tee` fails the step.
     defaults:
       run:
