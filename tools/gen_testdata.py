@@ -55,11 +55,20 @@ testdata/video/report.json   VIDEO_REPORT datagrams (vcp.md §6.6), device -> ho
                              example keys. Each case: name, hex, direction, accept, rule; accepted
                              cases carry fields, rejected ones the reason (too_short|counts|direction).
 
+testdata/take/sidecar_v1.jsonl   a take sidecar (docs/takes-jsonl.md, FR-TAKE-004): 134 poses at 60 Hz with a
+                             dropped span, a limited-tracking span and one late pose, plus control, clock,
+                             applied-change, frame-note and unknown-kind lines. One JSON object per line;
+                             f32 fields are the shortest decimal that reads back as the same binary32.
+testdata/take/resample_v1.json   capture-time resample of that sidecar onto frame grids (FR-TAKE-001): per case
+                             the frame times, the pose and the source (exact|interp|held_gap|limited|
+                             before_first), from a float64 reference resampler. Compare to 1e-6.
+
 Big integers are big-endian hex strings. Floats are JSON numbers; compare with the stated
 tolerance. Quaternions are [x, y, z, w] with w >= 0 (q and -q are the same rotation).
 """
 
 import argparse
+import bisect
 import hashlib
 import hmac
 import json
@@ -67,6 +76,7 @@ import math
 import re
 import struct
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1768,6 +1778,335 @@ def build_hold(motion: dict) -> dict:
     }
 
 
+# --------------------------------------------------------------------------------------------
+# Take sidecar and capture-time resample (docs/takes-jsonl.md; FR-TAKE-001, FR-TAKE-004)
+
+TAKE_DT = 16_666_667  # 60 Hz capture spacing, ns
+TAKE_CAP0 = 1_000_000_000_000  # device clock at pose seq 1
+TAKE_HOST0 = 400_000_000_000  # host clock at pose seq 1's capture
+TAKE_THETA = TAKE_CAP0 - TAKE_HOST0  # device clock - host clock
+TAKE_START = TAKE_HOST0  # host clock at record start, the first capture instant (frame 1 is exact)
+TAKE_POSES = 150
+TAKE_DROPPED = range(40, 56)  # a 283 ms capture gap
+TAKE_LIMITED = range(90, 101)  # tracking_state 2 (excessive motion)
+TAKE_LATE = 33  # delayed until just after seq 34, in the pan where p and q change every pose
+TAKE_FLIPPED = 60  # stored as -q (w < 0): the shortest-arc negation is needed on both sides
+TAKE_DUP = 10  # a duplicated datagram with a different payload: the first arrival is kept
+TAKE_TAIL_NS = 100_000_000  # the take stops this long after the last pose, so frames fall past it
+TAKE_FPS = (24, 1)
+TAKE_FRAME0 = 1
+TAKE_MAX_GAP_NS = 250_000_000
+NS = 1_000_000_000
+
+
+def f32s(x: float) -> str:
+    """Shortest decimal that reads back as the same binary32; always a float literal (has '.' or 'e')."""
+    assert math.isfinite(x) and f32(x) == x, x
+    for n in range(1, 10):
+        s = f"{x:.{n}g}"
+        if f32(float(s)) == x:
+            break
+    if "e" in s and 1e-4 <= abs(x) < 1e16:
+        s = format(Decimal(s), "f")
+    return s if "." in s or "e" in s else s + ".0"
+
+
+def jv(v) -> str:
+    """Compact JSON for the sidecar. Floats are f32 values and use f32s(); nothing else is formatted."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return f32s(v)
+    if isinstance(v, str):
+        return json.dumps(v, ensure_ascii=False)
+    if isinstance(v, (list, tuple)):
+        return "[" + ",".join(jv(x) for x in v) + "]"
+    if isinstance(v, dict):
+        return "{" + ",".join(f"{json.dumps(k)}:{jv(x)}" for k, x in v.items()) + "}"
+    raise TypeError(repr(v))
+
+
+def jline(t: str, **fields) -> str:
+    return jv({"t": t, **fields}) + "\n"
+
+
+def lcg(seed: int):
+    """Deterministic 31-bit stream (no `random` state)."""
+    state = seed
+    while True:
+        state = (state * 6364136223846793005 + 1442695040888963407) % 2**64
+        yield state >> 33
+
+
+def take_poses(motion: dict) -> list[dict]:
+    """The scripted 60 Hz frames with the take's faults, in arrival order (rx is host time).
+
+    The scripted position is constant and the pan is uniform, so a drift and a wobble are added to p:
+    without a change of speed, resampling in arrival order would give the same frames.
+    """
+    jitter = lcg(0x7A4E)
+    poses = []
+    for i, frame in enumerate(motion["frames"][:TAKE_POSES]):
+        seq, latency = i + 1, 2_000_000 + next(jitter) % 10_000_001
+        if seq in TAKE_DROPPED:
+            continue
+        x, y, z = frame["position"]
+        q = [-c for c in frame["orientation"]] if seq == TAKE_FLIPPED else frame["orientation"]
+        poses.append(
+            {
+                "seq": seq,
+                "cap": TAKE_CAP0 + i * TAKE_DT,
+                "rx": TAKE_HOST0 + i * TAKE_DT + latency,
+                "p": [f32(x + 0.004 * i), f32(y - 0.002 * i + 0.01 * math.sin(0.9 * i)), f32(z + 0.001 * i)],
+                "q": q,
+                "trk": 2 if seq in TAKE_LIMITED else 5,
+            }
+        )
+    by_seq = {p["seq"]: p for p in poses}
+    by_seq[TAKE_LATE]["rx"] = by_seq[TAKE_LATE + 1]["rx"] + 500_000
+    first = by_seq[TAKE_DUP]
+    poses.append({**first, "rx": first["rx"] + 300_000, "p": [f32(c + 0.01) for c in first["p"]]})
+    poses.sort(key=lambda p: p["rx"])
+    top = 0
+    for p in poses:
+        p["late"] = int(p["seq"] < top)
+        top = max(top, p["seq"])
+    assert [p["seq"] for p in poses if p["late"]] == [TAKE_LATE]
+    return poses
+
+
+def take_frame_notes(start: int, stop: int, jitter) -> list[tuple[int, int]]:
+    """(host_ns, frame) per playback tick at 24 fps: frame 5 is shown twice and frame 9 is skipped."""
+    notes, j = [], 0
+    while True:
+        host = start + (j * NS) // TAKE_FPS[0] + next(jitter) % 1_000_001
+        if host > stop:
+            return notes
+        notes.append((host, TAKE_FRAME0 + j if j <= 4 else j if j <= 8 else j + 1))
+        j += 1
+
+
+def take_lines(poses: list[dict]) -> tuple[str, dict]:
+    """The sidecar text and the facts later steps need (theta, duration, notes)."""
+    by_seq = {p["seq"]: p for p in reversed(poses)}  # the first arrival of each seq
+    theta_hat = max(p["cap"] - p["rx"] for p in poses)
+    theta_clock = TAKE_THETA
+    stop = max(p["rx"] for p in poses) + TAKE_TAIL_NS
+    notes = take_frame_notes(TAKE_START, stop, lcg(0xF4A3))
+    head = jline(
+        "take",
+        v=1,
+        take_id=1,
+        name="Take 001",
+        fps_num=TAKE_FPS[0],
+        fps_den=TAKE_FPS[1],
+        frame0=TAKE_FRAME0,
+        play_on_record=True,
+        smoothing={"enabled": True, "min_cutoff": 1.0, "beta": 2.0, "d_cutoff": 1.0},
+        applied_start={
+            "zero": {"p": by_seq[1]["p"], "yaw": 0.0},
+            "motion_scale": 2.0,
+            "lock_flags": 1,
+            "lens": {"lens_mm": 50.0, "focus_distance_m": 4.0, "fstop": f32(2.8), "dof_on": 1},
+        },
+        start_host_ns=TAKE_START,
+    )
+    seg = jline(
+        "seg", seg=0, session_id=SID, start_host_ns=TAKE_START, theta_clock_ns=theta_clock, theta_hat_ns=theta_hat
+    )
+    rx = sorted(p["rx"] for p in poses)
+    events = [
+        (
+            p["rx"],
+            {
+                "t": "pose",
+                "seg": 0,
+                **{k: p[k] for k in ("seq", "cap", "rx", "p", "q", "trk")},
+                "fl": 0,
+                "late": p["late"],
+            },
+        )
+        for p in poses
+    ]
+    events += [(h, {"t": "frame", "host_ns": h, "f": f}) for h, f in notes]
+    ctl = {"seg": 0, "rx": rx[2] + 1_000_000, "last_seq": 3, "last_cap": by_seq[3]["cap"], "state_seq": 1}
+    ctl |= {"motion_scale": 2.5, "lock_flags": 1, "origin_epoch": 0, "lens_mm": 50.0, "focus_distance_m": 4.0}
+    events.append((ctl["rx"], {"t": "ctl", **ctl, "fstop": f32(2.8), "dof_on": 1}))
+    for at, offset, delay, jit in (
+        (30, theta_clock - 300_000, 3_200_000, 150_000),
+        (120, theta_clock, 2_900_000, 90_000),
+    ):
+        events.append(
+            (
+                rx[at] + 2_500_000,
+                {
+                    "t": "clock",
+                    "seg": 0,
+                    "rx": rx[at] + 2_500_000,
+                    "offset_ns": offset,
+                    "delay_ns": delay,
+                    "jitter_ns": jit,
+                },
+            )
+        )
+    events.append((rx[60] + 500_000, {"t": "x_future", "rx": rx[60] + 500_000, "payload": {"a": 1.5, "b": [1, 2]}}))
+    zero = {"t": "applied", "seg": 0, "pose_seq": 70, "kind": "zero", "p": by_seq[70]["p"], "yaw": f32(math.pi / 4)}
+    events.append((by_seq[70]["rx"] + 100_000, zero))
+    scale = {"t": "applied", "seg": 0, "pose_seq": 4, "kind": "scale", "motion_scale": 2.5}
+    events.append((by_seq[4]["rx"] + 100_000, scale))
+    lens_host = by_seq[100]["rx"] + 5_000_000
+    events.append(
+        (lens_host, {"t": "applied", "host_ns": lens_host, "kind": "lens", "lens_mm": 35.0, "fstop": f32(2.8)})
+    )
+    assert len({e[0] for e in events}) == len(events), "event times must be unique so the order is stable"
+    tail = jline("end", poses=len(poses), late=sum(p["late"] for p in poses), truncated=False, dur_ns=stop - TAKE_START)
+    body = "".join(jv(e) + "\n" for _, e in sorted(events, key=lambda x: x[0]))
+    text = head + seg + body + tail
+    return text, {"theta_hat": theta_hat, "theta_clock": theta_clock, "dur_ns": stop - TAKE_START, "notes": notes}
+
+
+def slerp_short(a, b, w):
+    d = sum(x * y for x, y in zip(a, b, strict=True))
+    if d < 0:
+        b, d = tuple(-x for x in b), -d
+    if 1 - d < 1e-12:
+        q = tuple(x + (y - x) * w for x, y in zip(a, b, strict=True))
+    else:
+        th = math.acos(min(d, 1.0))
+        ka, kb = math.sin((1 - w) * th) / math.sin(th), math.sin(w * th) / math.sin(th)
+        q = tuple(ka * x + kb * y for x, y in zip(a, b, strict=True))
+    n = math.sqrt(sum(c * c for c in q))
+    return tuple(c / n for c in q)
+
+
+def resample_at(samples: list[dict], t: int, max_gap: int) -> tuple[tuple, tuple, int, str]:
+    """Float64 reference for one frame time (docs/takes-jsonl.md "Resample"): (p, q, trk, source).
+
+    `samples` are ordered by cap and deduplicated. Only two consecutive trk 5 samples at most
+    max_gap apart are interpolated; everything else holds the last normal sample.
+    """
+    normal = [i for i, s in enumerate(samples) if s["trk"] == 5]
+    i = bisect.bisect_right([s["cap"] for s in samples], t) - 1
+    if i < 0:
+        s = samples[normal[0]]
+        return s["p"], s["q"], 5, "before_first"
+    a = samples[i]
+    if a["trk"] != 5:
+        held = samples[max((n for n in normal if n < i), default=normal[0])]
+        return held["p"], held["q"], a["trk"], "limited"
+    if a["cap"] == t:
+        return a["p"], a["q"], 5, "exact"
+    if i + 1 == len(samples):
+        return a["p"], a["q"], 5, "held_gap"
+    b = samples[i + 1]
+    if b["trk"] != 5:
+        return a["p"], a["q"], b["trk"], "limited"
+    if b["cap"] - a["cap"] > max_gap:
+        return a["p"], a["q"], 5, "held_gap"
+    w = (t - a["cap"]) / (b["cap"] - a["cap"])
+    return (
+        tuple(x + (y - x) * w for x, y in zip(a["p"], b["p"], strict=True)),
+        slerp_short(a["q"], b["q"], w),
+        5,
+        "interp",
+    )
+
+
+def grid_times(t0: int, num: int, den: int, frame0: int, limit: int) -> list[tuple[int, int]]:
+    """(frame, device ns) on the nominal grid, nearest ns with halves up, for t <= limit."""
+    out, f = [], frame0
+    while (t := t0 + (2 * (f - frame0) * den * NS + num) // (2 * num)) <= limit:
+        out.append((f, t))
+        f += 1
+    return out
+
+
+def note_times(notes: list[tuple[int, int]], theta: int, frame0: int) -> list[tuple[int, int]]:
+    """(frame, device ns) from the frame notes: a frame's first note, a skipped frame interpolated."""
+    first: dict[int, int] = {}
+    for host, f in notes:
+        first.setdefault(f, host)
+    assert frame0 in first
+    out = []
+    for f in range(frame0, max(first) + 1):
+        if f not in first:
+            lo = max(k for k in first if k < f)
+            hi = min(k for k in first if k > f)
+            span = first[hi] - first[lo]
+            first[f] = first[lo] + (2 * span * (f - lo) + (hi - lo)) // (2 * (hi - lo))
+        out.append((f, first[f] + theta))
+    return out
+
+
+def resample_case(samples: list[dict], facts: dict, spec: dict) -> dict:
+    clock, num, den = spec["theta_clock_ns"], spec["fps_num"], spec["fps_den"]
+    theta = facts["theta_hat"] if clock is None else clock
+    t0 = TAKE_START + theta
+    if spec["time_source"] == "notes":
+        times = note_times(facts["notes"], theta, TAKE_FRAME0)
+    else:
+        times = grid_times(t0, num, den, TAKE_FRAME0, t0 + facts["dur_ns"])
+    frames = []
+    for f, t in times:
+        p, q, trk, src = resample_at(samples, t, spec["max_interp_gap_ns"])
+        frames.append(
+            {"f": f, "t_dev_ns": t, "p": [f32(c) for c in p], "q": [f32(c) for c in q], "trk": trk, "source": src}
+        )
+    return {**spec, "frame0": TAKE_FRAME0, "theta_ns": theta, "t0_dev_ns": t0, "frames": frames}
+
+
+def build_take(motion: dict) -> tuple[bytes, dict]:
+    """take/sidecar_v1.jsonl (bytes, '\\n' endings) and the take/resample_v1.json document."""
+    poses = take_poses(motion)
+    text, facts = take_lines(poses)
+    parsed = [json.loads(line) for line in text.split("\n")[:-1]]
+    samples = sorted((x for x in parsed if x["t"] == "pose"), key=lambda x: (x["seg"], x["cap"]))
+    assert len(samples) == len(poses) and len({x["seq"] for x in samples}) == len(poses) - 1  # one duplicate
+    first: dict[int, dict] = {}
+    for x in samples:  # sorted() is stable, so the first arrival of a duplicated (seg, seq) comes first
+        first.setdefault(x["seq"], x)
+    samples = list(first.values())
+    clock = parsed[1]["theta_clock_ns"]
+    base = {
+        "time_source": "grid",
+        "fps_num": 24,
+        "fps_den": 1,
+        "theta_clock_ns": clock,
+        "max_interp_gap_ns": TAKE_MAX_GAP_NS,
+    }
+    specs = [
+        {**base, "name": "grid_24", "note": "24 fps nominal grid, theta from the CLOCK estimate"},
+        {**base, "name": "grid_25", "note": "25 fps nominal grid", "fps_num": 25},
+        {**base, "name": "grid_30000_1001", "note": "29.97 fps nominal grid", "fps_num": 30000, "fps_den": 1001},
+        {**base, "name": "frame_notes_24", "time_source": "notes", "note": "frame 5 shown twice, frame 9 skipped"},
+        {**base, "name": "theta_hat_24", "theta_clock_ns": None, "note": "no CLOCK estimate: theta = max(cap - rx)"},
+        {
+            **base,
+            "name": "gap_500ms_24",
+            "max_interp_gap_ns": 500_000_000,
+            "note": "the 283 ms dropout is interpolated",
+        },
+    ]
+    cases = [resample_case(samples, facts, spec) for spec in specs]
+    kinds = {f["source"] for c in cases for f in c["frames"]}
+    assert kinds == {"exact", "interp", "held_gap", "limited", "before_first"}, kinds
+    doc = {
+        "note": "Capture-time resample of take/sidecar_v1.jsonl (docs/takes-jsonl.md). Float64 reference, "
+        "outputs rounded to binary32; compare p and q to the tolerance as given (the shortest-arc rule "
+        "fixes the sign of q; the input has a pose stored as -q). Poses are ordered by (seg, cap) and "
+        "a duplicated (seg, seq) keeps its first arrival. Frame f is shown at device time t_dev_ns; "
+        "sources: exact, interp, held_gap, limited, before_first. trk is the state that caused a limited hold, else 5.",
+        "input": "take/sidecar_v1.jsonl",
+        "tolerance": 1e-6,
+        "cases": cases,
+    }
+    return text.encode("utf-8"), doc
+
+
 def build_coords() -> dict:
     q_c = qaxis((1, 0, 0), 90)
 
@@ -1876,6 +2215,7 @@ def build_all() -> dict[str, bytes]:
     self_check_spec(messages, video, report)
     pairing, ctx = build_pairing()
     motion, motion_bin = build_motion()
+    sidecar, resample = build_take(motion)
     files = {
         "vcp/messages.json": dumps(messages).encode(),
         "vcp/receive.json": dumps(build_receive()).encode(),
@@ -1889,6 +2229,8 @@ def build_all() -> dict[str, bytes]:
         "rig/rig_cases.json": dumps(build_rig(motion)).encode(),
         "rig/lens_cases.json": dumps(build_lens_cases()).encode(),
         "rig/hold.json": dumps(build_hold(motion)).encode(),
+        "take/sidecar_v1.jsonl": sidecar,
+        "take/resample_v1.json": dumps(resample).encode(),
         "video/fragments.json": dumps(video).encode(),
         "video/reassembly.json": dumps(build_reassembly()).encode(),
         "video/report.json": dumps(report).encode(),
@@ -1907,7 +2249,7 @@ def main():
         stale = [p for p, data in files.items() if not (OUT / p).exists() or (OUT / p).read_bytes() != data]
         extra = [
             str(p.relative_to(OUT))
-            for d in ("vcp", "coords", "motion", "rig", "video")
+            for d in ("vcp", "coords", "motion", "rig", "take", "video")
             for p in (OUT / d).glob("*")
             if str(p.relative_to(OUT)) not in files
         ]
