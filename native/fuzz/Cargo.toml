@@ -44,3 +44,10 @@ path = "fuzz_targets/video_reassembly.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "udp_payload"
+path = "fuzz_targets/udp_payload.rs"
+test = false
+doc = false
+bench = false

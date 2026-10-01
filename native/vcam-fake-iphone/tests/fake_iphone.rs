@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use vcam_net::{
     ControlEvent, ControlServer, HostStatus, MemoryStore, ServerConfig, VideoFrameMeta,
 };
-use vcam_protocol::VideoFragment;
+use vcam_protocol::{AppliedLens, ControlState, RackFocus, TapFocus, VideoFragment};
 
 const MOTION: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -119,6 +119,7 @@ fn pairs_streams_the_script_answers_clock_and_reconnects_without_a_code() {
                     control_ack: 1,
                     error_code: 0,
                     camera_name: Some("Cam".into()),
+                    applied_lens: None,
                 };
                 server.update_status(*session_id, status).unwrap();
             }
@@ -314,6 +315,7 @@ fn thermal_transition_reaches_host_with_new_sequence_and_ack() {
                         control_ack: c.state_seq,
                         error_code: 0,
                         camera_name: Some("Cam".into()),
+                        applied_lens: None,
                     },
                 )
                 .unwrap();
@@ -327,6 +329,120 @@ fn thermal_transition_reaches_host_with_new_sequence_and_ack() {
     );
     assert_eq!(states, [(1, Some(0)), (2, Some(2))]);
     assert!(field(&stdout, "control_ack") >= 2, "{stdout}");
+}
+
+#[test]
+fn lens_controls_reach_the_host_and_the_applied_lens_is_reported() {
+    let server = server();
+    let scratch = Scratch::new("lens");
+    let code = server.enable_pairing().unwrap();
+    let args = [
+        "--rate",
+        "300",
+        "--linger",
+        "1",
+        "--lens",
+        "85",
+        "--focus",
+        "3",
+        "--fstop",
+        "2.8",
+        "--dof",
+        "1",
+        "--tap",
+        "0.25,0.75@100",
+        "--rack",
+        "2,8,B,1200@200",
+    ];
+    let child = spawn(&server, &scratch.state(), Some(&code), &args);
+    // What the host would report after applying the request to a 36 mm, 3:2 camera.
+    let applied = AppliedLens {
+        lens_mm: 85.0,
+        focus_distance_m: 3.0,
+        fstop: 2.8,
+        dof_on: true,
+        sensor_fit: 0,
+        sensor_width_mm: 36.0,
+        render_aspect: 1.5,
+    };
+    let (mut states, mut last) = (Vec::new(), None::<ControlState>);
+    let out = drive(child, || {
+        let (Some(c), Some(session_id)) = (server.latest_control(), server.stats().session_id)
+        else {
+            return;
+        };
+        let c = c.state;
+        let seen = (
+            c.state_seq,
+            c.tap.map(|t| t.seq),
+            c.rack.map(|r| (r.target, r.seq)),
+        );
+        if states.last() != Some(&seen) {
+            states.push(seen);
+        }
+        last = Some(c);
+        let status = HostStatus {
+            applied_pose_seq: 0,
+            control_ack: c.state_seq,
+            error_code: 0,
+            camera_name: Some("Cam".into()),
+            applied_lens: Some(applied),
+        };
+        let _ = server.update_status(session_id, status); // the session may just have ended
+    });
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Absolute lens state from the first message; tap then rack as new states at their frames,
+    // each after a baseline sequence 0 the host has already seen.
+    assert_eq!(
+        states,
+        [
+            (1, Some(0), Some((0, 0))),
+            (2, Some(1), Some((0, 0))),
+            (3, Some(1), Some((2, 1)))
+        ]
+    );
+    // The tap handed the focus to the host, so the later states leave it out (vcp.md §6.2).
+    let last = last.unwrap();
+    assert_eq!(
+        (last.lens_mm, last.focus_distance_m, last.fstop, last.dof_on),
+        (Some(85.0), None, Some(2.8), Some(true))
+    );
+    assert_eq!(
+        last.tap,
+        Some(TapFocus {
+            u: 0.25,
+            v: 0.75,
+            seq: 1
+        })
+    );
+    let rack = RackFocus {
+        a_m: 2.0,
+        b_m: 8.0,
+        target: 2,
+        duration_ms: 1200,
+        seq: 1,
+    };
+    assert_eq!(last.rack, Some(rack));
+    assert!(field(&stdout, "control_ack") >= 3, "{stdout}");
+    let (fov, equivalent) = applied.horizontal_fov_and_equivalent().unwrap();
+    let want = format!(
+        " applied_lens=1 lens_mm=85 focus_m=3 fstop=2.8 dof=1 sensor_width_mm=36 sensor_fit=0 \
+         aspect=1.5 hfov_deg={fov:.2} equiv_mm={equivalent:.2} camera=Cam"
+    );
+    assert!(stdout.contains(&want), "{stdout}\nwant {want}");
+    assert_eq!(format!("{fov:.2} {equivalent:.2}"), "23.91 85.01");
+
+    let out = drive(
+        spawn(&server, &scratch.state(), None, &["--rack", "1,2,C,0"]),
+        || {},
+    );
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--rack TARGET must be A or B"));
 }
 
 #[test]

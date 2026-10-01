@@ -5,9 +5,9 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use vcam_protocol::{
-    CLOCK_OUTSTANDING, CLOCK_REPLY_TIMEOUT_NS, CLOCK_WINDOW, Clock, ClockEstimator, ClockReject,
-    ClockSample, ControlState, DropReason, Endpoint, EpochWatcher, Message, Pose, Role, SealError,
-    SeqFilter, Status,
+    AppliedLens, CLOCK_OUTSTANDING, CLOCK_REPLY_TIMEOUT_NS, CLOCK_WINDOW, Clock, ClockEstimator,
+    ClockReject, ClockSample, ControlState, DropReason, Endpoint, EpochWatcher, Message, Pose,
+    RackFocus, Role, SealError, SeqFilter, Status, TapFocus,
 };
 
 fn load(name: &str) -> Value {
@@ -65,6 +65,50 @@ fn uint(v: &Value) -> u64 {
     v.as_u64().unwrap()
 }
 
+fn float(v: &Value) -> f32 {
+    v.as_f64().unwrap() as f32
+}
+
+/// The T2 lens fields (bits 4–9) a `CONTROL_STATE` vector expects; the rest is checked by the
+/// caller.
+fn check_control_lens(c: &ControlState, f: &Value, name: &str) {
+    let bits = uint(&f["fields"]);
+    let has = |bit: u32| bits & (1 << bit) != 0;
+    let u16_of = |key: &str| u16::try_from(uint(&f[key])).unwrap();
+    let want = ControlState {
+        lens_mm: has(4).then(|| float(&f["lens_mm"])),
+        focus_distance_m: has(5).then(|| float(&f["focus_distance_m"])),
+        fstop: has(6).then(|| float(&f["fstop"])),
+        dof_on: has(7).then(|| uint(&f["dof_on"]) == 1),
+        tap: has(8).then(|| TapFocus {
+            u: float(&f["tap_u"]),
+            v: float(&f["tap_v"]),
+            seq: u16_of("tap_seq"),
+        }),
+        rack: has(9).then(|| RackFocus {
+            a_m: float(&f["rack_a_m"]),
+            b_m: float(&f["rack_b_m"]),
+            target: u8::try_from(uint(&f["rack_target"])).unwrap(),
+            duration_ms: u16_of("rack_duration_ms"),
+            seq: u16_of("rack_seq"),
+        }),
+        ..*c
+    };
+    assert_eq!(*c, want, "{name}");
+}
+
+fn applied_lens(v: &Value) -> AppliedLens {
+    AppliedLens {
+        lens_mm: float(&v["lens_mm"]),
+        focus_distance_m: float(&v["focus_distance_m"]),
+        fstop: float(&v["fstop"]),
+        dof_on: uint(&v["dof_on"]) == 1,
+        sensor_fit: u8::try_from(uint(&v["sensor_fit"])).unwrap(),
+        sensor_width_mm: float(&v["sensor_width_mm"]),
+        render_aspect: float(&v["render_aspect"]),
+    }
+}
+
 fn check_fields(msg: &Message, f: &Value, name: &str) {
     match msg {
         Message::Pose(p) => {
@@ -92,6 +136,7 @@ fn check_fields(msg: &Message, f: &Value, name: &str) {
             let want_thermal =
                 (bits & 8 != 0).then(|| u8::try_from(uint(&f["thermal_state"])).unwrap());
             assert_eq!(c.thermal_state, want_thermal, "{name}");
+            check_control_lens(c, f, name);
         }
         Message::Clock(c) => {
             let (t1, t2, t3) = (uint(&f["t1"]), uint(&f["t2"]), uint(&f["t3"]));
@@ -113,6 +158,8 @@ fn check_fields(msg: &Message, f: &Value, name: &str) {
             assert_eq!(u64::from(s.error_code), uint(&f["error_code"]), "{name}");
             assert_eq!(u64::from(s.flags), uint(&f["flags"]), "{name}");
             assert_eq!(s.camera_name, f["camera_name"].as_str().unwrap(), "{name}");
+            let want = f.get("applied_lens").map(applied_lens);
+            assert_eq!(s.applied_lens, want, "{name}");
         }
         Message::VideoFragment(_) | Message::VideoReport(_) => {
             panic!("{name}: video vectors are in testdata/video/")
@@ -127,7 +174,7 @@ fn udp_messages_decode_and_reencode_byte_exact() {
     let mut checked = 0;
     for case in cases["cases"].as_array().unwrap() {
         if case["channel"] != "udp" {
-            continue; // TCP messages are task 1.1.3b
+            continue;
         }
         let name = case["name"].as_str().unwrap();
         let bytes = hex(case["hex"].as_str().unwrap());
@@ -138,10 +185,25 @@ fn udp_messages_decode_and_reencode_byte_exact() {
         check_fields(&msg, &case["fields"], name);
         let mut out = Vec::new();
         tx.seal(&msg, &mut out).unwrap();
-        assert_eq!(out, bytes, "{name}: re-encoding differs");
+        let group = match name {
+            "control_state_lens_tap" => Some(36),
+            "control_state_lens_rack" => Some(48),
+            _ => None,
+        };
+        if let Some(start) = group {
+            // These vectors carry nonzero bytes behind clear bits, which a receiver ignores
+            // (§6.2). The encoder writes absent groups as zero; the rest is byte-exact.
+            let (payload, want) = (&out[12..out.len() - 8], &bytes[12..bytes.len() - 8]);
+            assert_eq!(payload.len(), want.len(), "{name}: length differs");
+            assert_eq!(payload[..20], want[..20], "{name}: base differs");
+            assert!(payload[20..start].iter().all(|&b| b == 0), "{name}");
+            assert_eq!(payload[start..], want[start..], "{name}: group differs");
+        } else {
+            assert_eq!(out, bytes, "{name}: re-encoding differs");
+        }
         checked += 1;
     }
-    assert_eq!(checked, 10);
+    assert_eq!(checked, 15);
 }
 
 #[test]
@@ -177,7 +239,7 @@ fn receive_rules_match_vectors() {
     let (host, device) = example_endpoints();
     let vectors = load("receive.json");
     let cases = vectors["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 29);
+    assert_eq!(cases.len(), 54);
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let (rx, _) = pair(case["direction"].as_str().unwrap(), &host, &device);
@@ -212,6 +274,17 @@ fn receive_rules_match_vectors() {
                 assert_eq!(c.lock_flags.is_some(), bits & 2 != 0, "{name}");
                 assert_eq!(c.origin_epoch.is_some(), bits & 4 != 0, "{name}");
                 assert_eq!(c.thermal_state.is_some(), bits & 8 != 0, "{name}");
+                let present = [
+                    c.lens_mm.is_some(),
+                    c.focus_distance_m.is_some(),
+                    c.fstop.is_some(),
+                    c.dof_on.is_some(),
+                    c.tap.is_some(),
+                    c.rack.is_some(),
+                ];
+                for (bit, present) in (4..).zip(present) {
+                    assert_eq!(present, bits & (1 << bit) != 0, "{name}: bit {bit}");
+                }
             }
             other => panic!("{name}: unexpected {other:?}"),
         }
@@ -253,6 +326,63 @@ fn drop_reasons_follow_rule_order() {
         reason("control_thermal_short"),
         DropReason::Payload(vcam_protocol::PayloadError::TooShort)
     );
+    // T2 lens: a present value out of range, or a present group cut short (§6.2, §6.4).
+    let lens_rejects = vectors["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["feature"] == "lens" && c["accept"] == false);
+    let mut counted = 0;
+    for case in lens_rejects {
+        let name = case["name"].as_str().unwrap();
+        let want = if name.ends_with("_short") {
+            vcam_protocol::PayloadError::TooShort
+        } else {
+            vcam_protocol::PayloadError::LensRange
+        };
+        assert_eq!(reason(name), DropReason::Payload(want), "{name}");
+        counted += 1;
+    }
+    assert_eq!(counted, 24);
+}
+
+/// Horizontal FOV and 35 mm equivalent from the applied lens (vcp.md §6.4) match the preset
+/// cases and the `STATUS` vector's derived values.
+#[test]
+fn applied_lens_fov_and_equivalent_match_vectors() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/rig/lens_cases.json");
+    let lens_cases: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let status = load("messages.json")["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "status_applied_lens")
+        .unwrap()["fields"]["applied_lens"]
+        .clone();
+    let mut cases: Vec<Value> = lens_cases["cases"].as_array().unwrap().clone();
+    cases.push(status);
+    let float = |v: &Value, key: &str| v[key].as_f64().unwrap();
+    for case in &cases {
+        let lens = AppliedLens {
+            lens_mm: float(case, "lens_mm") as f32,
+            focus_distance_m: 4.0,
+            fstop: 2.8,
+            dof_on: false,
+            sensor_fit: u8::try_from(uint(&case["sensor_fit"])).unwrap(),
+            sensor_width_mm: float(case, "sensor_width_mm") as f32,
+            render_aspect: float(case, "render_aspect") as f32,
+        };
+        let (fov, equivalent) = lens.horizontal_fov_and_equivalent().unwrap();
+        assert!(
+            (fov - float(case, "horizontal_fov_deg")).abs() < 1e-9,
+            "{case}: {fov}"
+        );
+        assert!(
+            (equivalent - float(case, "equivalent_35mm_focal_mm")).abs() < 1e-9,
+            "{case}: {equivalent}"
+        );
+    }
+    assert_eq!(cases.len(), 5);
 }
 
 #[test]
@@ -350,6 +480,7 @@ fn seal_enforces_direction_and_limits() {
         error_code: 0,
         flags: 0,
         camera_name: "x".repeat(64),
+        applied_lens: None,
     });
     let mut out = vec![0xAA];
     assert_eq!(
@@ -380,6 +511,7 @@ fn seal_enforces_direction_and_limits() {
         lock_flags: Some(1),
         origin_epoch: None,
         thermal_state: None,
+        ..ControlState::default()
     });
     device.seal(&control, &mut out).unwrap();
     assert_eq!(
@@ -393,6 +525,7 @@ fn seal_enforces_direction_and_limits() {
         lock_flags: None,
         origin_epoch: None,
         thermal_state: Some(4),
+        ..ControlState::default()
     });
     assert_eq!(
         device.seal(&invalid, &mut out),

@@ -40,6 +40,11 @@ final class TrackingSessionController {
     private(set) var sendLeg: SendLegSummary?
     /// Stream rate and link quality, shown only during a paired session.
     private(set) var stream: StreamStats?
+    /// The Blender camera's lens as the host last reported it (vcp.md §6.4), shown instead of the
+    /// phone's own request; nil without a session or before the host sends it.
+    private(set) var appliedLens: VCPAppliedLens?
+    /// What the lens panel shows and the next rack's duration (FR-CTL-001..003).
+    private(set) var lensPanel = LensPanelModel()
     /// The device's thermal state, kept current by the injected provider (FR-UX-004).
     private(set) var thermal = ThermalStatus(state: ProcessInfo.processInfo.thermalState)
 
@@ -369,6 +374,7 @@ final class TrackingSessionController {
             poseRate = nil
             sendLeg = nil
             stream = nil
+            appliedLens = nil
             lastReconnectSeconds = nil
             runHasVideo = false
             isTracking = true
@@ -481,6 +487,7 @@ final class TrackingSessionController {
         liveSession = nil
         sessionEndpoint = nil
         stream = nil
+        appliedLens = nil
         isTracking = false
         stallWatch.stop()
         sceneUnderstanding = nil
@@ -489,6 +496,46 @@ final class TrackingSessionController {
             sessionStatus = reason
         } else if lastError == nil {
             sessionStatus = "Stopped"
+        }
+    }
+
+    // MARK: - Lens (FR-CTL-001..003)
+
+    /// The lens as the panel shows it: the camera's, or the operator's change still on its way.
+    var shownLens: LensValues {
+        lensPanel.shown(controls.lens, applied: appliedLens)
+    }
+
+    /// Viewfinder taps focus and pinches zoom only on a frame Blender streams in a live session.
+    var lensGesturesEnabled: Bool {
+        isTracking && sessionEndpoint != nil && videoFrameSize != nil
+    }
+
+    /// Where a new pinch starts, or nil while pinches do nothing (no stream, or the camera's lens
+    /// not known yet in this session).
+    var pinchBaseMM: Float? {
+        lensGesturesEnabled ? lensPanel.pinchBase(controls.lens, applied: appliedLens) : nil
+    }
+
+    /// Carries out a lens panel or viewfinder request; the pipeline sends the new state.
+    func performLens(_ action: LensAction) {
+        var panel = lensPanel
+        var next = controls
+        let accepted = panel.perform(action, &next.lens, applied: appliedLens)
+        lensPanel = panel
+        controls = next
+        guard accepted else { return }
+        switch action {
+        case let .tap(u, v):
+            Log.lens.info(
+                "Tap focus u=\(u, format: .fixed(precision: 3), privacy: .public) v=\(v, format: .fixed(precision: 3), privacy: .public)"
+            )
+        case .rack:
+            let target = next.lens.rack.target == VCPRackFocus.targetA ? "A" : "B"
+            Log.lens.info(
+                "Rack to \(target, privacy: .public) over \(next.lens.rack.durationMS, privacy: .public) ms")
+        default:
+            break
         }
     }
 
@@ -540,6 +587,18 @@ final class TrackingSessionController {
         stream = snapshot.stream
         controlSeq = snapshot.controlSeq
         controlAck = snapshot.controlAck
+        if snapshot.appliedLens != appliedLens {
+            appliedLens = snapshot.appliedLens
+            if let applied = snapshot.appliedLens {
+                lensPanel.statusChanged(controls.lens, applied: applied)
+            }
+        }
+        if let applied = snapshot.appliedLens {
+            var adopted = controls
+            if adopted.lens.adopt(applied) {
+                controls = adopted
+            }
+        }
         if let error = snapshot.sendError {
             lastError = error
             sessionStatus = "Send error"

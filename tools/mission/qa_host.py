@@ -25,8 +25,9 @@ Files (under $MISSION_DIR, default .mission):
   qa/host.json    written at start and whenever it changes: state (running/stopped/failed), port,
                   bind, pairing_code (current code or null), pid, blender_version, blend,
                   scene (qa/factory/blend), log, started_at.
-  qa/state.json   rewritten at ~5 Hz: session and device, camera and VCam_Origin transforms,
-                  controls, latency, video stats, stream and render settings, the N-panel's labels
+  qa/state.json   rewritten at ~5 Hz: poll timings, session and device, camera and VCam_Origin
+                  transforms, controls, tap/rack focus, latency, video stats, stream and render
+                  settings, the N-panel's labels
                   and buttons (drawn by the real panel), and the errors the loop captured.
   qa/cmd/*.json   command queue: one JSON object per file, run in name order on the main thread.
                   The result goes to qa/cmd/<name>.result.json and the command file is removed.
@@ -39,9 +40,13 @@ Commands ({"cmd": NAME, ...}); relative paths are relative to the repository roo
   pair                                  new pairing code (also in host.json)
   cancel_pair                           withdraw the pairing code
   set        prop, value                set a scene `vcam_props` property (target_camera by object name)
+  set_render [resolution_x, resolution_y, pixel_aspect_x, pixel_aspect_y]
+                                        set the scene's render size / pixel aspect (the stream
+                                        follows its aspect, LNS-003)
   set_origin / clear_origin             the N-panel's Set/Clear Origin operators
   render_png [path, resolution, shading] draw the driven camera like the stream and save a PNG
-                                        (default .mission/qa/render.png, the stream's size and shading)
+                                        (default .mission/qa/render.png, the stream's size at the
+                                        render aspect and shading)
   save_blend path                       save a copy of the open file
   open_blend path                       open a .blend (the session keeps running)
   eval       code                       QA escape hatch: exec Python with bpy on the main thread;
@@ -79,6 +84,21 @@ STATE_FILE = os.path.join(QA_DIR, "state.json")
 STATE_INTERVAL = 0.2
 CMD_INTERVAL = 0.05
 MAX_ERRORS = 20
+# vcam_native latest_control() keys for the T2 lens fields (vcp.md §6.2 bits 4-9).
+LENS_CONTROL_KEYS = (
+    "lens_mm",
+    "focus_distance_m",
+    "fstop",
+    "dof_on",
+    "tap_u",
+    "tap_v",
+    "tap_seq",
+    "rack_a_m",
+    "rack_b_m",
+    "rack_target",
+    "rack_duration_ms",
+    "rack_seq",
+)
 
 
 def parse_args():
@@ -365,6 +385,9 @@ class Host:
         self.started = time.monotonic()
         self.errors = deque(maxlen=MAX_ERRORS)
         self.ticks = 0
+        # Duration of the add-on's main-thread poll: the last one, and the longest since the
+        # previous state.json write.
+        self.poll_ms_last = self.poll_ms_max = 0.0
         self.host_info: dict = {}
         self.pairing_code = None
         self.seen_errors = (None, None)
@@ -462,6 +485,8 @@ class Host:
                 session._poll()  # the add-on's timer body: events, pose apply, stream render
             except Exception as e:  # noqa: BLE001 - keep hosting; the error is in state.json
                 self.error("poll", e)
+            poll_ms = (time.monotonic() - tick) * 1e3
+            self.poll_ms_last, self.poll_ms_max = poll_ms, max(self.poll_ms_max, poll_ms)
             self.ticks += 1
             self._note_session_errors()
             if tick >= next_cmd:
@@ -511,6 +536,7 @@ class Host:
             write_json(STATE_FILE, self.snapshot())
         except Exception as e:  # noqa: BLE001
             self.error("state", e)
+        self.poll_ms_max = 0.0
 
     def snapshot(self) -> dict:
         s, apply, status = self.session, self.apply, self.status
@@ -534,11 +560,13 @@ class Host:
             return data
 
         uptime = time.monotonic() - self.started
+        rack = applier.rack
         return {
             "time": now_iso(),
             "uptime_s": round(uptime, 3),
             "ticks": self.ticks,
             "poll_hz": round(self.ticks / uptime, 1) if uptime > 0 else None,
+            "poll_ms": {"last": round(self.poll_ms_last, 3), "max_since_last_state": round(self.poll_ms_max, 3)},
             "blend": self.rel(bpy.data.filepath),
             "session": {
                 "running": live is not None,
@@ -573,6 +601,12 @@ class Host:
                 ],
                 "lens": camera.data.lens,
                 "sensor_width": camera.data.sensor_width,
+                "sensor_fit": camera.data.sensor_fit,
+                "dof_use": camera.data.dof.use_dof,
+                "focus_distance": camera.data.dof.focus_distance,
+                "fstop": camera.data.dof.aperture_fstop,
+                # The applied-lens STATUS arguments (sensor_fit as the wire code, AUTO resolved).
+                "status_lens": apply.applied_lens(scene, camera),
             },
             "camera_warning": warning,
             "origin": None
@@ -590,6 +624,21 @@ class Host:
                 "locks_label": status.locks_label(controls.lock_flags),
                 "origin_epoch": controls.origin_epoch,
                 "thermal_state": control["thermal_state"] if control is not None else None,
+                # The T2 lens keys of the newest native CONTROL_STATE (None when absent).
+                **{key: control.get(key) if control is not None else None for key in LENS_CONTROL_KEYS},
+            },
+            # FR-CTL-002 on the host: the last tap's (distance, object) (None, None after a miss)
+            # and the running rack.
+            "focus": {
+                "last_tap": applier.last_tap,
+                "rack": None
+                if rack is None
+                else {
+                    "target": "AB"[rack.target - 1],
+                    "start_m": rack.start_m,
+                    "end_m": rack.end_m,
+                    "duration_s": rack.duration_s,
+                },
             },
             "latency": {
                 "session_id": log.session_id,
@@ -617,6 +666,9 @@ class Host:
                 "resolution_x": scene.render.resolution_x,
                 "resolution_y": scene.render.resolution_y,
                 "resolution_percentage": scene.render.resolution_percentage,
+                "pixel_aspect_x": scene.render.pixel_aspect_x,
+                "pixel_aspect_y": scene.render.pixel_aspect_y,
+                "aspect": self.apply.scene_aspect(scene),
                 "fps": scene.render.fps,
                 "frame_current": scene.frame_current,
             },
@@ -729,6 +781,21 @@ class Host:
         self.log.info("set %s=%r", name, self.prop_value(props, name))
         return {"prop": name, "value": self.prop_value(props, name)}
 
+    RENDER_PROPS = ("resolution_x", "resolution_y", "pixel_aspect_x", "pixel_aspect_y")
+
+    def cmd_set_render(self, c):
+        """Output properties a user sets in Blender: render size and pixel aspect (LNS-003)."""
+        render = bpy.context.scene.render
+        given = {name: c[name] for name in self.RENDER_PROPS if name in c}
+        if not given:
+            raise ValueError(f'"set_render" needs one of {", ".join(self.RENDER_PROPS)}')
+        for name, value in given.items():
+            setattr(render, name, value)
+        result = {name: getattr(render, name) for name in self.RENDER_PROPS}
+        result["aspect"] = self.apply.scene_aspect(bpy.context.scene)
+        self.log.info("set_render %s", result)
+        return result
+
     def _operator(self, op, why: str):
         if not op.poll():
             raise RuntimeError(f"{op.idname()} is unavailable: {why}")
@@ -748,7 +815,9 @@ class Host:
         camera, warning = self.apply.camera_status(scene)
         if camera is None:
             raise RuntimeError(warning)
-        width, height = self.render.STREAM_RESOLUTIONS[c.get("resolution") or props.stream_resolution]
+        width, height = self.render.adapted_resolution(
+            c.get("resolution") or props.stream_resolution, 0, self.apply.scene_aspect(scene)
+        )
         shading = c.get("shading") or props.stream_shading
         path = resolve(c.get("path") or os.path.join(QA_DIR, "render.png"))
         frames = []

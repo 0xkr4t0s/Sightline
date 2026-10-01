@@ -20,7 +20,11 @@
 # pairing_code), installs the latest build, restarts the app, and streams its unified log
 # (subsystem kr8t0s.Sightline) into .mission/logs/qa-ios.log. `uitest` passes the same host and
 # code to the UI tests (TEST_RUNNER_SIGHTLINE_QA_HOST/CODE; SIGHTLINE_QA_HOST/CODE override them),
-# keeps the result bundle in .mission/xcresult/uitest and copies the screenshots it attached into
+# and, while the harness host runs, its .mission/qa directory (TEST_RUNNER_SIGHTLINE_QA_DIR), so
+# the tests can read state.json and queue host commands (simulator processes can read the Mac's
+# files). SIGHTLINE_QA_RESTART=1 enables the test that stops the host and waits for someone to
+# start it again (see SightlineUITests.testLensStateSurvivesAHostRestart). It keeps the result
+# bundle in .mission/xcresult/uitest and copies the screenshots it attached into
 # .mission/qa/uitest-attachments/. Set QA_IOS_SIMULATOR to use another simulator by name.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
@@ -211,6 +215,8 @@ move_aside() {
 
 cmd_uitest() {
   local host="${SIGHTLINE_QA_HOST-$(harness_host)}" code="${SIGHTLINE_QA_CODE-$(harness_code)}"
+  local qa_dir=""
+  [ -z "$(harness_host)" ] || qa_dir="${QA_DIR}"
   local args=("$@")
   [ ${#args[@]} -gt 0 ] || args=(-only-testing:SightlineIOSUITests)
   mkdir -p "$(dirname "${UITEST_BUNDLE}")"
@@ -219,6 +225,7 @@ cmd_uitest() {
   local status=0
   TEST_RUNNER_SIGHTLINE_QA_HOST="${host}" TEST_RUNNER_SIGHTLINE_QA_CODE="${code}" \
     TEST_RUNNER_SIGHTLINE_QA_MOTION="${SIGHTLINE_QA_MOTION:-orbit}" \
+    TEST_RUNNER_SIGHTLINE_QA_DIR="${qa_dir}" TEST_RUNNER_SIGHTLINE_QA_RESTART="${SIGHTLINE_QA_RESTART:-}" \
     xcodebuild test -project "${PROJECT}" -scheme SightlineIOS \
     -destination "platform=iOS Simulator,id=$(udid)" -derivedDataPath "${DERIVED}" \
     -resultBundlePath "${UITEST_BUNDLE}" "${args[@]}" > "${UITEST_LOG}" 2>&1 || status=$?

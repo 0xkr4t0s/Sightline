@@ -6,8 +6,18 @@ from __future__ import annotations
 import bpy
 
 from ..core import session
+from ..core.apply import apply_sensor_preset
+from ..core.lens import SENSOR_PRESETS, SENSOR_WIDTH_MM
 from ..core.render import DEFAULT_BUDGET_MS, STREAM_FPS_CAPS, STREAM_RESOLUTIONS
 from ..core.session import DEFAULT_PORT
+
+
+def _preset_description(key: str, width: float | None) -> str:
+    if key == "CAMERA":
+        return "Keep the camera's own sensor size and fit"
+    if width is None:
+        return "Set the Custom Sensor Width with horizontal fit"
+    return f"{width:g} mm wide sensor with horizontal fit"
 
 
 def _smoothing_changed(self, _context):
@@ -16,6 +26,10 @@ def _smoothing_changed(self, _context):
 
 def _hold_changed(_self, _context):
     session.applier().reapply()  # show the degraded or the held pose at once
+
+
+def _sensor_changed(self, _context):
+    apply_sensor_preset(self.id_data)  # the scene that owns these settings
 
 
 class VCamProperties(bpy.types.PropertyGroup):
@@ -38,6 +52,23 @@ class VCamProperties(bpy.types.PropertyGroup):
         description="Camera object to drive (defaults to the scene camera)",
         type=bpy.types.Object,
         poll=lambda self, obj: obj.type == 'CAMERA',
+        update=_sensor_changed,
+    )
+    sensor_preset: bpy.props.EnumProperty(
+        name="Sensor",
+        description="Sensor size of the VCam camera; presets set its sensor width and horizontal fit",
+        items=[(key, label, _preset_description(key, width)) for key, (label, width) in SENSOR_PRESETS.items()],
+        default='CAMERA',
+        update=_sensor_changed,
+    )
+    sensor_custom_width: bpy.props.FloatProperty(
+        name="Custom Sensor Width (mm)",
+        description="Sensor width for the Custom sensor preset",
+        default=36.0,
+        min=SENSOR_WIDTH_MM[0],
+        max=SENSOR_WIDTH_MM[1],
+        precision=2,
+        update=_sensor_changed,
     )
     smoothing: bpy.props.BoolProperty(
         name="Smoothing",
@@ -60,8 +91,11 @@ class VCamProperties(bpy.types.PropertyGroup):
     )
     stream_resolution: bpy.props.EnumProperty(
         name="Stream Resolution",
-        description="Offscreen viewfinder resolution",
-        items=[(key, f"{w} × {h}", f"Stream at {w} × {h}") for key, (w, h) in STREAM_RESOLUTIONS.items()],
+        description="Size box for the viewfinder stream; the frame has the scene's render aspect",
+        items=[
+            (key, f"{w} × {h}", f"Stream within {w} × {h} at the render aspect")
+            for key, (w, h) in STREAM_RESOLUTIONS.items()
+        ],
         default='540p',
     )
     stream_fps: bpy.props.EnumProperty(

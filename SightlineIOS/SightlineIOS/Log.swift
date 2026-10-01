@@ -15,6 +15,8 @@ nonisolated enum Log {
     static let tracking = Logger(subsystem: subsystem, category: "tracking")
     /// Viewfinder frames and stalls (FR-VF-001/005).
     static let video = Logger(subsystem: subsystem, category: "video")
+    /// Tap-to-focus, focus marks and racks the operator asks for (FR-CTL-002).
+    static let lens = Logger(subsystem: subsystem, category: "lens")
     /// Simulator QA mode (launch arguments), compiled only into simulator debug builds.
     static let qa = Logger(subsystem: subsystem, category: "qa")
 }

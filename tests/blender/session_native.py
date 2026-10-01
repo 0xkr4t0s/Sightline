@@ -80,6 +80,21 @@ with tempfile.TemporaryDirectory() as config_dir:
     s.disable_pairing()
     assert s.pairing_code() is None
     raises(ValueError, s.update_status, 1, 0, 0, 0, "x" * 64)  # camera name over 63 bytes
+    # Applied lens (task 2.4, vcp.md §6.4): all seven keyword arguments or none, each in range.
+    lens = {
+        "lens_mm": 50.0,
+        "focus_distance_m": 4.0,
+        "fstop": 2.8,
+        "dof_on": True,
+        "sensor_width_mm": 36.0,
+        "sensor_fit": 0,
+        "render_aspect": 1.5,
+    }
+    raises(ValueError, s.update_status, 1, 0, 0, 0, "Camera", lens_mm=50.0)
+    raises(ValueError, s.update_status, 1, 0, 0, 0, "Camera", **{**lens, "fstop": 0.0})
+    raises(ValueError, s.update_status, 1, 0, 0, 0, "Camera", **{**lens, "sensor_fit": 3})
+    raises(OSError, s.update_status, 1, 0, 0, 0, "Camera", **lens)  # valid, but no session
+    raises(TypeError, s.update_status, 1, 0, 0, 0, "Camera", 50.0)  # lens arguments are keyword-only
 
     # FR-BL-006: smoothing is optional, off by default, validated, and can be turned off again.
     assert s.smoothing() is None

@@ -164,6 +164,42 @@ try:
     video = live.video_stats()
     assert video["sent"] >= 4 and video["send_failed"] == 0, video
 
+    # LNS-003: the frame is the largest even-sided picture of the render aspect (pixel aspect
+    # included) inside the size box, and a render size change reaches the device on the running
+    # stream.
+    render = scene.render
+    scene.vcam_props.stream_resolution = '540p'
+    aspect_sizes = []
+    for resolution_x, resolution_y, pixel_y, expected_size in (
+        (2048, 858, 1.0, (960, 402)),
+        (1080, 1920, 1.0, (304, 540)),
+        (1920, 1080, 2.0, (480, 540)),
+        (1920, 1080, 1.0, (960, 540)),
+    ):
+        stream = session._stream
+        take(stream)
+        sent_before = live.video_stats()["sent"]
+        render.resolution_x, render.resolution_y, render.pixel_aspect_y = resolution_x, resolution_y, pixel_y
+        submitted = 0
+        deadline = time.monotonic() + 10
+        while True:
+            assert time.monotonic() < deadline, (expected_size, live.video_stats()["last_sent"])
+            session._poll()
+            assert session.state.stream_error is None, session.state.stream_error
+            frame = take(stream)
+            if frame is not None:
+                # The previous shape's pending frame was dropped, so every submit has the new one.
+                assert frame["shape"] == (expected_size[1], expected_size[0], 4), (expected_size, frame["shape"])
+                submitted += 1
+            last = live.video_stats()["last_sent"] or {}
+            if submitted and (last.get("width"), last.get("height")) == expected_size:
+                break
+            time.sleep(0.003)
+        assert session._stream is stream, "a render size change restarted the stream"
+        assert (stream.renderer.width, stream.renderer.height) == expected_size
+        assert live.video_stats()["sent"] > sent_before, "the video stream restarted"
+        aspect_sizes.append(f"{expected_size[0]}x{expected_size[1]}")
+
     scene.camera = None
     session._poll()
     assert session._stream is None, "deleted camera kept its pending GPU frame"
@@ -235,6 +271,20 @@ try:
     labels = status.video_labels(live.video_stats(), '540p')
     assert "Adaptive: lowered to q50 640×360" in labels, labels
     assert "Last change: q50 960×540 → q50 640×360 (M2P 150 ms)" in labels, labels
+    # LNS-003: at 2.39:1 the adapter's step is the next box down at that aspect.
+    render.resolution_x, render.resolution_y = 2048, 858
+
+    def last_size():
+        last = live.video_stats()["last_sent"] or {}
+        return last.get("width"), last.get("height")
+
+    poll_until("lowered frame at 2.39:1", lambda: last_size() == (640, 268))
+    assert session._stream is stream and (stream.renderer.width, stream.renderer.height) == (640, 268)
+    assert adapt()["resolution_drop"] == 1
+    labels = status.video_labels(live.video_stats(), '540p', 2048 / 858)
+    assert "Adaptive: lowered to q50 640×268" in labels, labels
+    render.resolution_x, render.resolution_y = 1920, 1080
+    poll_until("lowered frame back at 16:9", lambda: last_size() == (640, 360))
     # The user picks the smallest size: no step below it, so the drop is cut back at once and
     # the stream keeps running at 640×360.
     scene.vcam_props.stream_resolution = '360p'
@@ -271,5 +321,6 @@ print(
     f"sizes=720p/360p/1080p saved=true budget_ms=2 stopped=true "
     f"video_sent={video['sent']} video_skipped={video['encoded_skipped']} "
     f"video_1080p_jpeg={video['last_sent']['jpeg_bytes']} video_restarted_with_camera=true "
-    f"adapt_sizes=960x540>640x360,cap@360p,1920x1080>1280x720 adapt_changes={changes + 1}"
+    f"adapt_sizes=960x540>640x360,cap@360p,1920x1080>1280x720 adapt_changes={changes + 1} "
+    f"aspect_sizes@540p={','.join(aspect_sizes)} aspect_adapt=960x402>640x268"
 )

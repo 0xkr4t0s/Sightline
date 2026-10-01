@@ -150,10 +150,26 @@ nonisolated struct ThermalStatus: Equatable, Sendable {
 }
 
 /// FR-VF-004: display only facts from the decoded frame that was handed to Metal, not the
-/// requested stream setting. Lens and latency stay unknown until their later milestones.
+/// requested stream setting, and the lens Blender reports, not the one the phone asked for.
+/// Latency stays unknown until its later milestone.
 nonisolated enum HUDFields {
-    static let lens = "Focal — · Focus — · f/—"
+    static let noLens = "Focal — · Focus — · f/— · FOV —"
     static let m2p = "—"
+
+    /// The applied lens (vcp.md §6.4) with the horizontal FOV and 35 mm-equivalent focal length
+    /// (LNS-002), which are unknown unless Blender fits the sensor horizontally. C formatting, so
+    /// the decimal point doesn't follow the locale, as in the N-panel.
+    static func lens(_ applied: VCPAppliedLens?) -> String {
+        guard let applied else { return noLens }
+        let focal = String(format: "Focal %.4g mm", Double(applied.lensMM))
+        let focus = String(format: "Focus %.2f m", Double(applied.focusDistanceM))
+        let fstop = String(format: "f/%.3g", Double(applied.fstop))
+        let derived =
+            applied.horizontalFOVAndEquivalent.map {
+                String(format: "FOV %.1f° · Equiv %.0f mm", $0.fovDegrees, $0.equivalentMM)
+            } ?? "FOV —"
+        return [focal, focus, fstop, derived].joined(separator: " · ")
+    }
     static let recording = "Recording: not available (T3)"
 
     static func level(quality: UInt8, size: CGSize) -> String {
@@ -210,15 +226,24 @@ nonisolated struct ChromeVisibility: Hashable, Sendable {
 
 /// Where the status screen puts things (FR-UX-003): a status strip along the top edge and the
 /// control rail along the trailing edge, under the right thumb in landscape. The data panel's
-/// whole container fits below `centre`, the middle half of the displayed picture.
+/// whole container fits below `centre`, the middle half of the displayed picture, with
+/// `centreMargin` to spare.
 nonisolated struct HUDLayout: Equatable, Sendable {
     static let statusHeight: CGFloat = 44
     static let railWidth: CGFloat = 96
+    static let panelMaxHeight: CGFloat = 100
+    /// Gap between the data panel and `centre`, so pixel rounding can't push the panel into it.
+    static let centreMargin: CGFloat = 4
     /// Largest share of the frame's height (strip) or width (rail) either may take.
     static let maxShare: CGFloat = 0.2
+    /// The lens panel takes the rail's place and whatever else is free right of the centre, within
+    /// these widths. Below the minimum (a small split-view window) it may cover the centre.
+    static let lensPanelMinWidth: CGFloat = 140
+    static let lensPanelMaxWidth: CGFloat = 240
 
     let statusStrip: CGRect
     let controlRail: CGRect
+    let lensPanel: CGRect
     let dataPanel: CGRect
     let centre: CGRect
 
@@ -236,7 +261,11 @@ nonisolated struct HUDLayout: Equatable, Sendable {
         controlRail = CGRect(
             x: size.width - railWidth, y: stripHeight,
             width: railWidth, height: size.height - stripHeight)
-        let panelHeight = min(100, max(0, size.height - centre.maxY))
+        let lensWidth = min(
+            Self.lensPanelMaxWidth, max(Self.lensPanelMinWidth, size.width - centre.maxX - Self.centreMargin))
+        lensPanel = CGRect(
+            x: size.width - lensWidth, y: stripHeight, width: lensWidth, height: size.height - stripHeight)
+        let panelHeight = min(Self.panelMaxHeight, max(0, size.height - centre.maxY - Self.centreMargin))
         dataPanel = CGRect(
             x: 0, y: size.height - panelHeight,
             width: min(430, size.width - railWidth), height: panelHeight)

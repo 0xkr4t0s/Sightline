@@ -54,6 +54,7 @@ strict = true
 # Blender scripts in tests/ and tools/mission/qa_host.py, and tools/gen_testdata.py (untyped).
 files = [
     "BlenderAddOn/core/latency.py",
+    "BlenderAddOn/core/lens.py",
     "BlenderAddOn/core/log.py",
     "BlenderAddOn/core/render.py",
     "BlenderAddOn/core/rig.py",
@@ -61,6 +62,7 @@ files = [
     "tools/check_agents_md.py",
     "tools/check_large_files.py",
     "tools/check_todos.py",
+    "tools/media/find_loop.py",
     "tools/set_manifest_wheels.py",
     "tools/hooks/privacy_scan.py",
 ]

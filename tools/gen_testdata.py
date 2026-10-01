@@ -33,6 +33,8 @@ testdata/vcp/srp-rfc5054-appendix-b.json   the RFC 5054 vectors (SHA-1, 1024-bit
 testdata/coords/arkit_to_canonical.json    DM-004 cases (vcp.md §7).
 testdata/rig/rig_cases.json   rig math (task 1.3.2a): device pose + Set-origin zero + motion scale + lock
                              flags -> the camera's local pose under VCam_Origin.
+testdata/rig/lens_cases.json  applied horizontal-sensor FOV/equivalent focal maths (§6.4),
+                             including the T2 sensor presets and custom width.
 testdata/rig/hold.json   hold last good pose (task 1.3.6, FR-TRK-002): sequences of poses (seq,
                              tracking_state, hold option) -> the seq whose pose the camera shows
                              (null = camera not moved) and whether the host is holding; plus the
@@ -206,17 +208,49 @@ def pose_payload(seq, t_ns, pos, quat, state, flags=0) -> bytes:
     return struct.pack("<IQ3f4fBB", seq, t_ns, *pos, *quat, state, flags)
 
 
-def control_payload(state_seq, fields, scale, locks, epoch, thermal=None) -> bytes:
+def control_payload(state_seq, fields, scale, locks, epoch, thermal=None, lens=None) -> bytes:
     payload = struct.pack("<IIfBBH", state_seq, fields, scale, locks, 0, epoch)
-    return payload if thermal is None else payload + struct.pack("<B3x", thermal)
+    if thermal is None:
+        return payload
+    payload += struct.pack("<B3x", thermal)
+    if lens is None:
+        return payload
+    groups = (
+        (4, "<f", ("lens_mm",)),
+        (5, "<f", ("focus_distance_m",)),
+        (6, "<f", ("fstop",)),
+        (7, "<B3x", ("dof_on",)),
+        (8, "<ffH2x", ("tap_u", "tap_v", "tap_seq")),
+        (9, "<ffBxHHH", ("rack_a_m", "rack_b_m", "rack_target", "rack_duration_ms", "rack_seq", "reserved")),
+    )
+    highest = max((bit for bit in range(4, 10) if fields & (1 << bit)), default=3)
+    for bit, fmt, names in groups:
+        if bit > highest:
+            break
+        values = tuple(lens.get(name, 0) for name in names)
+        payload += struct.pack(fmt, *values)
+    return payload
 
 
 def clock_payload(mode, t1, t2, t3) -> bytes:
     return struct.pack("<B3xQQQ", mode, t1, t2, t3)
 
 
-def status_payload(status_seq, pose_seq, ack, err, flags, name) -> bytes:
-    return struct.pack("<IIIHB", status_seq, pose_seq, ack, err, flags) + str8(name)
+def status_payload(status_seq, pose_seq, ack, err, flags, name, lens=None) -> bytes:
+    payload = struct.pack("<IIIHB", status_seq, pose_seq, ack, err, flags) + str8(name)
+    if lens is not None:
+        payload += struct.pack(
+            "<fffBBHff",
+            lens["lens_mm"],
+            lens["focus_distance_m"],
+            lens["fstop"],
+            lens["dof_on"],
+            lens["sensor_fit"],
+            0,
+            lens["sensor_width_mm"],
+            lens["render_aspect"],
+        )
+    return payload
 
 
 def hello_payload(mode, device_id, nonce, name) -> bytes:
@@ -297,6 +331,57 @@ def report_payload(report_seq, newest_frame_id, frames_complete, m2p_p95_ms, res
 # Vector builders
 
 
+def lens_math(lens_mm: float, sensor_width_mm: float, render_aspect: float) -> dict:
+    """§6.4 horizontal fit, computed from binary32 wire values before display rounding."""
+    lens_mm, sensor_width_mm, render_aspect = map(f32, (lens_mm, sensor_width_mm, render_aspect))
+    height = sensor_width_mm / render_aspect
+    return {
+        "sensor_width_eff_mm": sensor_width_mm,
+        "sensor_height_eff_mm": height,
+        "diag_eff_mm": math.hypot(sensor_width_mm, height),
+        "horizontal_fov_deg": math.degrees(2 * math.atan(sensor_width_mm / (2 * lens_mm))),
+        "equivalent_35mm_focal_mm": lens_mm * 43.27 / math.hypot(sensor_width_mm, height),
+    }
+
+
+def build_lens_cases() -> dict:
+    presets = (
+        ("super_35", 24.89, 18.66, 35.0),
+        ("full_frame", 36.0, 24.0, 50.0),
+        ("arri_alexa_35_open_gate", 27.99, 19.22, 50.0),
+        ("custom", 32.0, None, 85.0),
+    )
+    cases = []
+    for name, width, height, focal in presets:
+        aspect = 1.5 if name == "full_frame" else 16 / 9
+        math_values = lens_math(focal, width, aspect)
+        cases.append(
+            {
+                "name": name,
+                "sensor_fit": 0,
+                "preset_sensor_width_mm": width,
+                "preset_sensor_height_mm": height,
+                "lens_mm": f32(focal),
+                "sensor_width_mm": f32(width),
+                "render_aspect": f32(aspect),
+                **math_values,
+            }
+        )
+    # Independent rectangular-geometry anchors, not calculated through lens_math.
+    full = cases[1]
+    assert full["sensor_height_eff_mm"] == 24
+    assert abs(full["diag_eff_mm"] - math.sqrt(36**2 + 24**2)) < 1e-12
+    assert abs(full["equivalent_35mm_focal_mm"] - 50 * 43.27 / math.sqrt(1872)) < 1e-12
+    assert abs(full["horizontal_fov_deg"] - 39.597752709049864) < 1e-10
+    return {
+        "note": "vcp.md §6.4 horizontal sensor fit only; use wire-rounded f32 inputs. "
+        "Expected results are double precision; compare to 1e-5. Preset height documents "
+        "the named sensor, but effective height follows the scene render aspect.",
+        "tolerance": 1e-5,
+        "cases": cases,
+    }
+
+
 def build_messages() -> tuple[dict, dict[str, bytes]]:
     s = math.sqrt(0.5)
     cases, files = [], {}
@@ -322,6 +407,11 @@ def build_messages() -> tuple[dict, dict[str, bytes]]:
                 "hex": hx(data),
                 "file": fname,
                 "fields": fields,
+                **(
+                    {"feature": "lens"}
+                    if name.startswith("control_state_lens_") or name == "status_applied_lens"
+                    else {}
+                ),
             }
         )
 
@@ -393,6 +483,84 @@ def build_messages() -> tuple[dict, dict[str, bytes]]:
             },
             f"vcp.md §6.2 thermal {name}",
         )
+    lens = {
+        "lens_mm": 50.0,
+        "focus_distance_m": 4.0,
+        "fstop": 2.8,
+        "dof_on": 1,
+        "tap_u": 0.25,
+        "tap_v": 0.75,
+        "tap_seq": 12,
+        "rack_a_m": 2.0,
+        "rack_b_m": 8.0,
+        "rack_target": 2,
+        "rack_duration_ms": 1200,
+        "rack_seq": 7,
+    }
+    add(
+        "control_state_lens_full",
+        "udp",
+        "d2h",
+        0x02,
+        control_payload(11, 0x3FF, 10.0, 2, 3, 0, lens),
+        {
+            "state_seq": 11,
+            "fields": 0x3FF,
+            "motion_scale": 10.0,
+            "lock_flags": 2,
+            "origin_epoch": 3,
+            "thermal_state": 0,
+            **lens,
+        },
+        "§6.2 complete absolute state including tap and rack; 64-byte payload",
+    )
+    add(
+        "control_state_lens_partial",
+        "udp",
+        "d2h",
+        0x02,
+        control_payload(12, 1 << 4, 0.0, 0, 0, 0, {"lens_mm": 85.0}),
+        {"state_seq": 12, "fields": 1 << 4, "motion_scale": 0.0, "lock_flags": 0, "origin_epoch": 0, "lens_mm": 85.0},
+        "§6.2 bit 4 alone; absent scale and thermal bytes are ignored",
+    )
+    add(
+        "control_state_lens_tap",
+        "udp",
+        "d2h",
+        0x02,
+        control_payload(13, 1 << 8, 0.0, 0, 0, 0, lens),
+        {
+            "state_seq": 13,
+            "fields": 1 << 8,
+            "motion_scale": 0.0,
+            "lock_flags": 0,
+            "origin_epoch": 0,
+            "tap_u": 0.25,
+            "tap_v": 0.75,
+            "tap_seq": 12,
+        },
+        "§6.2 tap group at fixed offset 36, earlier groups ignored",
+    )
+    add(
+        "control_state_lens_rack",
+        "udp",
+        "d2h",
+        0x02,
+        control_payload(14, 1 << 9, 0.0, 0, 0, 0, lens),
+        {
+            "state_seq": 14,
+            "fields": 1 << 9,
+            "motion_scale": 0.0,
+            "lock_flags": 0,
+            "origin_epoch": 0,
+            "rack_a_m": 2.0,
+            "rack_b_m": 8.0,
+            "rack_target": 2,
+            "rack_duration_ms": 1200,
+            "rack_seq": 7,
+        },
+        "§6.2 rack group at fixed offset 48, earlier groups ignored",
+    )
     add(
         "clock_request",
         "udp",
@@ -450,6 +618,33 @@ def build_messages() -> tuple[dict, dict[str, bytes]]:
             "camera_name": "Kamera Ω",
         },
         "error 1 (no camera), non-ASCII name (str8 counts bytes)",
+    )
+    applied = {
+        "lens_mm": 50.0,
+        "focus_distance_m": 4.0,
+        "fstop": 2.8,
+        "dof_on": 1,
+        "sensor_fit": 0,
+        "sensor_width_mm": 36.0,
+        "render_aspect": 1.5,
+    }
+    full_frame = lens_math(50.0, 36.0, 1.5)
+    add(
+        "status_applied_lens",
+        "udp",
+        "h2d",
+        0x04,
+        status_payload(4, 1, 11, 0, 0b111, "Camera", applied),
+        {
+            "status_seq": 4,
+            "applied_pose_seq": 1,
+            "control_ack": 11,
+            "error_code": 0,
+            "flags": 7,
+            "camera_name": "Camera",
+            "applied_lens": {**applied, **full_frame},
+        },
+        "§6.4 applied camera values after camera_name; derived values from the horizontal sensor",
     )
     dev = bytes.fromhex("00112233445566778899aabbccddeeff")
     add(
@@ -597,6 +792,89 @@ def build_receive() -> dict:
         "§6.2 bit 3 clear ignores thermal byte",
         fields={"state_seq": 9, "fields": 0},
     )
+    legacy_count = len(cases)
+    lens = {
+        "lens_mm": 50.0,
+        "focus_distance_m": 4.0,
+        "fstop": 2.8,
+        "dof_on": 1,
+        "tap_u": 0.25,
+        "tap_v": 0.75,
+        "tap_seq": 12,
+        "rack_a_m": 2.0,
+        "rack_b_m": 8.0,
+        "rack_target": 2,
+        "rack_duration_ms": 1200,
+        "rack_seq": 7,
+    }
+    for name, bit, changes in (
+        ("lens_nan", 4, {"lens_mm": math.nan}),
+        ("lens_zero", 4, {"lens_mm": 0.0}),
+        ("focus_infinite", 5, {"focus_distance_m": math.inf}),
+        ("focus_zero", 5, {"focus_distance_m": 0.0}),
+        ("fstop_zero", 6, {"fstop": 0.0}),
+        ("dof_unknown", 7, {"dof_on": 2}),
+        ("tap_u_above_one", 8, {"tap_u": 1.01}),
+        ("tap_v_nan", 8, {"tap_v": math.nan}),
+        ("rack_a_zero", 9, {"rack_a_m": 0.0}),
+        ("rack_b_infinite", 9, {"rack_b_m": math.inf}),
+        ("rack_target_unknown", 9, {"rack_target": 3}),
+        ("rack_duration_too_long", 9, {"rack_duration_ms": 60001}),
+    ):
+        case(
+            f"control_{name}",
+            udp(0x02, SID, control_payload(15, 1 << bit, 0.0, 0, 0, 0, lens | changes), K_D2H),
+            False,
+            f"§6.2 bit {bit} present {name} rejects the whole state",
+        )
+    for bit in range(4, 10):
+        full = control_payload(15, 1 << bit, 0.0, 0, 0, 0, lens)
+        case(
+            f"control_lens_bit_{bit}_short",
+            udp(0x02, SID, full[:-1], K_D2H),
+            False,
+            f"§6.2 bit {bit} requires {len(full)} bytes",
+        )
+    case(
+        "control_lens_absent_nan_ignored",
+        udp(0x02, SID, control_payload(15, 0, 0.0, 0, 0, 0) + struct.pack("<f", math.nan), K_D2H),
+        True,
+        "§6.2 bit 4 clear ignores trailing lens bytes",
+        fields={"state_seq": 15, "fields": 0},
+    )
+    applied = {
+        "lens_mm": 50.0,
+        "focus_distance_m": 4.0,
+        "fstop": 2.8,
+        "dof_on": 1,
+        "sensor_fit": 0,
+        "sensor_width_mm": 36.0,
+        "render_aspect": 1.5,
+    }
+    status = status_payload(4, 1, 11, 0, 7, "Camera", applied)
+    case(
+        "status_lens_short",
+        udp(0x04, SID, status[:-1], K_H2D),
+        False,
+        "§6.4 flag bit 2 requires 24 bytes after camera_name",
+        direction="h2d",
+    )
+    for name, changes in (
+        ("lens_nan", {"lens_mm": math.nan}),
+        ("sensor_zero", {"sensor_width_mm": 0.0}),
+        ("aspect_infinite", {"render_aspect": math.inf}),
+        ("dof_unknown", {"dof_on": 2}),
+        ("fit_unknown", {"sensor_fit": 3}),
+    ):
+        case(
+            f"status_{name}",
+            udp(0x04, SID, status_payload(4, 1, 11, 0, 7, "Camera", applied | changes), K_H2D),
+            False,
+            f"§6.4 applied lens {name} invalid",
+            direction="h2d",
+        )
+    for c in cases[legacy_count:]:
+        c["feature"] = "lens"
     return {
         "receiver": {
             "session_id": SID,
@@ -1578,7 +1856,7 @@ def self_check_spec(messages: dict, video: dict, report: dict):
         bytes.fromhex(c["hex"]) for c in messages["cases"] + video["cases"] + report["cases"] if c.get("accept", True)
     }
     missing = [w.hex() for w in wanted if w not in generated]
-    if len(wanted) != 8 or missing:
+    if len(wanted) != 10 or missing:
         raise SystemExit(f"SELF-CHECK FAILED: vcp.md examples ({len(wanted)} found) not generated: {missing}")
 
 
@@ -1609,6 +1887,7 @@ def build_all() -> dict[str, bytes]:
         "coords/arkit_to_canonical.json": dumps(build_coords()).encode(),
         "motion/scripted.json": dumps(motion).encode(),
         "rig/rig_cases.json": dumps(build_rig(motion)).encode(),
+        "rig/lens_cases.json": dumps(build_lens_cases()).encode(),
         "rig/hold.json": dumps(build_hold(motion)).encode(),
         "video/fragments.json": dumps(video).encode(),
         "video/reassembly.json": dumps(build_reassembly()).encode(),

@@ -18,6 +18,8 @@ nonisolated enum VCPPayloadError: Error, Equatable, Sendable {
     case quaternionNorm
     case motionScaleRange
     case thermalStateRange
+    /// A present lens, focus, tap, rack or applied-lens value is outside its range (§6.2, §6.4).
+    case lensRange
     case badName
     /// `VIDEO_FRAGMENT` sizes, counts or index out of range (§6.5).
     case fragmentLayout
@@ -68,10 +70,11 @@ nonisolated struct VCPPose: Equatable, Sendable {
     }
 }
 
-/// `CONTROL_STATE` (0x02), 16-byte base or 20 bytes with thermal (§6.2).
+/// `CONTROL_STATE` (0x02), 16-byte base, 20 bytes with thermal, up to 64 with lens (§6.2).
 /// Absent fields are `nil` and keep their previous value on the host.
 nonisolated struct VCPControlState: Equatable, Sendable {
     static let length = 16
+    static let maxLength = 64
     private static let hasScale: UInt32 = 1 << 0
     private static let hasLocks: UInt32 = 1 << 1
     private static let hasEpoch: UInt32 = 1 << 2
@@ -82,6 +85,16 @@ nonisolated struct VCPControlState: Equatable, Sendable {
     var lockFlags: UInt8?
     var originEpoch: UInt16?
     var thermalState: UInt8? = nil
+    /// Absolute focal length in mm (bit 4).
+    var lensMM: Float? = nil
+    /// Absolute manual focus distance along the view axis in m (bit 5).
+    var focusDistanceM: Float? = nil
+    /// Absolute aperture f-number (bit 6).
+    var fstop: Float? = nil
+    /// Absolute depth-of-field enable (bit 7).
+    var dofOn: Bool? = nil
+    var tap: VCPTapFocus? = nil
+    var rack: VCPRackFocus? = nil
 
     static func decode(_ payload: ArraySlice<UInt8>) throws(VCPPayloadError) -> VCPControlState {
         var r = VCPReader(payload)
@@ -96,27 +109,85 @@ nonisolated struct VCPControlState: Equatable, Sendable {
             guard thermal <= 3 else { throw .thermalStateRange }
             thermalState = thermal
         }
+        typealias L = VCPLensLayout
+        var dofOn: Bool?
+        if var dof = try L.group(payload, fields, L.dofBit, L.dof) {
+            guard let value = dof.u8() else { throw .tooShort }
+            guard value <= 1 else { throw .lensRange }
+            dofOn = value == 1
+        }
         return VCPControlState(
             stateSeq: seq, motionScale: motionScale,
             lockFlags: fields & hasLocks != 0 ? locks : nil,
             originEpoch: fields & hasEpoch != 0 ? epoch : nil,
-            thermalState: thermalState)
+            thermalState: thermalState,
+            lensMM: try L.float(payload, fields, L.lensBit, L.lens, VCPLensRange.lensMM),
+            focusDistanceM: try L.float(payload, fields, L.focusBit, L.focus, VCPLensRange.distanceM),
+            fstop: try L.float(payload, fields, L.fstopBit, L.fstop, VCPLensRange.fstop),
+            dofOn: dofOn, tap: try L.tap(payload, fields), rack: try L.rack(payload, fields))
     }
 
-    func encode(into out: inout [UInt8]) throws(VCPPayloadError) {
+    private func validate() throws(VCPPayloadError) {
         if let thermalState, thermalState > 3 { throw .thermalStateRange }
+        func bad(_ value: Float?, _ range: ClosedRange<Float>) -> Bool {
+            value.map { !VCPLensRange.contains($0, range) } ?? false
+        }
+        if bad(lensMM, VCPLensRange.lensMM) || bad(focusDistanceM, VCPLensRange.distanceM)
+            || bad(fstop, VCPLensRange.fstop)
+        {
+            throw .lensRange
+        }
+        if let tap, !tap.isValid { throw .lensRange }
+        if let rack, !rack.isValid { throw .lensRange }
+    }
+
+    /// The shortest payload that holds every present group (groups keep their fixed offsets).
+    private var encodedLength: Int {
+        typealias L = VCPLensLayout
+        if rack != nil { return L.rack.upperBound }
+        if tap != nil { return L.tap.upperBound }
+        if dofOn != nil { return L.dof.upperBound }
+        if fstop != nil { return L.fstop.upperBound }
+        if focusDistanceM != nil { return L.focus.upperBound }
+        if lensMM != nil { return L.lens.upperBound }
+        return thermalState != nil ? L.lens.lowerBound : Self.length
+    }
+
+    /// Absent groups inside the encoded length are sent as zero (reserved, §2). Writes straight
+    /// into `out`, so a caller with enough capacity sees no heap allocation.
+    func encode(into out: inout [UInt8]) throws(VCPPayloadError) {
+        try validate()
+        typealias L = VCPLensLayout
         let fields =
             (motionScale == nil ? 0 : Self.hasScale) | (lockFlags == nil ? 0 : Self.hasLocks)
             | (originEpoch == nil ? 0 : Self.hasEpoch) | (thermalState == nil ? 0 : Self.hasThermal)
+            | (lensMM == nil ? 0 : L.lensBit) | (focusDistanceM == nil ? 0 : L.focusBit)
+            | (fstop == nil ? 0 : L.fstopBit) | (dofOn == nil ? 0 : L.dofBit)
+            | (tap == nil ? 0 : L.tapBit) | (rack == nil ? 0 : L.rackBit)
+        let start = out.count
+        let length = encodedLength
         out.appendLE(stateSeq)
         out.appendLE(fields)
         out.appendLE((motionScale ?? 0).bitPattern)
         out.append(lockFlags ?? 0)
         out.append(0)
         out.appendLE(originEpoch ?? 0)
-        if let thermalState {
-            out.append(contentsOf: [thermalState, 0, 0, 0])
-        }
+        guard length > Self.length else { return }
+        // A u8 followed by its reserved bytes is the same as the u8 widened, little-endian.
+        out.appendLE(UInt32(thermalState ?? 0))
+        out.appendLE((lensMM ?? 0).bitPattern)
+        out.appendLE((focusDistanceM ?? 0).bitPattern)
+        out.appendLE((fstop ?? 0).bitPattern)
+        out.appendLE(UInt32(dofOn == true ? 1 : 0))
+        out.appendLE((tap?.u ?? 0).bitPattern)
+        out.appendLE((tap?.v ?? 0).bitPattern)
+        out.appendLE(UInt32(tap?.seq ?? 0))
+        out.appendLE((rack?.aM ?? 0).bitPattern)
+        out.appendLE((rack?.bM ?? 0).bitPattern)
+        out.appendLE(UInt16(rack?.target ?? 0))
+        out.appendLE(rack?.durationMS ?? 0)
+        out.appendLE(UInt32(rack?.seq ?? 0))
+        out.removeLast(out.count - start - length)
     }
 }
 
@@ -158,6 +229,8 @@ nonisolated enum VCPClock: Equatable, Sendable {
 nonisolated struct VCPStatus: Equatable, Sendable {
     static let minLength = 16
     static let maxName = 63
+    /// `flags` bit 2: the applied-lens block follows `camera_name`.
+    static let hasLens: UInt8 = 1 << 2
 
     var statusSeq: UInt32
     var appliedPoseSeq: UInt32
@@ -165,6 +238,8 @@ nonisolated struct VCPStatus: Equatable, Sendable {
     var errorCode: UInt16
     var flags: UInt8
     var cameraName: String
+    /// Present exactly when `flags` bit 2 is set.
+    var appliedLens: VCPAppliedLens? = nil
 
     static func decode(_ payload: ArraySlice<UInt8>) throws(VCPPayloadError) -> VCPStatus {
         var r = VCPReader(payload)
@@ -174,14 +249,21 @@ nonisolated struct VCPStatus: Equatable, Sendable {
         guard let nameBytes = r.bytes(Int(nameLength)) else { throw .tooShort }
         guard nameBytes.count <= maxName, let name = String(validating: nameBytes, as: UTF8.self)
         else { throw .badName }
+        var lens: VCPAppliedLens?
+        if flags & hasLens != 0 {
+            guard let block = r.bytes(VCPAppliedLens.length) else { throw .tooShort }
+            lens = try VCPAppliedLens.decode(block)
+        }
         return VCPStatus(
             statusSeq: seq, appliedPoseSeq: applied, controlAck: ack, errorCode: error,
-            flags: flags, cameraName: name)
+            flags: flags, cameraName: name, appliedLens: lens)
     }
 
+    /// Fails if the name is over 63 bytes, or `flags` bit 2 disagrees with `appliedLens`.
     func encode(into out: inout [UInt8]) throws(VCPPayloadError) {
         let name = Array(cameraName.utf8)
         guard name.count <= Self.maxName else { throw .badName }
+        guard (flags & Self.hasLens != 0) == (appliedLens != nil) else { throw .lensRange }
         out.appendLE(statusSeq)
         out.appendLE(appliedPoseSeq)
         out.appendLE(controlAck)
@@ -189,6 +271,7 @@ nonisolated struct VCPStatus: Equatable, Sendable {
         out.append(flags)
         out.append(UInt8(name.count))
         out.append(contentsOf: name)
+        try appliedLens?.encode(into: &out)
     }
 }
 

@@ -1,0 +1,62 @@
+{
+  "cases": [
+    {
+      "diag_eff_mm": 28.557478135734783,
+      "equivalent_35mm_focal_mm": 53.031643508637615,
+      "horizontal_fov_deg": 39.14786553998739,
+      "lens_mm": 35.0,
+      "name": "super_35",
+      "preset_sensor_height_mm": 18.66,
+      "preset_sensor_width_mm": 24.89,
+      "render_aspect": 1.7777777910232544,
+      "sensor_fit": 0,
+      "sensor_height_eff_mm": 14.000624552364464,
+      "sensor_width_eff_mm": 24.889999389648438,
+      "sensor_width_mm": 24.889999389648438
+    },
+    {
+      "diag_eff_mm": 43.266615305567875,
+      "equivalent_35mm_focal_mm": 50.003911438886796,
+      "horizontal_fov_deg": 39.597752709049864,
+      "lens_mm": 50.0,
+      "name": "full_frame",
+      "preset_sensor_height_mm": 24.0,
+      "preset_sensor_width_mm": 36.0,
+      "render_aspect": 1.5,
+      "sensor_fit": 0,
+      "sensor_height_eff_mm": 24.0,
+      "sensor_width_eff_mm": 36.0,
+      "sensor_width_mm": 36.0
+    },
+    {
+      "diag_eff_mm": 32.11425576873904,
+      "equivalent_35mm_focal_mm": 67.36883506128186,
+      "horizontal_fov_deg": 31.273866323448992,
+      "lens_mm": 50.0,
+      "name": "arri_alexa_35_open_gate",
+      "preset_sensor_height_mm": 19.22,
+      "preset_sensor_width_mm": 27.99,
+      "render_aspect": 1.7777777910232544,
+      "sensor_fit": 0,
+      "sensor_height_eff_mm": 15.744374753949234,
+      "sensor_width_eff_mm": 27.989999771118164,
+      "sensor_width_mm": 27.989999771118164
+    },
+    {
+      "diag_eff_mm": 36.71511943562248,
+      "equivalent_35mm_focal_mm": 100.1753516408694,
+      "horizontal_fov_deg": 21.320696589070668,
+      "lens_mm": 85.0,
+      "name": "custom",
+      "preset_sensor_height_mm": null,
+      "preset_sensor_width_mm": 32.0,
+      "render_aspect": 1.7777777910232544,
+      "sensor_fit": 0,
+      "sensor_height_eff_mm": 17.99999986588955,
+      "sensor_width_eff_mm": 32.0,
+      "sensor_width_mm": 32.0
+    }
+  ],
+  "note": "vcp.md §6.4 horizontal sensor fit only; use wire-rounded f32 inputs. Expected results are double precision; compare to 1e-5. Preset height documents the named sensor, but effective height follows the scene render aspect.",
+  "tolerance": 1e-05
+}

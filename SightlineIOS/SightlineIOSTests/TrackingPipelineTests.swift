@@ -429,7 +429,9 @@ final class TrackingPipelineTests: XCTestCase {
         let first = try controlState(next(VCPMessageType.controlState, from: host), blender)
         XCTAssertEqual(
             first,
-            VCPControlState(stateSeq: 1, motionScale: 1, lockFlags: 0, originEpoch: 0, thermalState: 0))
+            VCPControlState(
+                stateSeq: 1, motionScale: 1, lockFlags: 0, originEpoch: 0, thermalState: 0,
+                tap: Self.baselineTap, rack: Self.baselineRack))
 
         var controls = DeviceControls()
         var changes: [DeviceControls] = []
@@ -457,8 +459,107 @@ final class TrackingPipelineTests: XCTestCase {
         XCTAssertEqual(seen, [1, 2, 3, 4, 5, 6, 7])
         XCTAssertEqual(
             try controlState(last, blender),
-            VCPControlState(stateSeq: 7, motionScale: 10, lockFlags: 2, originEpoch: 3, thermalState: 0))
+            VCPControlState(
+                stateSeq: 7, motionScale: 10, lockFlags: 2, originEpoch: 3, thermalState: 0,
+                tap: Self.baselineTap, rack: Self.baselineRack))
         pipeline.stop()
+    }
+
+    /// The tap and rack groups a device sends before any request: the host's baseline (§6.2).
+    private static let baselineTap = VCPTapFocus(u: 0.5, v: 0.5, seq: 0)
+    private static let baselineRack = VCPRackFocus(
+        aM: LensControls.unsetMarkM, bM: LensControls.unsetMarkM, target: 0,
+        durationMS: LensControls.defaultRackDurationMS, seq: 0)
+
+    /// FR-CTL-009, vcp.md §6.2/§6.4: lens changes go out as the complete absolute state under a new
+    /// `state_seq` and repeat unchanged until acknowledged. The applied lens from STATUS reaches the
+    /// snapshot without being sent back, and a new session opens with the full lens state but the
+    /// same tap/rack identities, so the host doesn't replay them.
+    func testLensChangesAreAbsoluteStateAndHostEditsAreNotSentBack() throws {
+        let (device, blender) = try goldenSession()
+        let host = try LoopbackReceiver()
+        let latest = Latest()
+        let pipeline = TrackingPipeline(publish: latest.set)
+        let destination = TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device)
+        pipeline.start(destination)
+        defer { pipeline.stop() }
+        func state(timeout: Double = 0.3) throws -> VCPControlState {
+            try controlState(next(VCPMessageType.controlState, from: host, timeout: timeout), blender)
+        }
+
+        let first = try state(timeout: 5)
+        XCTAssertEqual(first.stateSeq, 1)
+        XCTAssertNil(first.lensMM, "no focal length before the phone knows one: Blender's lens is kept")
+        XCTAssertEqual(first.tap, Self.baselineTap, "the first state gives the host its tap baseline")
+        XCTAssertEqual(first.rack, Self.baselineRack)
+
+        var controls = DeviceControls()
+        controls.lens.setLens(35)
+        pipeline.setControls(controls)
+        let focal = try state()
+        XCTAssertEqual(focal.stateSeq, 2)
+        XCTAssertEqual(focal.lensMM, 35)
+        XCTAssertEqual(focal.tap, Self.baselineTap)
+
+        controls.lens.setFocus(3)
+        controls.lens.setFstop(4)
+        controls.lens.setDoF(true)
+        pipeline.setControls(controls)
+        let focus = try state()
+        XCTAssertEqual(focus.stateSeq, 3)
+        XCTAssertEqual(focus.lensMM, 35, "the unchanged focal length is still sent: absolute state, not a delta")
+        XCTAssertEqual(focus.focusDistanceM, 3)
+        XCTAssertEqual(focus.fstop, 4)
+        XCTAssertEqual(focus.dofOn, true)
+
+        controls.lens.tap(u: 0.25, v: 0.75)
+        pipeline.setControls(controls)
+        let tap = try state()
+        XCTAssertEqual(tap.stateSeq, 4)
+        XCTAssertEqual(tap.tap, VCPTapFocus(u: 0.25, v: 0.75, seq: 1))
+        XCTAssertNil(tap.focusDistanceM, "the tap hands the focus to the host: bit 5 clear")
+        XCTAssertEqual(tap.fstop, 4)
+        let resent = try state(timeout: 1)
+        XCTAssertEqual(resent, tap, "a repeat reuses the same state_seq and tap_seq")
+
+        controls.lens.setMark(VCPRackFocus.targetA, to: 2)
+        controls.lens.setMark(VCPRackFocus.targetB, to: 8)
+        controls.lens.startRack(to: VCPRackFocus.targetB, durationMS: 1200)
+        pipeline.setControls(controls)
+        pipeline.setControls(controls)  // unchanged: not a new state
+        var rack = try state()
+        while rack.stateSeq < 5 { rack = try state() }  // skip the mark-only repeat of #4
+        XCTAssertEqual(rack.stateSeq, 5)
+        XCTAssertEqual(rack.rack, VCPRackFocus(aM: 2, bM: 8, target: 2, durationMS: 1200, seq: 1))
+        XCTAssertEqual(rack.tap?.seq, 1, "a rack doesn't start another tap")
+
+        // Blender's camera was changed on the host: STATUS reports it, the phone shows it and
+        // sends nothing back.
+        let hostEdit = VCPAppliedLens(
+            lensMM: 60, focusDistanceM: 3, fstop: 4, dofOn: true, sensorFit: 0, sensorWidthMM: 36, renderAspect: 1.5)
+        host.reply(
+            try blender.seal(
+                .status(
+                    VCPStatus(
+                        statusSeq: 1, appliedPoseSeq: 0, controlAck: 5, errorCode: 0, flags: 7,
+                        cameraName: "Camera", appliedLens: hostEdit))))
+        while next(VCPMessageType.controlState, from: host, timeout: 0.1) != nil {}  // one repeat may be in flight
+        XCTAssertNil(next(VCPMessageType.controlState, from: host, timeout: 0.8), "the host's edit isn't pushed back")
+        feed(pipeline, frames: 0..<1, rate: 60)
+        XCTAssertEqual(latest.snapshot?.appliedLens, hostEdit, "the snapshot carries the applied lens")
+        XCTAssertEqual(latest.snapshot?.controlSeq, 5)
+
+        pipeline.start(destination)  // a new session
+        let reopened = try state(timeout: 5)
+        XCTAssertEqual(reopened.stateSeq, 1)
+        XCTAssertEqual(reopened.lensMM, 35, "the new session gets the phone's full lens state")
+        XCTAssertNil(reopened.focusDistanceM, "the host kept the focus since the tap")
+        XCTAssertEqual(reopened.fstop, 4)
+        XCTAssertEqual(reopened.dofOn, true)
+        XCTAssertEqual(reopened.tap?.seq, 1, "same tap identity: the host takes it as its baseline")
+        XCTAssertEqual(reopened.rack?.seq, 1, "same rack identity: no replay")
+        feed(pipeline, frames: 1..<2, rate: 60)
+        XCTAssertNil(latest.snapshot?.appliedLens, "a new session starts without the old host's lens")
     }
 
     /// vcp.md §6.2: the latest state repeats every 500 ms until an authentic, newer STATUS carries
@@ -548,9 +649,13 @@ final class TrackingPipelineTests: XCTestCase {
             (UInt8(0), UInt32(10), "control_state_thermal_nominal"),
         ] {
             controls.thermalState = code
-            XCTAssertEqual(
-                try device.seal(.controlState(controls.message(seq: seq))),
-                hex(try goldenHex(vector)), vector)
+            // The thermal vectors predate the lens groups (bits 8 and 9), which every state carries.
+            var state = controls.message(seq: seq)
+            XCTAssertEqual(state.tap, Self.baselineTap)
+            XCTAssertEqual(state.rack, Self.baselineRack)
+            state.tap = nil
+            state.rack = nil
+            XCTAssertEqual(try device.seal(.controlState(state)), hex(try goldenHex(vector)), vector)
         }
     }
 

@@ -6,25 +6,32 @@
 //! task 2.2c1); `--video-out` keeps the newest complete frame in a file. Once frames arrive, it
 //! sends `VIDEO_REPORT` every 500 ms (§6.6, task 2.2d1), stating `--m2p` as the motion-to-photon
 //! p95 (default 0, not measured) so tests can drive the host's adaptation (task 2.2d2b).
+//! The T2 lens flags (task 2.4, `src/lens.rs`) send focal length, focus distance, f-stop, DoF,
+//! one tap-to-focus and one A/B rack request; `FAKE_IPHONE_DONE` reports the applied lens from
+//! the host's newest `STATUS` with the horizontal FOV and 35 mm equivalent derived from it.
 //!
 //! ```text
 //! vcam-fake-iphone --host 127.0.0.1:47000 --state DIR/fake-iphone.key [--code 123456]
 //!                  --motion testdata/motion/scripted.bin [--rate HZ] [--linger SECONDS]
 //!                  [--name NAME] [--scale S] [--locks FLAGS] [--set-origin-at FRAME]
 //!                  [--thermal N] [--thermal-at FRAME[:N]]
+//!                  [--lens MM] [--focus M] [--fstop F] [--dof 0|1]
+//!                  [--tap U,V[@FRAME]] [--rack A,B,TARGET,MS[@FRAME]]
 //!                  [--limited FROM-TO] [--video-out PATH] [--m2p MS]
 //! ```
-//! Prints `FAKE_IPHONE_PAIRED`, `FAKE_IPHONE_SESSION ...` and a final `FAKE_IPHONE_DONE ...`
-//! line on stdout. Any failure exits 1 with the reason on stderr.
+//! `--tap`/`--rack` default to frame 60; TARGET is A or B. Prints `FAKE_IPHONE_PAIRED`,
+//! `FAKE_IPHONE_SESSION ...` and a final `FAKE_IPHONE_DONE ...` line on stdout. Any failure exits 1 with the reason on stderr.
 
 use std::error::Error;
 use std::fmt::Debug;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpStream, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
+
+mod lens;
 
 use vcam_protocol::{
     Clock, ControlMessage, ControlState, Endpoint, HEADER_LEN, Hello, MAX_DATAGRAM, Message, Pose,
@@ -80,6 +87,7 @@ struct Args {
     video_out: Option<PathBuf>,
     /// `VIDEO_REPORT.m2p_p95_ms` (0 = not measured).
     m2p: u16,
+    lens: lens::LensArgs,
 }
 
 fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
@@ -95,8 +103,12 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
     let (mut scale, mut locks, mut set_origin_at, mut limited) = (1.0f32, 0u8, None, 0..0);
     let (mut thermal, mut thermal_at) = (0u8, None);
     let (mut video_out, mut m2p) = (None, 0u16);
+    let mut lens = lens::LensArgs::default();
     while let Some(flag) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("{flag} needs a value"));
+        if lens.parse(&flag, || Ok(value()?))? {
+            continue;
+        }
         match flag.as_str() {
             "--host" => host = Some(value()?.parse()?),
             "--state" => state = Some(PathBuf::from(value()?)),
@@ -166,6 +178,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
         limited,
         video_out,
         m2p,
+        lens,
     })
 }
 
@@ -385,6 +398,10 @@ impl Stream {
             self.control.thermal_state = Some(thermal);
             self.last_control = None;
         }
+        if args.lens.change_at(frame, &mut self.control) {
+            self.control.state_seq += 1;
+            self.last_control = None;
+        }
     }
 
     /// Sends this session's `VIDEO_REPORT` every 500 ms once a valid fragment has arrived.
@@ -460,6 +477,19 @@ impl Stream {
     }
 }
 
+/// Local address for the UDP socket. For a loopback host this is the loopback address itself:
+/// with an extra alias on `lo0` (e.g. `127.51.68.120/8`), macOS can pick that alias as the source
+/// for a wildcard-bound socket and `connect()` to `127.0.0.1` fails with `EADDRNOTAVAIL`.
+fn udp_bind_addr(host: IpAddr) -> SocketAddr {
+    let local = match host {
+        IpAddr::V4(ip) if ip.is_loopback() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        IpAddr::V6(ip) if ip.is_loopback() => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+    };
+    SocketAddr::new(local, 0)
+}
+
 fn run(args: &Args) -> Result<String> {
     let motion = parse_motion(&fs::read(&args.motion)?)?;
     let rate = args.rate.unwrap_or(f64::from(motion.rate_hz));
@@ -485,11 +515,7 @@ fn run(args: &Args) -> Result<String> {
     );
     io::stdout().flush()?;
 
-    let udp = UdpSocket::bind(if args.host.is_ipv4() {
-        "0.0.0.0:0"
-    } else {
-        "[::]:0"
-    })?;
+    let udp = UdpSocket::bind(udp_bind_addr(args.host.ip()))?;
     udp.connect(SocketAddr::new(args.host.ip(), udp_port))?;
     let mut s = Stream {
         udp,
@@ -512,6 +538,7 @@ fn run(args: &Args) -> Result<String> {
             } else {
                 args.thermal
             }),
+            ..ControlState::default()
         },
         video: Reassembler::new(),
         last_video: None,
@@ -520,6 +547,7 @@ fn run(args: &Args) -> Result<String> {
         report_seq: 0,
         last_report: None,
     };
+    args.lens.initial(&mut s.control);
     let period = Duration::from_secs_f64(1.0 / rate);
     let mut next = Instant::now();
     for (i, (position_m, orientation)) in motion.frames.iter().enumerate() {
@@ -557,11 +585,12 @@ fn run(args: &Args) -> Result<String> {
         error_code: 0,
         flags: 0,
         camera_name: String::new(),
+        applied_lens: None,
     });
     let video = s.video.stats();
     let (last, last_len) = s.last_video.unzip();
     Ok(format!(
-        "FAKE_IPHONE_DONE session_id={} poses={} clock_replies={} status_seq={} applied_pose_seq={} control_ack={} video_frames={} video_lost={} video_last_id={} video_last_len={} video_last_pose_seq={} video_reports={} camera={}",
+        "FAKE_IPHONE_DONE session_id={} poses={} clock_replies={} status_seq={} applied_pose_seq={} control_ack={} video_frames={} video_lost={} video_last_id={} video_last_len={} video_last_pose_seq={} video_reports={}{} camera={}",
         keys.session_id,
         s.poses,
         s.clock_replies,
@@ -574,6 +603,7 @@ fn run(args: &Args) -> Result<String> {
         last_len.unwrap_or(0),
         last.map_or(0, |f| f.pose_seq),
         s.report_seq,
+        lens::applied_summary(status.applied_lens.as_ref()),
         status.camera_name
     ))
 }
@@ -586,7 +616,9 @@ fn main() -> ExitCode {
     }
     if argv.peek().is_some_and(|a| a == "--help") {
         println!(
-            "vcam-fake-iphone --host HOST --state PATH --motion PATH [--code CODE] [--thermal N (0..3)] [--thermal-at FRAME[:N]] [--rate HZ] [--linger SECONDS]"
+            "vcam-fake-iphone --host HOST --state PATH --motion PATH [--code CODE] [--thermal N (0..3)] [--thermal-at FRAME[:N]] [--rate HZ] [--linger SECONDS] {}\n  --tap/--rack default to frame {}; TARGET is A or B",
+            lens::USAGE,
+            lens::DEFAULT_REQUEST_FRAME
         );
         return ExitCode::SUCCESS;
     }
@@ -647,6 +679,16 @@ mod tests {
             args(&["--thermal-at", "60:4"]).unwrap_err().to_string(),
             "--thermal must be in [0, 3]"
         );
+    }
+
+    #[test]
+    fn udp_binds_loopback_for_a_loopback_host_and_unspecified_otherwise() {
+        let bind = |host: &str| udp_bind_addr(host.parse().unwrap()).to_string();
+        assert_eq!(bind("127.0.0.1"), "127.0.0.1:0");
+        assert_eq!(bind("127.0.0.2"), "127.0.0.1:0");
+        assert_eq!(bind("::1"), "[::1]:0");
+        assert_eq!(bind("192.0.2.10"), "0.0.0.0:0");
+        assert_eq!(bind("fe80::1"), "[::]:0");
     }
 
     #[test]

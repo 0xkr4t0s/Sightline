@@ -2,8 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft 1 (2026-09-24). Covers T1: tracking, T1 controls, clock sync, status, pairing, and session setup; plus the Stage A `VIDEO_FRAGMENT` and the device's `VIDEO_REPORT` (2026-09-26). |
-| Implements | SRS v3 PR-001..004, PR-006, DM-001..003, NET-002/003, NET-VID-001/004/005, NFR-SEC-001, FR-UX-002, FR-TRK-002/003, FR-CTL-004/009 |
+| Status | Draft 1 (2026-09-24). Covers T1: tracking, T1 controls, clock sync, status, pairing, and session setup; Stage A video (2026-09-26); and T2 lens wire fields (2026-09-27). |
+| Implements | SRS v3 PR-001..004, PR-006, DM-001..003, NET-002/003, NET-VID-001/004/005, NFR-SEC-001, FR-UX-002, FR-TRK-002/003, FR-CTL-001..004/009, LNS-001/002 |
 | Golden vectors | `testdata/vcp/` (task 1.1.2) and `testdata/video/` (§6.5, §6.6). If this document and the vectors disagree, fix whichever is wrong; neither wins by default. |
 | Implementations | Rust `native/vcam-protocol` (Blender side), Swift `SightlineIOS` (iPhone side) |
 
@@ -25,7 +25,7 @@ device (iPhone)                                                    host (Blender
 - A session has a random non-zero `session_id` and two directional 256-bit keys. Every UDP datagram carries both.
 - Closing the TCP connection ends the session. Reconnecting starts a new session without re-pairing (NET-004).
 
-Reserved for Phase 2 and later (not specified in v1): `ACK_KEYFRAME_REQ`, lens/focus/aperture/record/transport fields in `CONTROL_STATE`, take-list TCP messages. `VIDEO_FRAGMENT` is specified in §6.5 and `VIDEO_REPORT` in §6.6.
+Reserved for Phase 3 and later: `ACK_KEYFRAME_REQ`, record/transport fields in `CONTROL_STATE`, take-list TCP messages. T2 lens/focus/aperture fields are specified in §6.2 and §6.4; `VIDEO_FRAGMENT` in §6.5 and `VIDEO_REPORT` in §6.6.
 
 ## 2. Conventions
 
@@ -143,26 +143,46 @@ tag      07 e8 fd 15 5e 7c 87 5a
 
 That is `seq=1`, `capture_time_ns=1000000000`, `position=(0.5, −1.25, 1.6)`, `orientation=(0.7071068, 0, 0, 0.7071068)`, `tracking_state=5`, `flags=0`.
 
-### 6.2 `CONTROL_STATE` (0x02), 16 bytes in v1, 20 bytes with thermal (FR-CTL-004, FR-CTL-009, FR-TRK-003, FR-UX-004)
+### 6.2 `CONTROL_STATE` (0x02), 16 bytes in v1, 20 bytes with thermal, up to 64 with lens (FR-CTL-001..004/009, FR-TRK-003, FR-UX-004)
 
 This message carries the **complete** current control state, never a delta, so a lost packet can't leave the two ends out of sync.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `state_seq` | u32 | +1 on every change, starting at 1 |
-| 4 | `fields` | u32 | presence bits: bit 0 `motion_scale`, bit 1 `lock_flags`, bit 2 `origin_epoch`, bit 3 `thermal_state`; bits 4–31 reserved for later fields |
+| 4 | `fields` | u32 | presence bits: bit 0 `motion_scale`, 1 `lock_flags`, 2 `origin_epoch`, 3 `thermal_state`, 4 `lens_mm`, 5 `focus_distance_m`, 6 `fstop`, 7 `dof_on`, 8 `tap` (point + sequence), 9 `rack` (marks + target + duration + sequence); bits 10–31 reserved |
 | 8 | `motion_scale` | f32 | host metres per device metre (1:10 → `10.0`). MUST be finite and in [0.001, 1000] |
 | 12 | `lock_flags` | u8 | bit 0 lock height, bit 1 lock roll, bit 2 pan only (lock position); bits 3–7 reserved |
 | 13 | reserved | u8 | 0 |
 | 14 | `origin_epoch` | u16 | +1 each time the operator presses **Set origin**. On a change, the host re-zeros the rig's position and yaw to the current pose (FR-TRK-003, FR-BL-003) |
 | 16 | `thermal_state` | u8 | bit 3: absolute device thermal state, 0 nominal, 1 fair, 2 serious, 3 critical |
 | 17 | reserved | bytes[3] | zero; aligns the next extension at offset 20 |
+| 20 | `lens_mm` | f32 | bit 4: absolute Blender focal length in mm, finite [1, 2500] |
+| 24 | `focus_distance_m` | f32 | bit 5: absolute manual focus distance along the camera's view axis in m, finite [0.01, 100000] |
+| 28 | `fstop` | f32 | bit 6: absolute aperture f-number, finite [0.1, 128] |
+| 32 | `dof_on` | u8 | bit 7: absolute DoF enable, 0 off, 1 on |
+| 33 | reserved | bytes[3] | zero |
+| 36 | `tap_u` | f32 | bit 8: horizontal tap coordinate in the *streamed picture*, finite [0, 1], 0 at left |
+| 40 | `tap_v` | f32 | bit 8: vertical tap coordinate in the streamed picture, finite [0, 1], 0 at top (not the letterbox) |
+| 44 | `tap_seq` | u16 | bit 8: absolute request identity; change (including 65535 → 0) starts one new tap |
+| 46 | reserved | u16 | zero |
+| 48 | `rack_a_m` | f32 | bit 9: absolute A mark distance along the view axis in m, finite [0.01, 100000] |
+| 52 | `rack_b_m` | f32 | bit 9: absolute B mark distance along the view axis in m, finite [0.01, 100000] |
+| 56 | `rack_target` | u8 | bit 9: 0 none, 1 A, 2 B |
+| 57 | reserved | u8 | zero |
+| 58 | `rack_duration_ms` | u16 | bit 9: absolute duration in ms, [0, 60000]; 0 = jump to target immediately |
+| 60 | `rack_seq` | u16 | bit 9: absolute request identity; change (including 65535 → 0) starts one rack if target ≠ 0 |
+| 62 | reserved | u16 | zero |
 
 - The host applies a `CONTROL_STATE` only if `state_seq` is greater than the last one applied, and echoes the applied `state_seq` in `STATUS.control_ack`.
 - The device sends on every change, then repeats the latest state every 500 ms until `STATUS.control_ack` ≥ its `state_seq`.
 - A field whose presence bit is 0 keeps its previous value. The first state in a session MUST set all v1 bits; a thermal-capable device also sets bit 3 in its first state and every subsequent complete state.
 - Bit 3 requires at least 20 payload bytes. A message with bit 3 set but fewer than 20 bytes, or `thermal_state` greater than 3, MUST be rejected as a whole. If bit 3 is clear, an absent or out-of-range thermal byte is ignored. A legacy 16-byte message remains valid.
 - `origin_epoch` wraps at 65535 → 0. The host treats *any change* as a reset request; it doesn't compare magnitudes.
+- Each lens presence bit requires its field's **entire** fixed-offset group: bit 4 requires 24 bytes, bit 5 28, bit 6 32, bit 7 36, bit 8 48 and bit 9 64. Groups occupy their fixed positions even when earlier bits are clear. A missing group, a non-finite or out-of-range *present* value, or an invalid `dof_on`/`rack_target` rejects the **whole** message. Values behind clear bits are ignored, including malformed or short trailing bytes. Unknown bits are ignored (§2); reserved bytes are sent as zero and ignored on receipt.
+- Lens values and A/B marks are **absolute state**, never increments. The first lens-capable message of each session and each later change sends all supported lens bits (4–9) and the earlier supported bits. A partial message is permitted: bits absent keep the previously applied values; a changed manual focus distance cancels a rack. `tap_seq` and `rack_seq` are identities, not delta counts: the first value seen in a session establishes the baseline without replaying a request, then a change starts exactly one tap/rack. Retransmitting the same `state_seq` is ignored; retransmitting the same request sequence cannot restart a tap/rack. A new tap cancels a running rack. Rack animation runs on the host from the current focus distance to the selected absolute mark over the stated duration.
+- The host camera owns the lens (LNS-001). A device with no value of its own yet for bits 4–7 leaves those bits clear rather than send a default, so connecting doesn't change the camera; it still sets bits 8 and 9 from its first state, so the host has the tap/rack baseline before the first request. The Sightline app fills its unset values from the first applied-lens `STATUS` (§6.4) and sends them as a new state; a later host-side edit is only displayed, never copied into the device's request.
+- A tap or a rack moves the focus away from the manual request, so it ends that request. From the state that starts a tap or rack, the device leaves bit 5 clear until the operator sets a focus again, so later changes don't undo the tap or rack. The host takes the next bit-5 value after a tap or rack as a new manual request, even if it equals the earlier one: it is written to the camera and cancels a running rack.
 
 Example: `state_seq=7`, all three fields present, scale `10.0`, lock roll, `origin_epoch=3`:
 
@@ -170,6 +190,17 @@ Example: `state_seq=7`, all three fields present, scale `10.0`, lock roll, `orig
 header   56 43 50 31 01 02 cd ab 34 12 10 00
 payload  07 00 00 00 07 00 00 00 00 00 20 41 02 00 03 00
 tag      30 d3 1c 22 a8 13 fd 2b
+```
+
+T2 example: `state_seq=11`, all bits 0–9 present, 50 mm, 4 m, f/2.8, DoF on, tap (0.25, 0.75) #12 and rack B (A=2 m, B=8 m) for 1200 ms #7:
+
+```
+header   56 43 50 31 01 02 cd ab 34 12 40 00
+payload  0b 00 00 00 ff 03 00 00 00 00 20 41 02 00 03 00
+         00 00 00 00 00 00 48 42 00 00 80 40 33 33 33 40
+         01 00 00 00 00 00 80 3e 00 00 40 3f 0c 00 00 00
+         00 00 00 40 00 00 00 41 02 00 b0 04 07 00 00 00
+tag      9b e3 d0 34 08 ff c3 b7
 ```
 
 ### 6.3 `CLOCK` (0x03), 28 bytes (NET-003)
@@ -222,8 +253,23 @@ tag      22 4e b2 35 b6 32 91 db
 | 4 | `applied_pose_seq` | u32 | `seq` of the last pose the host applied (0 = none) |
 | 8 | `control_ack` | u32 | `state_seq` of the last `CONTROL_STATE` applied (0 = none) |
 | 12 | `error_code` | u16 | 0 = none; 1 = no camera; 2 = camera deleted; 3 = host paused; others reserved |
-| 14 | `flags` | u8 | bit 0 session active, bit 1 camera bound; bits 2–7 reserved |
+| 14 | `flags` | u8 | bit 0 session active, bit 1 camera bound, bit 2 applied lens block present; bits 3–7 reserved |
 | 15 | `camera_name` | str8 | name of the driven camera object, ≤ 63 bytes |
+
+If bit 2 is set, a **24-byte applied-lens block** immediately follows the final UTF-8 byte of `camera_name` (offset `16 + camera_name byte length`). This reports the host camera's *actual applied* values, not the device's requested values. A short block, non-finite or out-of-range float, or unknown enum value rejects the whole STATUS. A clear bit ignores any trailing block; old STATUS messages remain valid.
+
+| Block offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `lens_mm` | f32 | finite [1, 2500] mm |
+| 4 | `focus_distance_m` | f32 | finite [0.01, 100000] m, along view axis |
+| 8 | `fstop` | f32 | finite [0.1, 128] |
+| 12 | `dof_on` | u8 | 0 off, 1 on |
+| 13 | `sensor_fit` | u8 | 0 HORIZONTAL, 1 VERTICAL, 2 AUTO (the camera's applied Blender fit) |
+| 14 | reserved | u16 | zero |
+| 16 | `sensor_width_mm` | f32 | finite [1, 1000] mm, the camera's applied `sensor_width` |
+| 20 | `render_aspect` | f32 | finite [0.1, 10], scene `resolution_x × pixel_aspect_x / (resolution_y × pixel_aspect_y)` |
+
+For T2 presets the host sets `sensor_fit` to HORIZONTAL: Super 35 (24.89 × 18.66 mm), Full Frame (36 × 24 mm), ARRI Alexa 35 Open Gate (27.99 × 19.22 mm), or custom `sensor_width_mm` [1, 1000]. These are host camera settings; the physical iPhone lens is not used. For horizontal fit, `sensor_width_eff = sensor_width_mm` and `sensor_height_eff = sensor_width_eff / render_aspect`. The *horizontal* FOV in radians is `2 × atan(sensor_width_eff / (2 × lens_mm))` (multiply by `180 / π` for degrees). The 35 mm-equivalent focal length is `lens_mm × 43.27 / diag_eff`, where `diag_eff = hypot(sensor_width_eff, sensor_height_eff)` in mm and 43.27 mm is the reference 36 × 24 mm diagonal (rounded). Calculate from the **applied** STATUS, not the requested controls; use binary32 wire values and allow display rounding only at the end. A VERTICAL/AUTO fit cannot yield its effective width from `sensor_width_mm` alone (Blender also uses `sensor_height`), so the device MUST show FOV/equivalent as unavailable unless the host resolves the fit to HORIZONTAL; it MUST NOT present an incorrect estimate. `testdata/rig/lens_cases.json` pins horizontal-preset values.
 
 Example: `status_seq=2`, `applied_pose_seq=1`, `control_ack=7`, no error, both flags set, camera `Camera`:
 
@@ -232,6 +278,16 @@ header   56 43 50 31 01 04 cd ab 34 12 16 00
 payload  02 00 00 00 01 00 00 00 07 00 00 00 00 00 03 06
          43 61 6d 65 72 61
 tag      36 5e ea 92 63 1a ca fe
+```
+
+Applied-lens example: `status_seq=4`, `control_ack=11`, camera `Camera`, 50 mm, 4 m, f/2.8, DoF on, horizontal 36 mm sensor and 1.5 render aspect (FOV ≈ 39.60°, equivalent ≈ 50.00 mm):
+
+```
+header   56 43 50 31 01 04 cd ab 34 12 2e 00
+payload  04 00 00 00 01 00 00 00 0b 00 00 00 00 00 07 06
+         43 61 6d 65 72 61 00 00 48 42 00 00 80 40 33 33
+         33 40 01 00 00 00 00 00 10 42 00 00 c0 3f
+tag      75 ac 68 a6 7c a7 cf 70
 ```
 
 ### 6.5 `VIDEO_FRAGMENT` (0x05), 32 bytes + data (NET-VID-001, NET-VID-004)
@@ -480,7 +536,7 @@ Example session keys used in the §6 examples (test values only, never used for 
 | O-1 | Which system clock `ARFrame.timestamp` uses. The device's `CLOCK` timestamps must come from the same one. The SDK header doesn't say. | 1.4.2 (device check) |
 | O-2 | ARKit camera-local axes for the landscape orientation the app uses (§7) | 1.4.2 (device check) |
 | O-3 | Interop between `swift-srp` and the Rust SRP code against these exact formulas: RFC 5054 test vectors plus `testdata/vcp/pairing.json`. **Rust side verified 2026-09-24** (`vcam-protocol`: RFC 5054 App. B through the same generic code path, and a full byte-exact `pairing.json` transcript). **Swift side verified 2026-09-25** (`SightlineIOS/SightlineIOS/VCP/VCPPairing.swift` on `swift-srp` 2.4.0: RFC 5054 App. B through the same generic client, byte-exact `pairing.json` and `session.json`). Closed. | 1.4.x |
-| O-4 | `ACK_KEYFRAME_REQ` and T2/T3 `CONTROL_STATE` fields. The `VIDEO_FRAGMENT` layout was specified on 2026-09-26 (§6.5). | Phase 2/3 |
+| O-4 | T2 lens `CONTROL_STATE` fields and applied-lens `STATUS` specified 2026-09-27 (§6.2/§6.4); T2 part closed. `VIDEO_FRAGMENT` specified 2026-09-26 (§6.5). `ACK_KEYFRAME_REQ` and T3 record/transport controls remain open. | Phase 3 |
 
 ## 14. Change log
 
@@ -491,3 +547,6 @@ Example session keys used in the §6 examples (test values only, never used for 
 | 2026-09-26 | `VIDEO_FRAGMENT` (0x05) specified (§6.5): 32-byte fragment header, 1148-byte data limit, newest-frame-wins reassembly. Vectors in `testdata/video/`. Existing messages unchanged. |
 | 2026-09-26 | `VIDEO_REPORT` (0x07) specified (§6.6): device → host every 500 ms, session totals of the viewfinder frames received and completed plus motion-to-photon p95, for NET-VID-005. Vectors in `testdata/video/report.json`. Existing messages unchanged. |
 | 2026-09-27 | `CONTROL_STATE` bit 3 adds absolute device thermal state at offset 16 and three padding bytes (§6.2); old 16-byte messages remain valid. |
+| 2026-09-27 | T2 lens controls in `CONTROL_STATE` bits 4–9 at fixed offsets 20–63 and applied-lens `STATUS` flag bit 2 plus appended 24-byte block (§6.2/§6.4); FOV/equivalent maths pinned by `testdata/rig/lens_cases.json`. O-4 T2 closed; legacy payloads unchanged. |
+| 2026-09-27 | §6.2 clarifies that a device without lens values of its own leaves bits 4–7 clear (but always sends bits 8–9) instead of sending defaults. No wire change. |
+| 2026-09-28 | §6.2: a tap or rack ends the manual focus request. The device leaves bit 5 clear afterwards until the operator sets a focus; the host applies the next bit-5 value even if it repeats the earlier one. No wire change. |

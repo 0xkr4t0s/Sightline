@@ -119,7 +119,7 @@ jobs:
       - name: Seed corpora from testdata/
         working-directory: native/fuzz
         run: |
-          mkdir -p corpus/udp_open corpus/control_decode corpus/pairing_inputs corpus/video_reassembly
+          mkdir -p corpus/udp_open corpus/udp_payload corpus/control_decode corpus/pairing_inputs corpus/video_reassembly
           for f in ../../testdata/vcp/*.bin; do
             case "$(basename "$f")" in
               hello_pair.bin|error_not_paired.bin) cp "$f" corpus/control_decode/ ;;
@@ -140,6 +140,12 @@ jobs:
           for seq in json.load(open("../../testdata/video/reassembly.json"))["sequences"]:
               payloads = [bytes.fromhex(s["hex"])[12:-8] for s in seq["steps"]]
               open(f"corpus/video_reassembly/{seq['name']}.bin", "wb").write(b"".join(bytes([len(p)]) + p for p in payloads))
+          # udp_payload input: the type byte, then the payload (no header or tag).
+          for vectors in ("messages", "receive"):
+              for case in json.load(open(f"../../testdata/vcp/{vectors}.json"))["cases"]:
+                  raw = bytes.fromhex(case.get("hex", ""))
+                  if case.get("channel", "udp") == "udp" and len(raw) >= 20:
+                      open(f"corpus/udp_payload/{case['name']}.bin", "wb").write(raw[5:6] + raw[12:-8])
           for vectors in ("fragments", "report"):
               for case in json.load(open(f"../../testdata/video/{vectors}.json"))["cases"]:
                   open(f"corpus/udp_open/{case['name']}.bin", "wb").write(bytes.fromhex(case["hex"]))
@@ -147,7 +153,7 @@ jobs:
       - name: cargo fuzz run (60 s per target)
         working-directory: native
         run: |
-          for target in udp_open control_decode pairing_inputs video_reassembly; do
+          for target in udp_open udp_payload control_decode pairing_inputs video_reassembly; do
             cargo +nightly fuzz run "$target" -- -max_total_time=60 -rss_limit_mb=2048
           done
       - uses: actions/upload-artifact@v7
@@ -299,9 +305,11 @@ jobs:
           BLENDER_USER_RESOURCES: ${{ runner.temp }}/blender-user
         run: |
           # addon_apply: matrix_world of the driven camera at every scripted keypose.
+          # addon_lens: device lens controls and sensor presets on the camera, STATUS lens (task 2.4).
+          # addon_focus: tap-to-focus ray cast and the host-run A/B rack (task 2.4).
           # pose_leg_latency: the NFR-LAT-001 report over loopback (task 1.5.1).
           # video_native: JPEG VIDEO_FRAGMENTs from vcam_native reach the fake iPhone (task 2.2c2a).
-          for t in addon_apply addon_panel addon_robust pose_leg_latency video_native; do
+          for t in addon_apply addon_lens addon_focus addon_panel addon_robust pose_leg_latency video_native; do
             echo "::group::${t}"
             "${BLENDER}" --background --factory-startup --python-exit-code 1 \
               --python "tests/blender/${t}.py"

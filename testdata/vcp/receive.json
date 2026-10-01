@@ -229,6 +229,210 @@
       "hex": "564350310102cdab34121400090000000000000000000000000000000400000010f990a2a93beba2",
       "name": "control_thermal_absent_ignored",
       "rule": "§6.2 bit 3 clear ignores thermal byte"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab341218000f000000100000000000000000000000000000000000c07fd7ad6dc05d98b761",
+      "name": "control_lens_nan",
+      "rule": "§6.2 bit 4 present lens_nan rejects the whole state"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab341218000f0000001000000000000000000000000000000000000000ab0bdc6020a91781",
+      "name": "control_lens_zero",
+      "rule": "§6.2 bit 4 present lens_zero rejects the whole state"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab34121c000f00000020000000000000000000000000000000000048420000807f1495da33bc8d9cbb",
+      "name": "control_focus_infinite",
+      "rule": "§6.2 bit 5 present focus_infinite rejects the whole state"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab34121c000f00000020000000000000000000000000000000000048420000000081c82a0464024edb",
+      "name": "control_focus_zero",
+      "rule": "§6.2 bit 5 present focus_zero rejects the whole state"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab341220000f00000040000000000000000000000000000000000048420000804000000000d5c164a006f4fede",
+      "name": "control_fstop_zero",
+      "rule": "§6.2 bit 6 present fstop_zero rejects the whole state"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab341224000f0000008000000000000000000000000000000000004842000080403333334002000000c13ad4d13aabf2ee",
+      "name": "control_dof_unknown",
+      "rule": "§6.2 bit 7 present dof_unknown rejects the whole state"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab341230000f0000000001000000000000000000000000000000004842000080403333334001000000ae47813f0000403f0c00000070d0c60859862d94",
+      "name": "control_tap_u_above_one",
+      "rule": "§6.2 bit 8 present tap_u_above_one rejects the whole state"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab341230000f00000000010000000000000000000000000000000048420000804033333340010000000000803e0000c07f0c0000001c669d70182accd2",
+      "name": "control_tap_v_nan",
+      "rule": "§6.2 bit 8 present tap_v_nan rejects the whole state"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab341240000f00000000020000000000000000000000000000000048420000804033333340010000000000803e0000403f0c00000000000000000000410200b0040700000007824f45fc21b59e",
+      "name": "control_rack_a_zero",
+      "rule": "§6.2 bit 9 present rack_a_zero rejects the whole state"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab341240000f00000000020000000000000000000000000000000048420000804033333340010000000000803e0000403f0c000000000000400000807f0200b00407000000d16adb9302749390",
+      "name": "control_rack_b_infinite",
+      "rule": "§6.2 bit 9 present rack_b_infinite rejects the whole state"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab341240000f00000000020000000000000000000000000000000048420000804033333340010000000000803e0000403f0c00000000000040000000410300b004070000004e6e2d81c614cbfd",
+      "name": "control_rack_target_unknown",
+      "rule": "§6.2 bit 9 present rack_target_unknown rejects the whole state"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab341240000f00000000020000000000000000000000000000000048420000804033333340010000000000803e0000403f0c0000000000004000000041020061ea07000000fdfa9a902e134c21",
+      "name": "control_rack_duration_too_long",
+      "rule": "§6.2 bit 9 present rack_duration_too_long rejects the whole state"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab341217000f00000010000000000000000000000000000000000048dd08bdab3a337ddf",
+      "name": "control_lens_bit_4_short",
+      "rule": "§6.2 bit 4 requires 24 bytes"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab34121b000f000000200000000000000000000000000000000000484200008082f0aa8a3ba27c11",
+      "name": "control_lens_bit_5_short",
+      "rule": "§6.2 bit 5 requires 28 bytes"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab34121f000f0000004000000000000000000000000000000000004842000080403333338aebe875051fc96f",
+      "name": "control_lens_bit_6_short",
+      "rule": "§6.2 bit 6 requires 32 bytes"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab341223000f00000080000000000000000000000000000000000048420000804033333340010000a626d5621096c2c0",
+      "name": "control_lens_bit_7_short",
+      "rule": "§6.2 bit 7 requires 36 bytes"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab34122f000f00000000010000000000000000000000000000000048420000804033333340010000000000803e0000403f0c0000d3b3c13cb1c993c9",
+      "name": "control_lens_bit_8_short",
+      "rule": "§6.2 bit 8 requires 48 bytes"
+    },
+    {
+      "accept": false,
+      "direction": "d2h",
+      "feature": "lens",
+      "hex": "564350310102cdab34123f000f00000000020000000000000000000000000000000048420000804033333340010000000000803e0000403f0c00000000000040000000410200b0040700007b95c204bad9cd4b",
+      "name": "control_lens_bit_9_short",
+      "rule": "§6.2 bit 9 requires 64 bytes"
+    },
+    {
+      "accept": true,
+      "direction": "d2h",
+      "feature": "lens",
+      "fields": {
+        "fields": 0,
+        "state_seq": 15
+      },
+      "hex": "564350310102cdab341218000f000000000000000000000000000000000000000000c07fbc923d443da6011e",
+      "name": "control_lens_absent_nan_ignored",
+      "rule": "§6.2 bit 4 clear ignores trailing lens bytes"
+    },
+    {
+      "accept": false,
+      "direction": "h2d",
+      "feature": "lens",
+      "hex": "564350310104cdab34122d0004000000010000000b0000000000070643616d65726100004842000080403333334001000000000010420000c02be26966f2237ac9",
+      "name": "status_lens_short",
+      "rule": "§6.4 flag bit 2 requires 24 bytes after camera_name"
+    },
+    {
+      "accept": false,
+      "direction": "h2d",
+      "feature": "lens",
+      "hex": "564350310104cdab34122e0004000000010000000b0000000000070643616d6572610000c07f000080403333334001000000000010420000c03f09cbd446a34d0b6c",
+      "name": "status_lens_nan",
+      "rule": "§6.4 applied lens lens_nan invalid"
+    },
+    {
+      "accept": false,
+      "direction": "h2d",
+      "feature": "lens",
+      "hex": "564350310104cdab34122e0004000000010000000b0000000000070643616d65726100004842000080403333334001000000000000000000c03f521126df0583bae7",
+      "name": "status_sensor_zero",
+      "rule": "§6.4 applied lens sensor_zero invalid"
+    },
+    {
+      "accept": false,
+      "direction": "h2d",
+      "feature": "lens",
+      "hex": "564350310104cdab34122e0004000000010000000b0000000000070643616d65726100004842000080403333334001000000000010420000807f8f9868e9dd622594",
+      "name": "status_aspect_infinite",
+      "rule": "§6.4 applied lens aspect_infinite invalid"
+    },
+    {
+      "accept": false,
+      "direction": "h2d",
+      "feature": "lens",
+      "hex": "564350310104cdab34122e0004000000010000000b0000000000070643616d65726100004842000080403333334002000000000010420000c03f86e1b9bbd44cc321",
+      "name": "status_dof_unknown",
+      "rule": "§6.4 applied lens dof_unknown invalid"
+    },
+    {
+      "accept": false,
+      "direction": "h2d",
+      "feature": "lens",
+      "hex": "564350310104cdab34122e0004000000010000000b0000000000070643616d65726100004842000080403333334001030000000010420000c03f5199b400668a2b73",
+      "name": "status_fit_unknown",
+      "rule": "§6.4 applied lens fit_unknown invalid"
     }
   ],
   "receiver": {

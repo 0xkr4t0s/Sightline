@@ -66,6 +66,24 @@ def test_thermal_control_keeps_absent_bit_and_ignores_duplicate_or_old_sequences
     assert c.thermal_state == 0
 
 
+def test_lens_merges_only_newer_state_seq_and_keeps_absent_bits():
+    """FR-CTL-009: duplicates and stale states change nothing; a scale-only state keeps the lens."""
+    c = Controls()
+    base = {"state_seq": 1, "motion_scale": 1.0, "lock_flags": 0, "origin_epoch": 0, "thermal_state": 2}
+    assert c.update({**base, "lens_mm": 50.0, "fstop": 2.8, "dof_on": True}) == (True, False)
+    assert c.lens.take() == {"lens_mm": 50.0, "fstop": 2.8, "dof_on": True}
+    assert c.update({**base, "lens_mm": 35.0}) == (False, False)  # same state_seq resent
+    assert c.update({**base, "state_seq": 0, "lens_mm": 35.0}) == (False, False)  # older
+    assert c.lens.take() == {}
+    scale_only = {"state_seq": 2, "motion_scale": 10.0, "lock_flags": None, "origin_epoch": None}
+    assert c.update(scale_only) == (True, False)
+    assert c.lens.take() == {} and c.lens.requested["lens_mm"] == 50.0
+    # A lens change keeps the thermal state, and a thermal change keeps the lens.
+    assert c.update({**scale_only, "state_seq": 3, "motion_scale": None, "lens_mm": 85.0}) == (True, False)
+    assert c.update({**scale_only, "state_seq": 4, "motion_scale": None, "thermal_state": 0}) == (True, False)
+    assert (c.thermal_state, c.lens.requested["lens_mm"], c.lens.take()) == (0, 85.0, {"lens_mm": 85.0})
+
+
 @pytest.mark.parametrize("sequence", HOLD["sequences"], ids=[s["name"] for s in HOLD["sequences"]])
 def test_pose_hold_matches_vectors(sequence):
     assert HOLD["tracking_normal"] == TRACKING_NORMAL

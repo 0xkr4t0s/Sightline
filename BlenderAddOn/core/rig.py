@@ -32,6 +32,8 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .lens import LensControls
+
 LOCK_HEIGHT = 1 << 0
 LOCK_ROLL = 1 << 1
 PAN_ONLY = 1 << 2
@@ -142,7 +144,8 @@ class Controls:
     """The merged CONTROL_STATE of one session (vcp.md §6.2).
 
     Absent fields keep their previous value. Only a newer `state_seq` is applied. Any change of
-    `origin_epoch` after the first one seen is a Set-origin request.
+    `origin_epoch` after the first one seen is a Set-origin request. The lens fields go to
+    `lens` (`core/lens.py`), under the same `state_seq` rule.
     """
 
     def __init__(self) -> None:
@@ -151,6 +154,7 @@ class Controls:
         self.lock_flags = 0
         self.origin_epoch: int | None = None
         self.thermal_state: int | None = None
+        self.lens = LensControls()
 
     def update(self, control: Mapping[str, Any] | None) -> tuple[bool, bool]:
         """Merges `control` (a `latest_control()` dict or None): (changed, set_origin)."""
@@ -164,6 +168,7 @@ class Controls:
         thermal = control.get("thermal_state")
         if thermal is not None:
             self.thermal_state = thermal
+        self.lens.merge(control)
         set_origin = False
         epoch = control["origin_epoch"]
         if epoch is not None:

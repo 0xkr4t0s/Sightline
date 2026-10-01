@@ -18,7 +18,7 @@ no push run on `main`. Read a failed run with `gh pr checks <n>`, then
 | `rust-fmt` | Unformatted Rust, or `cargo machete` found a dependency no crate uses. | `cd native && cargo fmt`, commit. The pre-commit hook catches formatting locally. For machete, remove the dependency (or, if it's used only through a macro, add it to `[package.metadata.cargo-machete] ignored` with a comment). |
 | `rust-coverage` | Line coverage of the Rust tests fell below 80 %. | `tools/mission/check.sh coverage` prints per-file coverage. Add tests for the new code; don't lower the gate. The `rust-coverage` artifact has `lcov.info`. |
 | `rust` (ubuntu, windows, macos) | Clippy with `-D warnings`: a new stable Rust adds lints (Rust 1.98 added `chunks_exact_to_as_chunks`). NASM missing for `turbojpeg-sys`. Windows-only test failures. | Reproduce with `cargo clippy --all-targets -- -D warnings` after `rustup update stable`. For Windows, see "Recurring Windows failures" below. |
-| `fuzz` | A crash or timeout in one of `udp_open`, `control_decode`, `pairing_inputs`, `video_reassembly`. | Download the `fuzz-artifacts` artifact and replay the input: `cd native && cargo +nightly fuzz run <target> <artifact-file>`. Fix the parser, then add the input as a regression test or golden vector. |
+| `fuzz` | A crash or timeout in one of `udp_open`, `udp_payload`, `control_decode`, `pairing_inputs`, `video_reassembly`. | Download the `fuzz-artifacts` artifact and replay the input: `cd native && cargo +nightly fuzz run <target> <artifact-file>`. Fix the parser, then add the input as a regression test or golden vector. |
 | `wheels` | NASM missing (Windows uses Chocolatey, manylinux uses `dnf` in `before-script-linux`), or a maturin version change. | Check the "Install NASM" step output and the `nasm -v` line in the maturin log. `MATURIN_VERSION` is pinned in `ci.yml`. |
 | `extension` | `tools/set_manifest_wheels.py` can't match a wheel, or `blender --command extension build` rejects the manifest. | Run both commands locally against the downloaded `wheel-*` artifacts. |
 | `blender-smoke` (per OS) | A `tests/blender/*.py` script exits non-zero. Each script prints a `VCAM_*_OK` line on success. | Find the last `::group::` before the failure and reproduce locally with `BLENDER_TESTS="<script>" tools/mission/check.sh blender`. Only the platform zip for that OS is installed (`vcam_blender-*-<platform>.zip`). |
@@ -63,6 +63,12 @@ a single run rarely fails.
 - **`Unable to find a device matching the provided destination specifier`:** the simulator
   named in the destination isn't installed. The project uses `iPhone 17`
   (`IOS_DESTINATION` in `env.sh`).
+- **Fake iPhone fails with `Can't assign requested address (os error 49)`:** `ifconfig lo0`
+  probably shows an extra IPv4 alias besides `127.0.0.1` (some device drivers add one, e.g.
+  `127.51.68.120/8`). macOS may then pick the alias as the source for a UDP socket bound to
+  `0.0.0.0` and refuse to `connect()` it to `127.0.0.1`. The fake iPhone binds `127.0.0.1:0`
+  (or `[::1]:0`) when `--host` is loopback, so this only affects older builds: run `setup.sh`
+  again. Leave the alias alone; it belongs to the software that added it.
 - **Git hooks fail:** see `tools/hooks/README.md`. Fix the reported problem rather than
   bypassing the hook.
 

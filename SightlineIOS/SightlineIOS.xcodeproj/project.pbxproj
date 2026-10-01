@@ -45,6 +45,9 @@
 			membershipExceptions = (
 				FramingOverlay.swift,
 				HostDiscovery.swift,
+				LensControls.swift,
+				LensInput.swift,
+				LensPanel.swift,
 				PairingStore.swift,
 				SceneUnderstanding.swift,
 				StatusHUD.swift,
@@ -54,6 +57,7 @@
 				VCP/VCPControl.swift,
 				VCP/VCPCoordinates.swift,
 				VCP/VCPEndpoint.swift,
+				VCP/VCPLens.swift,
 				VCP/VCPMessages.swift,
 				VCP/VCPPairing.swift,
 				VCP/VCPSessionClient.swift,

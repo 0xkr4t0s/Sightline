@@ -23,7 +23,7 @@ DEFAULT_LIMIT_KIB = 1024
 
 # Glob patterns (repo-relative, POSIX separators) exempt from the size limit.
 ALLOWLIST: dict[str, str] = {
-    # Nothing is exempt yet; the largest tracked file is well under 1 MiB.
+    "docs/media/viewfinder.gif": "README media GIF; IMPLEMENTATION_PLAN.md 'README media' caps it at 3 MB",
 }
 
 

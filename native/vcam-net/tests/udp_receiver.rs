@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use vcam_net::{HostStatus, OneEuro, Smoothing, UdpReceiver, VideoFrameMeta};
 use vcam_protocol::{
-    Clock, ControlState, Endpoint, Message, Pose, Pushed, Reassembler, Role, Status, VideoFragment,
-    VideoFrameInfo, VideoReport,
+    AppliedLens, Clock, ControlState, Endpoint, Message, Pose, Pushed, RackFocus, Reassembler,
+    Role, Status, TapFocus, VideoFragment, VideoFrameInfo, VideoReport,
 };
 
 const SID: u32 = 0x1234_ABCD;
@@ -133,6 +133,7 @@ fn control_state_newest_wins() {
             lock_flags: Some(0),
             origin_epoch: Some(epoch),
             thermal_state: Some(2),
+            ..Default::default()
         });
         tx.send_to(&datagram(&msg), rx.local_addr()).unwrap();
     }
@@ -445,6 +446,7 @@ fn applied_status_changes_are_prompt_validated_and_session_scoped() {
         control_ack: 7,
         error_code: 0,
         camera_name: Some("é".repeat(31) + "a"), // 63 UTF-8 bytes
+        applied_lens: None,
     };
     let published = Instant::now();
     rx.update_status(SID, status.clone()).unwrap();
@@ -495,6 +497,89 @@ fn applied_status_changes_are_prompt_validated_and_session_scoped() {
         ),
         (8, 7, 3, received.camera_name)
     );
+}
+
+#[test]
+fn control_state_lens_fields_reach_latest_control() {
+    let rx = start();
+    let tx = sender();
+    let lens = ControlState {
+        state_seq: 3,
+        lens_mm: Some(85.0),
+        focus_distance_m: Some(3.0),
+        fstop: Some(2.8),
+        dof_on: Some(true),
+        tap: Some(TapFocus {
+            u: 0.25,
+            v: 0.75,
+            seq: 1,
+        }),
+        rack: Some(RackFocus {
+            a_m: 2.0,
+            b_m: 8.0,
+            target: 2,
+            duration_ms: 1200,
+            seq: 1,
+        }),
+        ..ControlState::default()
+    };
+    tx.send_to(&datagram(&Message::ControlState(lens)), rx.local_addr())
+        .unwrap();
+    wait_until("lens control", || rx.latest_control().is_some());
+    assert_eq!(rx.latest_control().unwrap().state, lens);
+}
+
+#[test]
+fn applied_lens_sets_status_bit_2_and_is_validated() {
+    let rx = start();
+    let tx = sender();
+    tx.send_to(&datagram(&pose(1)), rx.local_addr()).unwrap();
+    assert_eq!(receive_status(&tx, &device()).applied_lens, None);
+    let lens = AppliedLens {
+        lens_mm: 50.0,
+        focus_distance_m: 4.0,
+        fstop: 2.8,
+        dof_on: true,
+        sensor_fit: 0,
+        sensor_width_mm: 36.0,
+        render_aspect: 1.5,
+    };
+    let status = HostStatus {
+        applied_pose_seq: 1,
+        control_ack: 11,
+        error_code: 0,
+        camera_name: Some("Camera".into()),
+        applied_lens: Some(lens),
+    };
+    rx.update_status(SID, status.clone()).unwrap();
+    let received = loop {
+        let s = receive_status(&tx, &device());
+        if s.control_ack == 11 {
+            break s;
+        }
+    };
+    assert_eq!((received.flags, received.applied_lens), (7, Some(lens)));
+    let invalid = HostStatus {
+        applied_lens: Some(AppliedLens {
+            focus_distance_m: 0.0,
+            ..lens
+        }),
+        ..status.clone()
+    };
+    let err = rx.update_status(SID, invalid).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    // The rejected update changed nothing; dropping the lens clears bit 2 again.
+    assert_eq!(receive_status(&tx, &device()).applied_lens, Some(lens));
+    rx.update_status(
+        SID,
+        HostStatus {
+            applied_lens: None,
+            ..status
+        },
+    )
+    .unwrap();
+    let cleared = receive_status(&tx, &device());
+    assert_eq!((cleared.flags, cleared.applied_lens), (3, None));
 }
 
 #[test]

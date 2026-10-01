@@ -24,8 +24,21 @@ from collections.abc import Callable
 from typing import Any
 
 DEFAULT_BUDGET_MS = 12
+# Size boxes: the stream frame is the largest picture of the scene's render aspect inside one.
 STREAM_RESOLUTIONS = {'360p': (640, 360), '540p': (960, 540), '720p': (1280, 720), '1080p': (1920, 1080)}
 STREAM_FPS_CAPS = (24, 30, 60)
+
+
+def fit_aspect(box: tuple[int, int], aspect: float) -> tuple[int, int]:
+    """LNS-003: the largest picture of `aspect` (width / height) that fits in `box`.
+
+    The side that doesn't fill the box rounds to the nearest even number (4:2:0 JPEG chroma),
+    never beyond the box and never below 2 pixels.
+    """
+    width, height = box
+    if aspect >= width / height:
+        return width, min(height, max(2, 2 * round(width / aspect / 2)))
+    return min(width, max(2, 2 * round(height * aspect / 2))), height
 
 
 def resolution_steps(key: str) -> int:
@@ -33,18 +46,22 @@ def resolution_steps(key: str) -> int:
     return list(STREAM_RESOLUTIONS).index(key)
 
 
-def adapted_resolution(key: str, drop: int) -> tuple[int, int]:
-    """The stream size `drop` steps below the user's `key`, never below the smallest size."""
+def adapted_resolution(key: str, drop: int, aspect: float | None = None) -> tuple[int, int]:
+    """The stream size `drop` boxes below the user's `key`, never below the smallest box.
+
+    With the render `aspect` it's the frame fitted in that box, else the box itself.
+    """
     keys = list(STREAM_RESOLUTIONS)
-    return STREAM_RESOLUTIONS[keys[max(keys.index(key) - drop, 0)]]
+    box = STREAM_RESOLUTIONS[keys[max(keys.index(key) - drop, 0)]]
+    return box if aspect is None else fit_aspect(box, aspect)
 
 
 def thermal_stream_settings(
-    key: str, fps: int, adaptive_drop: int, thermal_state: int | None
+    key: str, fps: int, adaptive_drop: int, thermal_state: int | None, aspect: float | None = None
 ) -> tuple[tuple[int, int], int]:
     """Device thermal reduction is independent of the adapter's own resolution step."""
     serious = thermal_state is not None and thermal_state >= 2
-    return adapted_resolution(key, adaptive_drop + int(serious)), min(fps, 24) if serious else fps
+    return adapted_resolution(key, adaptive_drop + int(serious), aspect), min(fps, 24) if serious else fps
 
 
 class FramePacer:

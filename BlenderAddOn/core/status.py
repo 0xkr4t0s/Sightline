@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .lens import FocusRack, effective_fit, fov_and_equivalent
 from .render import adapted_resolution
 from .rig import LOCK_HEIGHT, LOCK_ROLL, PAN_ONLY
 
@@ -73,18 +74,62 @@ def thermal_label(thermal_state: int | None, resolution: tuple[int, int], fps: i
     return label
 
 
-def _level_label(quality: int, resolution_key: str, drop: int) -> str:
-    width, height = adapted_resolution(resolution_key, drop)
+def frame_label(size: tuple[int, int], aspect: float) -> str:
+    """LNS-003: the stream frame the selected size box gives at the scene's render aspect."""
+    return f"Frame: {size[0]}×{size[1]} (render {aspect:.2f}:1)"
+
+
+def lens_labels(
+    lens_mm: float,
+    focus_distance_m: float,
+    fstop: float,
+    dof_on: bool,
+    sensor_width_mm: float,
+    sensor_fit: str,
+    aspect: float,
+) -> list[str]:
+    """FR-BL-005/LNS-002: the target camera's lens as Blender has it, with the FOV the device shows."""
+    fit = effective_fit(sensor_fit, aspect).lower()
+    fit_label = f"auto fit ({fit})" if sensor_fit == 'AUTO' else f"{fit} fit"
+    derived = fov_and_equivalent(lens_mm, sensor_width_mm, sensor_fit, aspect)
+    return [
+        f"Focal length: {lens_mm:.4g} mm",
+        f"Focus distance: {focus_distance_m:.2f} m",
+        f"Aperture: f/{fstop:.3g}",
+        f"Depth of field: {'on' if dof_on else 'off'}",
+        f"Sensor: {sensor_width_mm:.4g} mm, {fit_label}",
+        f"FOV {derived[0]:.1f}°, 35 mm equivalent {derived[1]:.0f} mm"
+        if derived is not None
+        else f"FOV: unavailable ({fit} fit)",
+    ]
+
+
+def focus_labels(last_tap: tuple[float | None, str | None] | None, rack: FocusRack | None) -> list[str]:
+    """FR-CTL-002: the device's last tap-to-focus (hit or miss) and a running A/B rack."""
+    lines = []
+    if last_tap is not None:
+        distance, name = last_tap
+        lines.append(
+            "Tap focus: nothing hit, focus kept" if distance is None else f"Tap focus: {distance:.2f} m ({name})"
+        )
+    if rack is not None:
+        lines.append(f"Rack to {'AB'[rack.target - 1]}: {rack.end_m:.2f} m over {rack.duration_s:.1f} s")
+    return lines
+
+
+def _level_label(quality: int, resolution_key: str, drop: int, aspect: float | None) -> str:
+    width, height = adapted_resolution(resolution_key, drop, aspect)
     return f"q{quality} {width}×{height}"
 
 
-def adapt_labels(stats: dict[str, Any], resolution_key: str) -> list[str]:
+def adapt_labels(stats: dict[str, Any], resolution_key: str, aspect: float | None = None) -> list[str]:
     """NET-VID-005: the level the stream adapted to, the link's loss and the last change, with
-    resolution steps shown as sizes below the user's `resolution_key`."""
+    resolution steps shown as sizes below the user's `resolution_key` (fitted to the render
+    `aspect` when given, LNS-003)."""
     adapt = stats["adapt"]
     if adapt is None:
         return []
-    level = _level_label(adapt["quality"], resolution_key, adapt["resolution_drop"])
+    level = _level_label(adapt["quality"], resolution_key, adapt["resolution_drop"], aspect)
     if (adapt["quality"], adapt["resolution_drop"]) == (stats["user_quality"], 0):
         lines = [f"Adaptive: full, {level}"]
     else:
@@ -101,14 +146,13 @@ def adapt_labels(stats: dict[str, Any], resolution_key: str) -> list[str]:
             "m2p": f"M2P {change['m2p_p95_ms']} ms",
             "recovered": "link clear",
         }[change["reason"]]
-        lines.append(
-            f"Last change: {_level_label(change['from_quality'], resolution_key, change['from_resolution_drop'])}"
-            f" → {_level_label(change['to_quality'], resolution_key, change['to_resolution_drop'])} ({reason})"
-        )
+        before = _level_label(change['from_quality'], resolution_key, change['from_resolution_drop'], aspect)
+        after = _level_label(change['to_quality'], resolution_key, change['to_resolution_drop'], aspect)
+        lines.append(f"Last change: {before} → {after} ({reason})")
     return lines
 
 
-def video_labels(stats: dict[str, Any] | None, resolution_key: str) -> list[str]:
+def video_labels(stats: dict[str, Any] | None, resolution_key: str, aspect: float | None = None) -> list[str]:
     """Viewfinder stream counters (`Session.video_stats()`, NET-VID-001/005) as N-panel lines."""
     if stats is None:
         return ["Video: not streaming"]
@@ -119,7 +163,7 @@ def video_labels(stats: dict[str, Any] | None, resolution_key: str) -> list[str]
             f"Last: {last['width']}×{last['height']}, {last['jpeg_bytes'] / 1024:.0f} KB, "
             f"encode {last['encode_ns'] / 1e6:.1f} ms, send {last['send_ns'] / 1e6:.1f} ms"
         )
-    lines += adapt_labels(stats, resolution_key)
+    lines += adapt_labels(stats, resolution_key, aspect)
     failed = stats["send_failed"] + stats["encode_failed"]
     if failed:
         error = stats["last_error"]
