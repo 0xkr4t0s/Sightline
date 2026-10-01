@@ -217,18 +217,29 @@ try:
 
     # NET-VID-005 through the add-on (task 2.2d2c): a device reporting a motion-to-photon p95
     # above 120 ms lowers the quality to the floor (80 → 50), then the stream loop renders one
-    # size below the user's. Same pairing, new device session.
+    # size below the user's. Same pairing, new device session. A loaded runner can lose a frame
+    # in a report interval and the adapter ranks loss before M2P, so a step may be a genuine
+    # 'loss' one: every change is recorded as it appears (only the last is exposed; settling
+    # spaces them about 2 s apart: 2 settling + 2 bad reports) and the 'm2p' one is looked for among them.
+    seen = {}
+
+    def adapt():
+        stats = live.video_stats()
+        adapt = (stats or {}).get("adapt") or {}
+        change = adapt.get("last_change")
+        if change is not None:
+            seen[change["report_seq"]] = change
+        return adapt
+
     def poll_until(what, done, timeout=30):
         deadline = time.monotonic() + timeout
+        adapt()
         while not done():
             assert time.monotonic() < deadline and child.poll() is None, (what, live.video_stats())
             assert session._poll() == session.POLL_INTERVAL
             assert session.state.stream_error is None, session.state.stream_error
             time.sleep(0.003)
-
-    def adapt():
-        stats = live.video_stats()
-        return (stats or {}).get("adapt") or {}
+            adapt()
 
     child.kill()
     child.communicate()
@@ -258,19 +269,25 @@ try:
     assert session.state.session_id not in (None, old_session)
     stream = session._stream
     assert stream.max_resolution_drop == 1
-    change = adapt()["last_change"]
-    assert (
-        change["from_quality"],
-        change["to_quality"],
-        change["from_resolution_drop"],
-        change["to_resolution_drop"],
-        change["reason"],
-    ) == (50, 50, 0, 1, "m2p"), change
+    steps = [seen[k] for k in sorted(seen)]
+    for step in steps:
+        assert step["reason"] in ("m2p", "loss"), steps
+        if step["reason"] == "loss":
+            assert step["lost"] > 0 and step["expected"] >= step["lost"], steps
+        else:
+            assert (step["m2p_p95_ms"], step["lost"]) == (150, None), steps
+    # Quality steps of 10 from the user's 80 down to the floor, then one resolution step.
+    assert [(c["from_quality"], c["to_quality"]) for c in steps] == [(80, 70), (70, 60), (60, 50), (50, 50)], steps
+    assert [(c["from_resolution_drop"], c["to_resolution_drop"]) for c in steps] == [(0, 0)] * 3 + [(0, 1)], steps
+    assert any(c["reason"] == "m2p" for c in steps), steps
+    change = steps[-1]
+    assert adapt()["last_change"] == change and adapt()["changes"] == len(steps), (steps, adapt())
     poll_until("frame at the lowered size", lambda: (live.video_stats()["last_sent"] or {}).get("width") == 640)
     assert (stream.renderer.width, stream.renderer.height) == (640, 360)
     labels = status.video_labels(live.video_stats(), '540p')
     assert "Adaptive: lowered to q50 640×360" in labels, labels
-    assert "Last change: q50 960×540 → q50 640×360 (M2P 150 ms)" in labels, labels
+    reason = "M2P 150 ms" if change["reason"] == "m2p" else f"{change['lost']}/{change['expected']} lost"
+    assert f"Last change: q50 960×540 → q50 640×360 ({reason})" in labels, labels
     # LNS-003: at 2.39:1 the adapter's step is the next box down at that aspect.
     render.resolution_x, render.resolution_y = 2048, 858
 
