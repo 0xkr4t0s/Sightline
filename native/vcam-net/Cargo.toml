@@ -15,3 +15,7 @@ mdns-sd = { version = "=0.21.4", default-features = false }
 # Already built for mdns-sd; UDP readiness polling (SO_RCVTIMEO loses datagrams on Windows).
 mio = { version = "=1.2.3", features = ["os-poll", "net"] }
 vcam-protocol.workspace = true
+
+[dev-dependencies]
+# Reads testdata/take/sidecar_v1.jsonl in the take tests; already pinned in vcam-protocol.
+serde_json = "=1.0.151"

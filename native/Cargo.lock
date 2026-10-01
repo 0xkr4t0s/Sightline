@@ -888,6 +888,7 @@ dependencies = [
  "getrandom",
  "mdns-sd",
  "mio",
+ "serde_json",
  "vcam-protocol",
 ]
 

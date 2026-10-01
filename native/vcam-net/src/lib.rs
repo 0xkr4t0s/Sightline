@@ -6,6 +6,7 @@ mod control;
 mod discovery;
 mod smooth;
 mod store;
+mod take;
 mod udp;
 
 pub use adapt::{
@@ -17,6 +18,10 @@ pub use control::{
 };
 pub use smooth::{OneEuro, Smoothing};
 pub use store::FileStore;
+pub use take::{
+    AppliedKind, Limits, RawTake, Segment, TakeApplied, TakeClock, TakeControl, TakeFrame,
+    TakePose, TakeRecorder, TakeStatus,
+};
 pub use udp::{
     ControlSample, DropCounts, HostStatus, PoseSample, ReceiverStats, UdpReceiver, VideoFrameMeta,
     VideoSender, VideoSent,
