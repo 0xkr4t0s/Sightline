@@ -329,6 +329,8 @@ jobs:
     if: github.event.pull_request.draft != true
     runs-on: xcode-27  # GitHub preview image: macOS 27, Xcode 27.0 default (matches local builds)
     # A healthy run takes 10-13 minutes; a hung simulator would otherwise hold the runner for 6 hours.
+    # Only a backstop: a job-level timeout cancels the job, which skips the `if: failure()` upload.
+    # The xcodebuild steps carry their own timeout so a hang fails the step and keeps its xcresult.
     timeout-minutes: 45
     # An explicit bash adds -o pipefail, so `coverage_check.sh ... | tee` fails the step.
     defaults:
@@ -340,6 +342,7 @@ jobs:
         run: xcrun swift-format lint --strict --configuration .swift-format -r SightlineIOS
       # Unit tests plus the UI tests; the UI test that needs a Blender host skips without one.
       - name: xcodebuild test (unit and UI tests; ARKit can't run in the simulator)
+        timeout-minutes: 25
         run: |
           xcodebuild test -project SightlineIOS/SightlineIOS.xcodeproj -scheme SightlineIOS \
             -destination 'platform=iOS Simulator,name=iPhone 17' -resultBundlePath xcresult/debug.xcresult
@@ -348,6 +351,7 @@ jobs:
           SightlineIOS/scripts/coverage_check.sh xcresult/debug.xcresult 75 | tee coverage.txt
           { echo '```'; tail -1 coverage.txt; echo '```'; } >> "${GITHUB_STEP_SUMMARY}"
       - name: Pose send path allocates nothing (NFR-LAT-002; needs optimised code)
+        timeout-minutes: 15
         run: |
           xcodebuild test -configuration Release -project SightlineIOS/SightlineIOS.xcodeproj -scheme SightlineIOS \
             -destination 'platform=iOS Simulator,name=iPhone 17' -resultBundlePath xcresult/release \
