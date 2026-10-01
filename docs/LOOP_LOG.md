@@ -2540,6 +2540,15 @@ Append-only. One entry per iteration (see `docs/AGENT_LOOP_PROMPT.md` §5).
 - **Not verified, needs owner:** nothing needs the owner. Not run on Windows or Linux (CI after push). No Python or Blender check exercises the recorder yet (3.1f adds `vcam_native` wrappers and `tests/blender/take_native.py`). The 30-minute cap is a reversible default from the design; the owner has not been asked.
 - **Blocked:** none.
 
+## 2026-10-02 — Mission — vcam-net tests draw session keys at runtime (3.1b follow-up, NFR-QA-001) — done
+
+- **Files:** `native/vcam-net/src/udp.rs` (test module), `native/vcam-net/tests/take.rs`, `native/vcam-net/tests/udp_receiver.rs`, this log.
+- **What:** CodeQL on PR #35 reported 4 new critical `rust/hard-coded-cryptographic-value` alerts for the fixed session keys (`[0x11; 32]`, `[0x22; 32]`) in the 3.1b tests. They copied the pattern from `tests/udp_receiver.rs`. All three now draw `k_d2h`/`k_h2d` once per test process with `getrandom` (already a `vcam-net` dependency, as `tests/control_server.rs` uses it) through a `LazyLock`, so host and device share them. The wrong-key case in `udp_receiver.rs` uses the bitwise complement of the real key, which differs in every byte. Test behaviour is unchanged otherwise; no product code changes.
+- **Checks:** `tools/mission/check.sh rust`: `PASS rust (31 s) log: .mission/logs/rust.log`; `tools/mission/check.sh coverage`: `PASS coverage (33 s) log: .mission/logs/coverage.log`.
+- **Mutation proof:** 1 of 1. With the wrong key set equal to the real key, `bad_datagrams_are_counted_by_reason_and_never_reach_the_slot` FAILED; restored and byte-compared.
+- **Not verified, needs owner:** whether CodeQL closes the alerts. That is seen only on this PR's CodeQL run. Older fixed-key alerts elsewhere, if any, are not touched.
+- **Blocked:** none.
+
 ## 2026-10-02 — Mission — adaptation tests tolerate a lost frame on loaded runners (NET-VID-005) — done (tests only; macOS only locally)
 
 - **Files:** `tests/blender/video_native.py`, `tests/blender/render_session.py`, `IMPLEMENTATION_PROGRESS.md` (NET-VID-005 evidence lines), this log. No product code or threshold changed.

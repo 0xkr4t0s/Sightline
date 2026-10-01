@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test code: a panic is a test failure
 
 use std::net::{SocketAddr, UdpSocket};
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use vcam_net::{HostStatus, OneEuro, Smoothing, UdpReceiver, VideoFrameMeta};
@@ -11,15 +12,21 @@ use vcam_protocol::{
 };
 
 const SID: u32 = 0x1234_ABCD;
-const K_D2H: [u8; 32] = [0x11; 32];
-const K_H2D: [u8; 32] = [0x22; 32];
+/// Session keys drawn once per test process, so host and device share them; no fixed key in
+/// the source.
+static KEYS: LazyLock<([u8; 32], [u8; 32])> = LazyLock::new(|| {
+    let (mut d2h, mut h2d) = ([0u8; 32], [0u8; 32]);
+    getrandom::fill(&mut d2h).unwrap();
+    getrandom::fill(&mut h2d).unwrap();
+    (d2h, h2d)
+});
 
 fn host() -> Endpoint {
-    Endpoint::new(Role::Host, SID, &K_D2H, &K_H2D).unwrap()
+    Endpoint::new(Role::Host, SID, &KEYS.0, &KEYS.1).unwrap()
 }
 
 fn device() -> Endpoint {
-    Endpoint::new(Role::Device, SID, &K_D2H, &K_H2D).unwrap()
+    Endpoint::new(Role::Device, SID, &KEYS.0, &KEYS.1).unwrap()
 }
 
 fn start() -> UdpReceiver {
@@ -82,7 +89,8 @@ fn bad_datagrams_are_counted_by_reason_and_never_reach_the_slot() {
     let rx = start();
     let tx = sender();
     let mut wrong_key = Vec::new();
-    Endpoint::new(Role::Device, SID, &[0x99; 32], &K_H2D)
+    let other_d2h = KEYS.0.map(|b| !b); // differs from the real key in every byte
+    Endpoint::new(Role::Device, SID, &other_d2h, &KEYS.1)
         .unwrap()
         .seal(&pose(7), &mut wrong_key)
         .unwrap();
