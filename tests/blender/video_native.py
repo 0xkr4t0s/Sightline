@@ -152,6 +152,26 @@ with tempfile.TemporaryDirectory() as tmp:
     # NET-VID-005 end to end (task 2.2d2b): a device reporting a motion-to-photon p95 above
     # 120 ms makes the host lower the quality in steps of 10 (after 2 bad reports, then 2
     # settling ones), and frames go out at the lowered quality. Same pairing, new session.
+    # A loaded runner can lose a frame in a report interval, and the adapter ranks loss before
+    # M2P, so a step may be a genuine 'loss' one. Every change is recorded as it appears (only
+    # the last is exposed; settling spaces them about 2 s apart: 2 settling + 2 bad reports at
+    # 500 ms), each must be a 10-point step for 'm2p' or for 'loss' with frames really lost, and
+    # the test waits for two steps, at least one of them 'm2p'.
+    seen = {}
+
+    def observe(stats):
+        change = (stats["adapt"] or {}).get("last_change")
+        if change is not None and change["report_seq"] not in seen:
+            seen[change["report_seq"]] = change
+            assert change["to_quality"] == change["from_quality"] - 10, change
+            assert change["from_resolution_drop"] == change["to_resolution_drop"] == 0, change
+            assert change["reason"] in ("m2p", "loss"), change
+            if change["reason"] == "loss":
+                assert change["lost"] > 0 and change["expected"] >= change["lost"], change
+            else:
+                assert (change["m2p_p95_ms"], change["lost"]) == (150, None), change
+        return change
+
     session.start_video(slot, quality=80, max_resolution_drop=1)
     assert session.video_stats()["adapt"] is None
     child = subprocess.Popen(
@@ -176,36 +196,53 @@ with tempfile.TemporaryDirectory() as tmp:
     )
     try:
         deadline = time.monotonic() + 20
-        while (session.video_stats()["adapt"] or {}).get("changes", 0) < 2:
-            assert time.monotonic() < deadline and child.poll() is None, session.video_stats()
+        while True:
+            adapted = session.video_stats()
+            observe(adapted)
+            if len(seen) >= 2 and any(c["reason"] == "m2p" for c in seen.values()):
+                break
+            assert time.monotonic() < deadline and child.poll() is None, (seen, adapted)
             slot.submit(frame, 0, session.host_clock_ns())
             time.sleep(1 / 30)
-        adapted = session.video_stats()
         # A higher user quality doesn't undo the adaptation; the stream recovers towards it.
         session.set_video_quality(90)
         raised = session.video_stats()
+        observe(raised)
         deadline = time.monotonic() + 10
-        while (session.video_stats()["last_sent"] or {}).get("quality") != 60:
-            assert time.monotonic() < deadline and child.poll() is None, session.video_stats()
+        while True:
+            now = session.video_stats()
+            observe(now)
+            if (now["last_sent"] or {}).get("quality") == now["quality"] < 90:
+                break
+            assert time.monotonic() < deadline and child.poll() is None, (seen, now)
             slot.submit(frame, 0, session.host_clock_ns())
             time.sleep(1 / 30)
     finally:
         child.kill()
         child.communicate()
     adapt, change = adapted["adapt"], adapted["adapt"]["last_change"]
-    assert (change["from_quality"], change["to_quality"], change["to_resolution_drop"]) == (70, 60, 0), adapted
-    assert (change["reason"], change["m2p_p95_ms"], change["lost"]) == ("m2p", 150, None), adapted
+    first = seen[min(seen)]
+    assert (first["from_quality"], change["to_resolution_drop"]) == (80, 0), (seen, adapted)
+    assert any(c["reason"] == "m2p" and c["m2p_p95_ms"] == 150 for c in seen.values()), seen
+    # The recorded steps are consecutive: each starts where the previous one ended.
+    steps = [seen[k] for k in sorted(seen)]
+    assert all(a["to_quality"] == b["from_quality"] for a, b in zip(steps, steps[1:], strict=False)), steps
+    # The quality is whatever the observed steps lowered it to, and the user's is untouched.
     assert (adapted["quality"], adapted["user_quality"], adapt["quality"], adapt["resolution_drop"]) == (
-        60,
+        change["to_quality"],
         80,
-        60,
+        change["to_quality"],
         0,
     ), adapted
     assert adapt["session_id"] not in (0, last["session_id"]), (adapt, last)
     report = adapt["report"]
     assert report["m2p_p95_ms"] == 150 and 0 < report["frames_complete"] <= report["newest_frame_id"], adapt
     assert adapt["last_interval"]["report_seq"] == report["report_seq"] and adapt["lost"] <= adapt["expected"], adapt
-    assert (raised["quality"], raised["user_quality"], raised["adapt"]["changes"]) == (60, 90, 2), raised
+    # set_video_quality isn't one of the adapter's changes: only a report adds to the count.
+    raised_change = raised["adapt"]["last_change"]
+    assert (raised["quality"], raised["user_quality"]) == (raised_change["to_quality"], 90), raised
+    new = raised_change["report_seq"] != change["report_seq"]
+    assert raised["adapt"]["changes"] == adapt["changes"] + new, (adapted, raised)
     # The device left: the adapter goes with its session and the stream is back at the user's
     # quality for the next device.
     deadline = time.monotonic() + 10
