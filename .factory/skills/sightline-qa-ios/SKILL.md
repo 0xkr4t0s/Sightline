@@ -27,8 +27,16 @@ tools/mission/qa_ios.sh launch --motion orbit   # host + code from .mission/qa/h
 tools/mission/qa_ios.sh screenshot              # .mission/qa/ios-<timestamp>.png, upright
 tools/mission/qa_ios.sh logs 50                 # app log (os.Logger, subsystem kr8t0s.Sightline)
 tools/mission/qa_blender.sh state               # the Blender side: applied_seq rising, camera moving
+tools/mission/qa_ios.sh input lightPress        # one hardware-button press (fullPress|lightPress|volumeDown|volumeUp)
 tools/mission/qa_ios.sh terminate
 ```
+
+Hardware buttons don't reach the app in the Simulator. `input` posts the Darwin notification
+`kr8t0s.Sightline.qa.input.<button>` inside the simulator, and the app handles it like a real
+press (`SimulatorQAInput.swift`): it acts only while a run tracks with Settings closed. Full press
+shows "Recording not available (T3)" in `hud.notice`; light press focuses at the centre
+(`tap_seq`); volume down/up rack to mark A/B (`rack_seq`). UI tests post the same name with
+`notify_post` (`SightlineUITests.press(_:)`).
 
 Taps and assertions (XCUITest):
 
@@ -48,6 +56,7 @@ tools/mission/qa_ios.sh uitest -only-testing:SightlineIOSUITests/SightlineUITest
   - **Viewfinder:** `viewfinder`. Its value is the frame size and the active guides, e.g.
     `960x540; mask 2.39:1, thirds, horizon`, or `No video`.
   - **Stall badge:** `video.stalled`.
+  - **Button notice:** `hud.notice` (shows for 3 s after a press that only has a message).
   - **Settings:** `settings.*`, e.g. `settings.host`, `settings.port`, `settings.pairingCode`,
     `settings.pair`, `settings.session`, `settings.packetsSent`, `settings.setOrigin`,
     `settings.motionScale`, `settings.lockHeight`, `settings.framing.thirds`,

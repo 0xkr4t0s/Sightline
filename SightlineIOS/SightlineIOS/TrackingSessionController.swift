@@ -14,7 +14,15 @@ final class TrackingSessionController {
     var portText: String
     private(set) var selectedServiceName: String? = SelectedServiceStore.load()
     private(set) var isPairing = false
-    private(set) var isTracking = false
+    private(set) var isTracking = false {
+        didSet { updateHardwareInput() }
+    }
+    /// The Settings sheet is over the viewfinder; the hardware buttons go back to the system.
+    var settingsShown = false {
+        didSet { updateHardwareInput() }
+    }
+    /// A message a hardware button asked to show for a moment (FR-CTL-008).
+    private(set) var inputNotice: InputNotice?
     private(set) var packetsSent = 0
     /// The newest pose as sent (canonical axes, vcp.md §7), or nil before the first frame.
     private(set) var latestPose: VCPPose?
@@ -95,9 +103,16 @@ final class TrackingSessionController {
     @ObservationIgnored private var resumeWhenActive = false
     /// Whether this run has shown a viewfinder frame yet (logged once per run).
     @ObservationIgnored private var runHasVideo = false
+    /// Hardware buttons (FR-CTL-008): the capture-event interaction, installed on the viewfinder's
+    /// view, and in simulator QA runs injected presses; enabled only while the app can act.
+    @ObservationIgnored let captureEvents = CaptureEventSource()
+    @ObservationIgnored private let hardwareInput = HardwareInputController()
+    /// Connected game controllers and their locomotion intent, which drives nothing in T2.
+    @ObservationIgnored private let gameControllers = GameControllerMonitor(source: GCControllerNotificationSource())
     #if targetEnvironment(simulator) && DEBUG
     /// The launch arguments are acted on once, the first time the scene is active.
     @ObservationIgnored private var qaLaunchHandled = false
+    @ObservationIgnored private let qaInput = QAInjectedInputSource()
     #endif
 
     init(thermalProvider: (any ThermalStateProvider)? = nil) {
@@ -179,6 +194,50 @@ final class TrackingSessionController {
             self?.updateThermal(state)
         }
         source.startObserving()
+        startInputs()
+    }
+
+    private func startInputs() {
+        hardwareInput.onEvent = { [weak self] event in self?.handleInput(event) }
+        hardwareInput.add(captureEvents)
+        #if targetEnvironment(simulator) && DEBUG
+        hardwareInput.add(qaInput)
+        qaInput.start()
+        #endif
+        updateHardwareInput()
+        gameControllers.onChange = { state in
+            Log.input.info("Game controllers connected: \(state.controllers.count, privacy: .public)")
+        }
+        gameControllers.start()
+    }
+
+    private func updateHardwareInput() {
+        let wasEnabled = hardwareInput.isEnabled
+        hardwareInput.update(tracking: isTracking, settingsOpen: settingsShown)
+        guard hardwareInput.isEnabled != wasEnabled else { return }
+        Log.input.info("Hardware buttons \(self.hardwareInput.isEnabled ? "on" : "off (system)", privacy: .public)")
+    }
+
+    /// Carries out a hardware button press: a lens request the pipeline sends, or a notice.
+    private func handleInput(_ event: InputEvent) {
+        var panel = lensPanel
+        var next = controls
+        guard let outcome = InputMapper.handle(event, panel: &panel, lens: &next.lens, applied: appliedLens) else {
+            return
+        }
+        Log.input.info("Button \(String(describing: event.button), privacy: .public)")
+        switch outcome {
+        case .lens(let action):
+            commitLens(action, panel: panel, controls: next, accepted: true)
+        case .message(let text):
+            Log.input.notice("Notice: \(text, privacy: .public)")
+            inputNotice = InputNotice(text)
+        }
+    }
+
+    /// Hides `notice` unless a newer one replaced it.
+    func clearNotice(_ notice: InputNotice) {
+        if inputNotice == notice { inputNotice = nil }
     }
 
     private func updateThermal(_ state: ProcessInfo.ThermalState) {
@@ -522,6 +581,13 @@ final class TrackingSessionController {
         var panel = lensPanel
         var next = controls
         let accepted = panel.perform(action, &next.lens, applied: appliedLens)
+        commitLens(action, panel: panel, controls: next, accepted: accepted)
+    }
+
+    /// Keeps the panel and controls a lens request left and logs an accepted tap or rack.
+    private func commitLens(
+        _ action: LensAction, panel: LensPanelModel, controls next: DeviceControls, accepted: Bool
+    ) {
         lensPanel = panel
         controls = next
         guard accepted else { return }
@@ -530,7 +596,7 @@ final class TrackingSessionController {
             Log.lens.info(
                 "Tap focus u=\(u, format: .fixed(precision: 3), privacy: .public) v=\(v, format: .fixed(precision: 3), privacy: .public)"
             )
-        case .rack:
+        case .rack, .rackTo:
             let target = next.lens.rack.target == VCPRackFocus.targetA ? "A" : "B"
             Log.lens.info(
                 "Rack to \(target, privacy: .public) over \(next.lens.rack.durationMS, privacy: .public) ms")

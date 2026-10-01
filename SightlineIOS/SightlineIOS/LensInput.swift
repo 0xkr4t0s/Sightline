@@ -114,6 +114,8 @@ nonisolated enum LensAction: Equatable, Sendable {
     case mark(UInt8)
     /// Rack A↔B over the chosen duration.
     case rack
+    /// Rack to mark A or B (`VCPRackFocus.targetA`/`targetB`) over the chosen duration.
+    case rackTo(UInt8)
     case rackDuration(longer: Bool)
 }
 
@@ -179,6 +181,7 @@ nonisolated struct LensPanelModel: Equatable, Sendable {
         case let .tap(u, v): return tap(u: u, v: v, &lens)
         case .mark(let target): return setMark(target, &lens, applied: applied)
         case .rack: return rack(&lens, applied: applied) != nil
+        case .rackTo(let target): return rack(to: target, &lens)
         case .rackDuration(let longer): stepRackDuration(longer: longer)
         }
         return true
@@ -227,6 +230,14 @@ nonisolated struct LensPanelModel: Equatable, Sendable {
         else { return nil }
         pending.remove(.focus)
         return target
+    }
+
+    /// Racks to mark `target` over `rackDurationMS`; false, and nothing changes, if that mark
+    /// isn't set.
+    mutating func rack(to target: UInt8, _ lens: inout LensControls) -> Bool {
+        guard lens.startRack(to: target, durationMS: rackDurationMS) else { return false }
+        pending.remove(.focus)
+        return true
     }
 
     mutating func stepRackDuration(longer: Bool) {

@@ -1,4 +1,5 @@
 import XCTest
+import notify
 
 /// Drives the app as a user would, in the Simulator. `testStatusScreenAndSettings` needs nothing
 /// else; `testStreamsFromBlenderHost` runs against a Blender host started with a Sightline session
@@ -464,6 +465,156 @@ final class SightlineUITests: XCTestCase {
         expect(element(app, "hud.lens"), NSPredicate(format: "value CONTAINS ' · f/2 · '"), timeout: 10)
         print("LENS_RESTART camera \(camera(after)) controls \(controls(after))")
         attachScreenshot(app, "2 lens after restart")
+    }
+
+    // MARK: - Hardware buttons (FR-CTL-008)
+
+    /// VAL-INPUT-007 / VAL-CROSS-015 / VAL-INPUT-008 / VAL-CROSS-014, through the simulator QA
+    /// hook (the Simulator delivers no hardware buttons): record shows a notice and changes
+    /// nothing, a light press focuses at the centre, volume up and down rack to B and A, and with
+    /// Settings open presses do nothing, then work again once it closes.
+    func testHardwareButtonsActOnTheHost() throws {
+        let app = try launchStreaming(motion: "still")
+        let notice = element(app, "hud.notice")
+        let seqKeys = ["state_seq", "tap_seq", "rack_seq"]
+        func seqs() -> [Int] { seqKeys.map { controls(hostState() ?? [:])[$0] as? Int ?? -1 } }
+
+        // A wide lens and a far focus, so focusing on the centre changes the focus.
+        openLensPanel(app)
+        app.buttons["lens.prime.24"].tap()
+        waitForLens(app, focal: 24)
+        openLensPanel(app)
+        dragWheel(element(app, "lens.focus"), farther: true) { $0 >= 4 }
+        waitForLens(app, "a far focus from the wheel") { $0.focus >= 4 }
+        closeLensPanel(app)
+
+        // VAL-INPUT-007: record shows the notice; Blender's controls stay as they were.
+        let beforeRecord = hostDirectory.map { _ in seqs() }
+        press("fullPress")
+        XCTAssertTrue(notice.waitForExistence(timeout: 3), "the record notice shows")
+        XCTAssertEqual(notice.value as? String, "Recording not available (T3)")
+        attachScreenshot(app, "1 record not available")
+        if let beforeRecord {
+            sleep(1)
+            XCTAssertEqual(seqs(), beforeRecord, "recording sends nothing")
+        }
+        XCTAssertTrue(notice.waitForNonExistence(timeout: 6), "the notice goes")
+
+        // VAL-CROSS-015: a light press is a tap at the centre of the frame.
+        let farFocus = hudLens(app)?.focus
+        let tapSeq = hostDirectory.flatMap { _ in controls(hostState() ?? [:])["tap_seq"] as? Int }
+        press("lightPress")
+        let centre = try XCTUnwrap(waitForLens(app, "focus at the centre") { $0.focus != farFocus }).focus
+        if let tapSeq {
+            let host = waitForHost("a centre tap") { controls($0)["tap_seq"] as? Int == tapSeq + 1 }
+            XCTAssertEqual(controls(host)["tap_u"] as? Double, 0.5)
+            XCTAssertEqual(controls(host)["tap_v"] as? Double, 0.5)
+            let hit = try XCTUnwrap((host["focus"] as? [String: Any])?["last_tap"] as? [Any])
+            let distance = try XCTUnwrap(hit.first as? Double)
+            let focus = try XCTUnwrap(camera(host)["focus_distance"] as? Double)
+            XCTAssertEqual(focus, distance, accuracy: 1e-6, "Blender focuses at what the centre ray hits")
+            XCTAssertEqual(centre, focus, accuracy: 0.006, "hud.lens shows Blender's focus")
+            print("INPUT_LIGHT_PRESS focus \(focus) m on \(hit.last ?? "nil")")
+        }
+        attachScreenshot(app, "2 light press focuses at the centre")
+
+        // Far mark B, near mark A.
+        openLensPanel(app)
+        let wheel = element(app, "lens.focus")
+        let far = dragWheel(wheel, farther: true) { $0 >= 4 }
+        app.buttons["lens.setB"].tap()
+        wait(for: app.buttons["lens.setB"], value: String(format: "%.2f m", far))
+        let near = dragWheel(wheel, farther: false) { $0 <= 1.5 }
+        app.buttons["lens.setA"].tap()
+        wait(for: app.buttons["lens.setA"], value: String(format: "%.2f m", near))
+        closeLensPanel(app)
+        waitForLens(app, "Blender at the near mark") { abs($0.focus - Double(near)) < 0.006 }
+
+        // VAL-INPUT-008: volume up racks to B, volume down back to A, each a new rack.
+        var rackSeq = hostDirectory.flatMap { _ in controls(hostState() ?? [:])["rack_seq"] as? Int }
+        press("volumeUp")
+        let toB = focusSeries(seconds: 3.2)
+        waitForLens(app, "racked to B") { abs($0.focus - Double(far)) < 0.006 }
+        if let seq = rackSeq {
+            XCTAssertEqual(controls(hostState() ?? [:])["rack_seq"] as? Int, seq + 1, "volume up starts a rack")
+            XCTAssertEqual(controls(hostState() ?? [:])["rack_target"] as? Int, 2, "to B (vcp.md rack target 2)")
+            assertRack(toB, from: Double(near), to: Double(far))
+            rackSeq = seq + 1
+        }
+        attachScreenshot(app, "3 volume up racked to B")
+        press("volumeDown")
+        let toA = focusSeries(seconds: 3.2)
+        waitForLens(app, "racked to A") { abs($0.focus - Double(near)) < 0.006 }
+        if let seq = rackSeq {
+            XCTAssertEqual(controls(hostState() ?? [:])["rack_seq"] as? Int, seq + 1, "volume down starts a rack")
+            XCTAssertEqual(controls(hostState() ?? [:])["rack_target"] as? Int, 1, "to A (vcp.md rack target 1)")
+            assertRack(toA, from: Double(far), to: Double(near))
+        }
+        print("INPUT_RACK near \(near) far \(far) toB \(toB.count) samples, toA \(toA.count) samples")
+
+        // VAL-CROSS-014: with Settings open the buttons do nothing, and nothing waits for later.
+        showControls(app)
+        app.buttons["control.settings"].tap()
+        XCTAssertTrue(app.buttons["settings.done"].waitForExistence(timeout: 10))
+        let beforeSettings = hostDirectory.map { _ in seqs() }
+        press("volumeUp")
+        press("fullPress")
+        sleep(2)
+        attachScreenshot(app, "4 buttons while settings open")
+        XCTAssertFalse(notice.exists, "no notice with Settings open")
+        if let beforeSettings {
+            XCTAssertEqual(seqs(), beforeSettings, "no rack and no control change with Settings open")
+        }
+        app.buttons["settings.done"].tap()
+        XCTAssertTrue(app.buttons["settings.done"].waitForNonExistence(timeout: 10))
+        sleep(1)
+        XCTAssertFalse(notice.exists, "a press made with Settings open doesn't show later")
+        XCTAssertEqual(hudLens(app)?.focus ?? -1, Double(near), accuracy: 0.006, "still at A")
+        if let beforeSettings {
+            XCTAssertEqual(seqs(), beforeSettings, "nothing was queued while Settings was open")
+        }
+
+        press("volumeUp")
+        waitForLens(app, "racked to B after Settings closed") { abs($0.focus - Double(far)) < 0.006 }
+        if let beforeSettings {
+            XCTAssertEqual(seqs()[2], beforeSettings[2] + 1, "the same press works once Settings closes")
+        }
+        press("fullPress")
+        XCTAssertTrue(notice.waitForExistence(timeout: 3), "the record notice shows again")
+        attachScreenshot(app, "5 buttons work after settings closed")
+    }
+
+    /// One press through the simulator QA hook: the app turns the notification into a press
+    /// (began, ended) from the named button (SimulatorQAInput.swift).
+    private func press(_ button: String) {
+        XCTAssertEqual(notify_post("kr8t0s.Sightline.qa.input.\(button)"), UInt32(NOTIFY_STATUS_OK))
+    }
+
+    /// Blender's focus distance each time it changes over `seconds`, from `state.json`; empty
+    /// without the harness.
+    private func focusSeries(seconds: TimeInterval) -> [Double] {
+        guard hostDirectory != nil else { return [] }
+        var series: [Double] = []
+        let start = Date()
+        while Date().timeIntervalSince(start) < seconds {
+            if let focus = camera(hostState() ?? [:])["focus_distance"] as? Double, series.last != focus {
+                series.append(focus)
+            }
+            usleep(100_000)
+        }
+        return series
+    }
+
+    /// A smooth rack that runs one way and ends at `to`.
+    private func assertRack(
+        _ series: [Double], from: Double, to: Double, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let (low, high) = (min(from, to), max(from, to))
+        let between = series.filter { $0 > low + 0.01 && $0 < high - 0.01 }
+        XCTAssertGreaterThanOrEqual(between.count, 5, "a smooth rack, not a jump: \(series)", file: file, line: line)
+        XCTAssertEqual(
+            series, from < to ? series.sorted() : series.sorted(by: >), "one way: \(series)", file: file, line: line)
+        XCTAssertEqual(series.last ?? -1, to, accuracy: 0.006, "ends at the mark: \(series)", file: file, line: line)
     }
 
     // MARK: - Helpers
