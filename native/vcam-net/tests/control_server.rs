@@ -562,11 +562,16 @@ fn stop_closes_active_and_idle_connections_and_releases_both_ports() {
         t.elapsed()
     );
     let mut buf = [0u8; 1];
-    assert_eq!(
-        idle.0.read(&mut buf).unwrap(),
-        0,
-        "connection must be closed"
-    );
+    // Closed either way: a FIN if the accept loop had taken the connection, a reset if it was
+    // still in the listener's backlog when stop closed the listener (macOS, on a loaded runner).
+    match idle.0.read(&mut buf) {
+        Ok(n) => assert_eq!(n, 0, "connection must be closed"),
+        Err(e) => assert_eq!(
+            e.kind(),
+            std::io::ErrorKind::ConnectionReset,
+            "connection must be closed: {e}"
+        ),
+    }
     assert!(
         TcpStream::connect(server.local_addr()).is_err(),
         "listener must be closed"
