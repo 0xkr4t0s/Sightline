@@ -3,6 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test code: a panic is a test failure
 
 use std::net::UdpSocket;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -12,15 +13,21 @@ use vcam_net::{
 use vcam_protocol::{Clock, ControlState, Endpoint, Message, Pose, Role};
 
 const SID: u32 = 0x1234_ABCD;
-const K_D2H: [u8; 32] = [0x11; 32];
-const K_H2D: [u8; 32] = [0x22; 32];
+/// Session keys drawn once per test process, so host and device share them; no fixed key in
+/// the source.
+static KEYS: LazyLock<([u8; 32], [u8; 32])> = LazyLock::new(|| {
+    let (mut d2h, mut h2d) = ([0u8; 32], [0u8; 32]);
+    getrandom::fill(&mut d2h).unwrap();
+    getrandom::fill(&mut h2d).unwrap();
+    (d2h, h2d)
+});
 
 fn host(session_id: u32) -> Endpoint {
-    Endpoint::new(Role::Host, session_id, &K_D2H, &K_H2D).unwrap()
+    Endpoint::new(Role::Host, session_id, &KEYS.0, &KEYS.1).unwrap()
 }
 
 fn device(session_id: u32) -> Endpoint {
-    Endpoint::new(Role::Device, session_id, &K_D2H, &K_H2D).unwrap()
+    Endpoint::new(Role::Device, session_id, &KEYS.0, &KEYS.1).unwrap()
 }
 
 fn start() -> UdpReceiver {

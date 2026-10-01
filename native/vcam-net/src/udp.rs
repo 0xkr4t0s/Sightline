@@ -926,8 +926,17 @@ mod tests {
 
     use super::*;
 
+    /// Session keys drawn once per test process, so both roles share them; no fixed key in the
+    /// source.
+    static KEYS: std::sync::LazyLock<([u8; 32], [u8; 32])> = std::sync::LazyLock::new(|| {
+        let (mut d2h, mut h2d) = ([0u8; 32], [0u8; 32]);
+        getrandom::fill(&mut d2h).unwrap();
+        getrandom::fill(&mut h2d).unwrap();
+        (d2h, h2d)
+    });
+
     fn endpoint(role: Role, session_id: u32) -> Endpoint {
-        Endpoint::new(role, session_id, &[0x11; 32], &[0x22; 32]).unwrap()
+        Endpoint::new(role, session_id, &KEYS.0, &KEYS.1).unwrap()
     }
 
     fn pose_datagram(session_id: u32, seq: u32) -> Vec<u8> {
