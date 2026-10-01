@@ -36,6 +36,12 @@ tools/mission/qa_blender.sh stop                     # always stop when done; it
   lens flags `--lens MM`, `--focus M`, `--fstop F`, `--dof 0|1`, `--tap U,V[@FRAME]` and
   `--rack A,B,TARGET,MS[@FRAME]` (TARGET A or B; tap/rack default to frame 60, after a baseline
   sequence 0 in the first state).
+- Impaired or long runs: `--loss PCT` drops outgoing and incoming datagrams, `--jitter MS` delays
+  each outgoing one by a uniform 0..MS, `--seed N` repeats the same decisions (default random),
+  and `--duration S` loops the script for S seconds. `FAKE_IPHONE_DONE` then also shows
+  `loss_pct jitter_ms seed udp_out dropped_out delayed udp_in dropped_in`. With 2 % loss, about
+  a quarter of the viewfinder frames are lost (each frame is ~13 fragments), and the host's
+  adaptation lowers the stream.
 - To inspect a device that is still connected, run `drive` with a long `--linger` in the
   background, then poll `state` while it runs.
 - Commands: `ping`, `state`, `pair`, `cancel_pair`, `set` (any `vcam_props` scene property, or

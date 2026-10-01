@@ -126,6 +126,28 @@ def now_iso() -> str:
     return datetime.datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 
+def autorelease_pool_hooks():
+    """(push, pop) of the Objective-C autorelease pool on macOS, (None, None) elsewhere.
+
+    In the GUI, Blender runs timers (the add-on's poll) between GPU_render_begin/end
+    (wm_window_events_process), which on Metal drain the autorelease pool every main-loop pass.
+    This loop never returns to WM_main, so without its own pool every streamed frame's Metal
+    command buffers stay alive (RSS grew ~6.4 MiB/min while streaming).
+    """
+    if sys.platform != "darwin":
+        return None, None
+    import ctypes
+    import ctypes.util
+
+    try:
+        objc = ctypes.CDLL(ctypes.util.find_library("objc"))
+    except OSError:
+        return None, None
+    objc.objc_autoreleasePoolPush.restype = ctypes.c_void_p
+    objc.objc_autoreleasePoolPop.argtypes = [ctypes.c_void_p]
+    return objc.objc_autoreleasePoolPush, objc.objc_autoreleasePoolPop
+
+
 def resolve(path: str) -> str:
     return os.path.abspath(os.path.join(ROOT, os.path.expanduser(path)))
 
@@ -482,12 +504,17 @@ class Host:
     def run(self) -> None:
         session = self.session
         next_cmd = next_state = 0.0
+        pool_push, pool_pop = autorelease_pool_hooks()
         while not self.stopping:
             tick = time.monotonic()
+            pool = pool_push() if pool_push else None
             try:
                 session._poll()  # the add-on's timer body: events, pose apply, stream render
             except Exception as e:  # noqa: BLE001 - keep hosting; the error is in state.json
                 self.error("poll", e)
+            finally:
+                if pool_pop:
+                    pool_pop(pool)
             poll_ms = (time.monotonic() - tick) * 1e3
             self.poll_ms_last, self.poll_ms_max = poll_ms, max(self.poll_ms_max, poll_ms)
             self.ticks += 1

@@ -9,6 +9,8 @@
 //! The T2 lens flags (task 2.4, `src/lens.rs`) send focal length, focus distance, f-stop, DoF,
 //! one tap-to-focus and one A/B rack request; `FAKE_IPHONE_DONE` reports the applied lens from
 //! the host's newest `STATUS` with the horizontal FOV and 35 mm equivalent derived from it.
+//! For soak runs (task 2.7, `src/impair.rs`) `--loss`/`--jitter`/`--seed` impair its UDP traffic
+//! without `tc netem`, and `--duration` loops the script for that many seconds.
 //!
 //! ```text
 //! vcam-fake-iphone --host 127.0.0.1:47000 --state DIR/fake-iphone.key [--code 123456]
@@ -18,6 +20,7 @@
 //!                  [--lens MM] [--focus M] [--fstop F] [--dof 0|1]
 //!                  [--tap U,V[@FRAME]] [--rack A,B,TARGET,MS[@FRAME]]
 //!                  [--limited FROM-TO] [--video-out PATH] [--m2p MS]
+//!                  [--loss PCT] [--jitter MS] [--seed N] [--duration SECONDS]
 //! ```
 //! `--tap`/`--rack` default to frame 60; TARGET is A or B. Prints `FAKE_IPHONE_PAIRED`,
 //! `FAKE_IPHONE_SESSION ...` and a final `FAKE_IPHONE_DONE ...` line on stdout. Any failure exits 1 with the reason on stderr.
@@ -31,6 +34,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+mod impair;
 mod lens;
 
 use vcam_protocol::{
@@ -88,6 +92,9 @@ struct Args {
     /// `VIDEO_REPORT.m2p_p95_ms` (0 = not measured).
     m2p: u16,
     lens: lens::LensArgs,
+    impair: impair::ImpairArgs,
+    /// Send poses for this long, looping the script, instead of one pass.
+    duration: Option<Duration>,
 }
 
 fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
@@ -103,10 +110,14 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
     let (mut scale, mut locks, mut set_origin_at, mut limited) = (1.0f32, 0u8, None, 0..0);
     let (mut thermal, mut thermal_at) = (0u8, None);
     let (mut video_out, mut m2p) = (None, 0u16);
-    let mut lens = lens::LensArgs::default();
+    let (mut lens, mut impair, mut duration) = (
+        lens::LensArgs::default(),
+        impair::ImpairArgs::default(),
+        None,
+    );
     while let Some(flag) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("{flag} needs a value"));
-        if lens.parse(&flag, || Ok(value()?))? {
+        if lens.parse(&flag, || Ok(value()?))? || impair.parse(&flag, || Ok(value()?))? {
             continue;
         }
         match flag.as_str() {
@@ -122,6 +133,13 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
                 rate = Some(hz);
             }
             "--linger" => linger = Duration::try_from_secs_f64(value()?.parse()?)?,
+            "--duration" => {
+                let d = Duration::try_from_secs_f64(value()?.parse()?)?;
+                if d.is_zero() {
+                    return Err("--duration must be > 0".into());
+                }
+                duration = Some(d);
+            }
             "--name" => name = value()?,
             "--scale" => {
                 let v: f32 = value()?.parse()?;
@@ -179,6 +197,8 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
         video_out,
         m2p,
         lens,
+        impair,
+        duration,
     })
 }
 
@@ -358,9 +378,46 @@ struct Stream {
     /// `report_seq` of the last `VIDEO_REPORT` sent (0 = none yet).
     report_seq: u32,
     last_report: Option<Instant>,
+    impair: impair::Impairment,
 }
 
 impl Stream {
+    fn new(udp: UdpSocket, keys: &SessionKeys, args: &Args) -> Result<Self> {
+        let mut control = ControlState {
+            state_seq: 1,
+            motion_scale: Some(args.scale),
+            lock_flags: Some(args.locks),
+            origin_epoch: Some(0),
+            thermal_state: Some(if args.thermal_at.is_some() {
+                0
+            } else {
+                args.thermal
+            }),
+            ..ControlState::default()
+        };
+        args.lens.initial(&mut control);
+        Ok(Self {
+            udp,
+            endpoint: Endpoint::new(Role::Device, keys.session_id, &keys.k_d2h, &keys.k_h2d)
+                .ok_or("invalid session id")?,
+            epoch: Instant::now(),
+            out: Vec::with_capacity(MAX_DATAGRAM),
+            buf: [0; MAX_DATAGRAM + 1],
+            poses: 0,
+            clock_replies: 0,
+            status: None,
+            last_control: None,
+            control,
+            video: Reassembler::new(),
+            last_video: None,
+            video_out: args.video_out.clone(),
+            m2p: args.m2p,
+            report_seq: 0,
+            last_report: None,
+            impair: args.impair.build(u64::from_le_bytes(random()?)),
+        })
+    }
+
     fn device_ns(&self) -> u64 {
         u64::try_from(self.epoch.elapsed().as_nanos()).unwrap_or(u64::MAX) + DEVICE_CLOCK_OFFSET_NS
     }
@@ -368,7 +425,32 @@ impl Stream {
     fn send(&mut self, msg: &Message) -> Result<()> {
         self.out.clear();
         self.endpoint.seal(msg, &mut self.out).map_err(dbg_err)?;
-        self.udp.send(&self.out)?;
+        match self.impair.outgoing() {
+            impair::Fate::Drop => {}
+            impair::Fate::Now => {
+                self.udp.send(&self.out)?;
+            }
+            impair::Fate::After(delay) => {
+                self.impair.hold(Instant::now() + delay, self.out.clone());
+            }
+        }
+        Ok(())
+    }
+
+    /// Sends every held datagram that is due.
+    fn flush_due(&mut self) -> Result<()> {
+        while let Some(datagram) = self.impair.pop_due(Instant::now()) {
+            self.udp.send(&datagram)?;
+        }
+        Ok(())
+    }
+
+    /// Waits until every held datagram has gone out, answering the host meanwhile.
+    fn drain_held(&mut self) -> Result<()> {
+        while let Some(due) = self.impair.next_due() {
+            self.service(due)?;
+            self.flush_due()?;
+        }
         Ok(())
     }
 
@@ -420,15 +502,19 @@ impl Stream {
         Ok(())
     }
 
-    /// Answers host datagrams until `until`.
+    /// Answers host datagrams until `until`, sending held datagrams as they fall due.
     fn service(&mut self, until: Instant) -> Result<()> {
         loop {
+            self.flush_due()?;
             let now = Instant::now();
             if now >= until {
                 return Ok(());
             }
-            self.udp
-                .set_read_timeout(Some((until - now).max(Duration::from_millis(1))))?;
+            let wake = self.impair.next_due().map_or(until, |due| due.min(until));
+            self.udp.set_read_timeout(Some(
+                wake.saturating_duration_since(now)
+                    .max(Duration::from_millis(1)),
+            ))?;
             let n = match self.udp.recv(&mut self.buf) {
                 Ok(n) => n,
                 Err(e)
@@ -437,12 +523,15 @@ impl Stream {
                         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                     ) =>
                 {
-                    return Ok(());
+                    continue;
                 }
                 // A closed host port surfaces as ConnectionRefused on some OSes; keep going.
                 Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => continue,
                 Err(e) => return Err(e.into()),
             };
+            if self.impair.incoming_dropped() {
+                continue;
+            }
             let t2 = self.device_ns();
             match self.endpoint.open(self.buf.get(..n).unwrap_or_default()) {
                 Ok(Message::Clock(Clock::Request { t1 })) => {
@@ -475,6 +564,13 @@ impl Stream {
             }
         }
     }
+}
+
+/// Poses to send: one pass over the script, or enough to last `duration` at `rate` Hz.
+fn pose_count(duration: Option<Duration>, rate: f64, frames: usize) -> usize {
+    duration.map_or(frames, |d| {
+        ((d.as_secs_f64() * rate).ceil() as usize).max(1)
+    })
 }
 
 /// Local address for the UDP socket. For a loopback host this is the loopback address itself:
@@ -517,40 +613,11 @@ fn run(args: &Args) -> Result<String> {
 
     let udp = UdpSocket::bind(udp_bind_addr(args.host.ip()))?;
     udp.connect(SocketAddr::new(args.host.ip(), udp_port))?;
-    let mut s = Stream {
-        udp,
-        endpoint: Endpoint::new(Role::Device, keys.session_id, &keys.k_d2h, &keys.k_h2d)
-            .ok_or("invalid session id")?,
-        epoch: Instant::now(),
-        out: Vec::with_capacity(MAX_DATAGRAM),
-        buf: [0; MAX_DATAGRAM + 1],
-        poses: 0,
-        clock_replies: 0,
-        status: None,
-        last_control: None,
-        control: ControlState {
-            state_seq: 1,
-            motion_scale: Some(args.scale),
-            lock_flags: Some(args.locks),
-            origin_epoch: Some(0),
-            thermal_state: Some(if args.thermal_at.is_some() {
-                0
-            } else {
-                args.thermal
-            }),
-            ..ControlState::default()
-        },
-        video: Reassembler::new(),
-        last_video: None,
-        video_out: args.video_out.clone(),
-        m2p: args.m2p,
-        report_seq: 0,
-        last_report: None,
-    };
-    args.lens.initial(&mut s.control);
+    let mut s = Stream::new(udp, &keys, args)?;
     let period = Duration::from_secs_f64(1.0 / rate);
     let mut next = Instant::now();
-    for (i, (position_m, orientation)) in motion.frames.iter().enumerate() {
+    let poses = pose_count(args.duration, rate, motion.frames.len());
+    for (i, (position_m, orientation)) in motion.frames.iter().cycle().take(poses).enumerate() {
         s.service(next)?;
         s.change_controls_at(args, i);
         s.control_due()?;
@@ -577,6 +644,7 @@ fn run(args: &Args) -> Result<String> {
         s.control_due()?;
         s.report_due()?;
     }
+    s.drain_held()?;
     drop(tcp); // closing TCP ends the session on the host
     let status = s.status.unwrap_or(Status {
         status_seq: 0,
@@ -590,7 +658,7 @@ fn run(args: &Args) -> Result<String> {
     let video = s.video.stats();
     let (last, last_len) = s.last_video.unzip();
     Ok(format!(
-        "FAKE_IPHONE_DONE session_id={} poses={} clock_replies={} status_seq={} applied_pose_seq={} control_ack={} video_frames={} video_lost={} video_last_id={} video_last_len={} video_last_pose_seq={} video_reports={}{} camera={}",
+        "FAKE_IPHONE_DONE session_id={} poses={} clock_replies={} status_seq={} applied_pose_seq={} control_ack={} video_frames={} video_lost={} video_last_id={} video_last_len={} video_last_pose_seq={} video_reports={}{}{} camera={}",
         keys.session_id,
         s.poses,
         s.clock_replies,
@@ -603,6 +671,7 @@ fn run(args: &Args) -> Result<String> {
         last_len.unwrap_or(0),
         last.map_or(0, |f| f.pose_seq),
         s.report_seq,
+        s.impair.summary(),
         lens::applied_summary(status.applied_lens.as_ref()),
         status.camera_name
     ))
@@ -616,8 +685,9 @@ fn main() -> ExitCode {
     }
     if argv.peek().is_some_and(|a| a == "--help") {
         println!(
-            "vcam-fake-iphone --host HOST --state PATH --motion PATH [--code CODE] [--thermal N (0..3)] [--thermal-at FRAME[:N]] [--rate HZ] [--linger SECONDS] {}\n  --tap/--rack default to frame {}; TARGET is A or B",
+            "vcam-fake-iphone --host HOST --state PATH --motion PATH [--code CODE] [--thermal N (0..3)] [--thermal-at FRAME[:N]] [--rate HZ] [--linger SECONDS] [--duration SECONDS] {} {}\n  --tap/--rack default to frame {}; TARGET is A or B\n  --duration loops the motion script for that long (default: one pass)\n  --loss drops outgoing and incoming datagrams with probability PCT/100; --jitter delays each outgoing datagram by a uniform 0..MS (reordering allowed); --seed makes both repeatable (default: random, printed in FAKE_IPHONE_DONE)",
             lens::USAGE,
+            impair::USAGE,
             lens::DEFAULT_REQUEST_FRAME
         );
         return ExitCode::SUCCESS;
@@ -678,6 +748,18 @@ mod tests {
         assert_eq!(
             args(&["--thermal-at", "60:4"]).unwrap_err().to_string(),
             "--thermal must be in [0, 3]"
+        );
+    }
+
+    #[test]
+    fn duration_loops_the_script_for_rate_times_seconds() {
+        assert_eq!(pose_count(None, 60.0, 390), 390);
+        assert_eq!(pose_count(Some(Duration::from_secs(10)), 60.0, 390), 600);
+        assert_eq!(pose_count(Some(Duration::from_millis(1010)), 60.0, 390), 61);
+        assert_eq!(pose_count(Some(Duration::from_millis(1)), 60.0, 390), 1);
+        assert_eq!(
+            pose_count(Some(Duration::from_secs(7200)), 60.0, 390),
+            432_000
         );
     }
 

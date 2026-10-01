@@ -9,9 +9,10 @@ Before pasting any log below into an issue, PR or `docs/LOOP_LOG.md`, redact per
 
 ## CI (`.github/workflows/ci.yml`)
 
-CI runs on pull requests once they are ready for review, and on `workflow_dispatch`. There is
-no push run on `main`. Read a failed run with `gh pr checks <n>`, then
-`gh run view <run-id> --log-failed`.
+CI runs on pull requests once they are ready for review, on `workflow_dispatch`, and weekly on
+`main` (Sundays 03:17 UTC). There is no push run on `main`. Read a failed run with
+`gh pr checks <n>`, then `gh run view <run-id> --log-failed`. The scheduled run and a manual
+dispatch also run the 2-hour `soak` job; dispatch with `soak_minutes` 0 to skip it.
 
 | Job | What usually breaks | What to do |
 | --- | --- | --- |
@@ -22,6 +23,7 @@ no push run on `main`. Read a failed run with `gh pr checks <n>`, then
 | `wheels` | NASM missing (Windows uses Chocolatey, manylinux uses `dnf` in `before-script-linux`), or a maturin version change. | Check the "Install NASM" step output and the `nasm -v` line in the maturin log. `MATURIN_VERSION` is pinned in `ci.yml`. |
 | `extension` | `tools/set_manifest_wheels.py` can't match a wheel, or `blender --command extension build` rejects the manifest. | Run both commands locally against the downloaded `wheel-*` artifacts. |
 | `blender-smoke` (per OS) | A `tests/blender/*.py` script exits non-zero. Each script prints a `VCAM_*_OK` line on success. | Find the last `::group::` before the failure and reproduce locally with `BLENDER_TESTS="<script>" tools/mission/check.sh blender`. Only the platform zip for that OS is installed (`vcam_blender-*-<platform>.zip`). |
+| `soak` (schedule and dispatch only, not in `ci-ok`) | `sudo tc qdisc add dev lo root netem loss 2% delay 10ms 10ms` fails with an unknown qdisc (the step then installs `linux-modules-extra-$(uname -r)`), or a verdict in `tools/soak/run_soak.py` fails: no_crash, rss_bounded, handles_bounded or latency_bounded. | The job summary lists the verdicts; the `soak-report` artifact has the report (samples, thresholds, reasons) and `qa-host.log`. Reproduce locally without netem: `tools/mission/setup.sh && tools/soak/run_soak.py --duration 600 --no-video` (the fake iPhone adds 2 % loss and 10 ms jitter itself). |
 | `python` | ruff lint or format, mypy (strict, on the files listed in `pyproject.toml`), `BlenderAddOn/tests` failures (random order: the run prints `Using --randomly-seed=N`), coverage under `fail_under`, or golden vectors that are out of date. | `tools/mission/check.sh python` runs the same steps; `.venv.nosync/bin/ruff format .` fixes formatting. Rerun an order-dependent failure with `.venv.nosync/bin/pytest --randomly-seed=N`. For vectors: `python tools/gen_testdata.py --check`. If it reports drift, regenerate with the same script and review the vector diff: `testdata/` is the source of truth for Rust, Swift and Python. |
 | `ios` | swift-format lint (fix with `xcrun swift-format -i --configuration .swift-format -r SightlineIOS`), app line coverage under 75 % (`SightlineIOS/scripts/coverage_check.sh <xcresult>` lists files), a UI test in `SightlineIOSUITests` (the Blender-host test skips in CI; reproduce with `tools/mission/qa_ios.sh uitest`), or unit test failures on the `xcode-27` runner. Timing tests are sensitive: on the CI simulator, Network sometimes reports a refused connection only after the 2 s attempt timeout (the NET-004 reconnect test). | Download the `ios-xcresult` artifact and open it in Xcode (`open xcresult/debug.xcresult`). Crash logs of a test process that died exist only there. Collecting simulator diagnostics can take about 10 minutes after a failure. |
 | `ci-ok` | Fails whenever any job didn't succeed, including skipped jobs. | A failed `ci-ok` on a **draft** run is expected: every job is skipped. Mark the PR ready (`gh pr ready`) and look at the new run. Draft and ready runs are in separate concurrency groups, so the draft run doesn't cancel the real one. |

@@ -446,6 +446,107 @@ fn lens_controls_reach_the_host_and_the_applied_lens_is_reported() {
 }
 
 #[test]
+fn impaired_long_run_loses_about_the_requested_share_and_controls_still_converge() {
+    let server = server();
+    let scratch = Scratch::new("impair");
+    let code = server.enable_pairing().unwrap();
+    // 3 s at 2000 Hz loops the 390-frame script into 6000 poses; Set origin at pose 3000 is a
+    // second control state that must be acknowledged despite 2 % loss both ways.
+    let args = [
+        "--rate",
+        "2000",
+        "--duration",
+        "3",
+        "--linger",
+        "1.5",
+        "--loss",
+        "2",
+        "--jitter",
+        "10",
+        "--seed",
+        "1",
+        "--set-origin-at",
+        "3000",
+    ];
+    let child = spawn(&server, &scratch.state(), Some(&code), &args);
+    let (mut last_pose, mut states, mut host_poses) = (None, Vec::new(), (0, 0));
+    let out = drive(child, || {
+        last_pose = server.latest_pose().or(last_pose);
+        let stats = server.stats();
+        // The host's counters reset when the session ends; keep the last live values.
+        if stats.poses_applied > 0 {
+            host_poses = (stats.poses_applied, stats.poses_stale);
+        }
+        let (Some(c), Some(session_id)) = (server.latest_control(), stats.session_id) else {
+            return;
+        };
+        if states.last() != Some(&c.state.state_seq) {
+            states.push(c.state.state_seq);
+        }
+        let status = HostStatus {
+            applied_pose_seq: 0,
+            control_ack: c.state.state_seq,
+            error_code: 0,
+            camera_name: Some("Cam".into()),
+            applied_lens: None,
+        };
+        let _ = server.update_status(session_id, status); // the session may just have ended
+    });
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    println!("{stdout}");
+    assert_eq!(field(&stdout, "poses"), 6000, "{stdout}");
+    assert!(
+        last_pose.unwrap().pose.seq > 5900,
+        "the looped script kept going"
+    );
+    assert_eq!(
+        (
+            field(&stdout, "loss_pct"),
+            field(&stdout, "jitter_ms"),
+            field(&stdout, "seed")
+        ),
+        (2, 10, 1)
+    );
+    let (sent, dropped, delayed) = (
+        field(&stdout, "udp_out"),
+        field(&stdout, "dropped_out"),
+        field(&stdout, "delayed"),
+    );
+    assert!(sent >= 6000, "{stdout}");
+    let pct = 100.0 * dropped as f64 / sent as f64;
+    assert!((1.0..=3.0).contains(&pct), "send loss {pct} %: {stdout}");
+    // Almost every surviving datagram is held for 0..10 ms (0 exactly goes out at once).
+    assert!(
+        delayed <= sent - dropped && delayed * 100 > (sent - dropped) * 99,
+        "{stdout}"
+    );
+    // What reached the host: about 2 % of the poses are missing, and the 0..10 ms delays at a
+    // 0.5 ms pose period reorder many of the rest (older ones arrive late and are stale).
+    let (applied, stale) = host_poses;
+    let host_loss = 100.0 * (6000 - (applied + stale)) as f64 / 6000.0;
+    println!("host: {applied} applied, {stale} stale, {host_loss:.2} % missing");
+    assert!((1.0..=3.0).contains(&host_loss), "host saw {host_poses:?}");
+    assert!(stale > 100, "no reordering: {host_poses:?}");
+    let (received, dropped_in) = (field(&stdout, "udp_in"), field(&stdout, "dropped_in"));
+    assert!(received > 0 && dropped_in < received, "{stdout}");
+    // Resends every 500 ms get the newest state through and acknowledged.
+    assert_eq!(states, [1, 2], "{stdout}");
+    assert_eq!(field(&stdout, "control_ack"), 2, "{stdout}");
+
+    let out = drive(
+        spawn(&server, &scratch.state(), None, &["--duration", "0"]),
+        || {},
+    );
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--duration must be > 0"));
+}
+
+#[test]
 fn viewfinder_frames_reach_the_device_whole_over_the_paired_session() {
     const SENT: u32 = 20;
     let server = server();
@@ -498,6 +599,11 @@ fn viewfinder_frames_reach_the_device_whole_over_the_paired_session() {
     // Loopback loses nothing: every frame completed, and the newest one is byte-exact.
     assert_eq!(field(&stdout, "video_frames"), u64::from(SENT), "{stdout}");
     assert_eq!(field(&stdout, "video_lost"), 0, "{stdout}");
+    assert_eq!(
+        (field(&stdout, "dropped_out"), field(&stdout, "dropped_in")),
+        (0, 0),
+        "no impairment unless asked"
+    );
     assert_eq!(field(&stdout, "video_last_id"), u64::from(SENT), "{stdout}");
     assert_eq!(
         field(&stdout, "video_last_pose_seq"),
