@@ -401,6 +401,12 @@ struct Wire {
     stream: MioStream,
     poll: Poll,
     events: Events,
+    /// How long a write may make no progress before it fails with `TimedOut`; `POLL` in
+    /// production, raised by the tests that must not depend on scheduler timing.
+    stall_limit: Duration,
+    /// How many writes armed `WRITABLE` (stalled): lets a test prove the stall path ran.
+    #[cfg(test)]
+    stalls: usize,
 }
 
 impl Wire {
@@ -415,6 +421,9 @@ impl Wire {
             stream,
             poll,
             events: Events::with_capacity(4),
+            stall_limit: POLL,
+            #[cfg(test)]
+            stalls: 0,
         })
     }
 
@@ -445,7 +454,8 @@ impl Wire {
         }
     }
 
-    /// Writes all of `buf`; fails with `TimedOut` if the peer accepts nothing for `POLL`.
+    /// Writes all of `buf`; fails with `TimedOut` if the peer accepts nothing for `stall_limit`
+    /// (`POLL`).
     fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
         let mut writable = false;
         let written = self.write_stalling(buf, &mut writable);
@@ -461,6 +471,7 @@ impl Wire {
     /// `writable`, so the caller restores `READABLE` however the loop ends.
     fn write_stalling(&mut self, mut buf: &[u8], writable: &mut bool) -> io::Result<()> {
         let mut stalled_until: Option<Instant> = None;
+        let limit = self.stall_limit;
         while !buf.is_empty() {
             match self.stream.write(buf) {
                 Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
@@ -472,9 +483,13 @@ impl Wire {
                     if !*writable {
                         // Set first: a failed re-registration still gets `READABLE` restored.
                         *writable = true;
+                        #[cfg(test)]
+                        {
+                            self.stalls += 1;
+                        }
                         self.arm(Interest::READABLE | Interest::WRITABLE)?;
                     }
-                    let until = *stalled_until.get_or_insert_with(|| Instant::now() + POLL);
+                    let until = *stalled_until.get_or_insert_with(|| Instant::now() + limit);
                     let left = until.saturating_duration_since(Instant::now());
                     if left.is_zero() {
                         return Err(io::ErrorKind::TimedOut.into());
@@ -891,9 +906,10 @@ mod tests {
 
     /// NFR-PERF-002: an idle connection must sleep in `poll`, not spin on `WouldBlock`. A spinning
     /// read returns thousands of times in 400 ms; waiting `POLL` (50 ms) at a time returns about
-    /// eight times, plus a spurious wake or two. A slow runner only lowers the count. Run on macOS
-    /// only so far: the Windows case (mio re-arms the registered interests after a `WouldBlock`,
-    /// so a `WRITABLE` registration would spin there) is unverified until `windows-latest` runs it.
+    /// eight times, plus a spurious wake or two. A slow runner only lowers the count. Passed on
+    /// macOS, Linux and Windows in CI run 36889752040; the Windows case (mio re-arms the registered
+    /// interests after a `WouldBlock`, so a `WRITABLE` registration would spin there) is why the
+    /// socket is registered for `READABLE` only.
     #[test]
     fn an_idle_connection_waits_in_poll_instead_of_spinning() {
         let (mut wire, _client) = connected();
@@ -936,46 +952,88 @@ mod tests {
         drop(writer.join().unwrap());
     }
 
+    /// Writes `chunk` until the peer's buffers are full and a write fails, returning that error.
+    /// No single write is assumed to fill the pipe: Windows loopback buffers tens of MiB, so one
+    /// 64 MiB write can succeed. Bounded in bytes (1 GiB) and in time.
+    fn write_until_it_fails(wire: &mut Wire, chunk: &[u8]) -> io::Error {
+        let started = Instant::now();
+        for _ in 0..(1usize << 30) / chunk.len() {
+            if let Err(e) = wire.write_all(chunk) {
+                return e;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "the peer kept accepting data for 60 s"
+            );
+        }
+        panic!("the peer that never reads accepted 1 GiB");
+    }
+
     #[test]
     fn a_write_to_a_peer_that_never_reads_times_out() {
         let (mut wire, _client) = connected();
         let started = Instant::now();
-        let err = wire.write_all(&vec![0u8; 64 << 20]).unwrap_err();
+        let err = write_until_it_fails(&mut wire, &vec![0u8; 8 << 20]);
         assert_eq!(err.kind(), io::ErrorKind::TimedOut, "{err}");
-        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(started.elapsed() < Duration::from_secs(60));
     }
 
     /// A write that stalls waits for `WRITABLE` and finishes once the peer drains; afterwards the
-    /// connection is back to `READABLE` only, so an idle read sleeps again (after a failed stall
-    /// as well as a successful one).
+    /// connection is back to `READABLE` only, so an idle read sleeps again.
+    ///
+    /// The stall is forced, not hoped for: the first phase fills the peer's buffers until a write
+    /// times out (its idle check is only a sanity check: with the send buffer full a leftover
+    /// `WRITABLE` interest could not fire anyway). The second phase raises the stall limit to 5 s,
+    /// so the outcome does not depend on when the reader thread gets scheduled, starts a reader
+    /// that sleeps first, and writes again: that write must stall (`stalls`) and finish within the
+    /// limit, because the drain wakes it through `WRITABLE`. Without the `WRITABLE` arm it would
+    /// sleep the whole limit. The idle check after the drain is the one that guards the restore of
+    /// `READABLE`; it runs on the still connected, writable socket, because mio on Windows re-arms
+    /// the registered interests after a `WouldBlock` and a leftover `WRITABLE` would spin there.
     #[test]
     fn a_stalled_write_finishes_when_the_peer_drains_and_idle_reads_still_sleep() {
+        const MARK: u8 = 0xAB;
         let (mut wire, mut client) = connected();
-        let total: usize = 32 << 20;
-        let reader = std::thread::spawn(move || {
-            std::thread::sleep(POLL / 2);
-            let mut left = total;
-            let mut buf = vec![0u8; 1 << 16];
-            while left > 0 {
-                let n = client.read(&mut buf).unwrap();
-                assert!(n > 0, "closed with {left} bytes unread");
-                left -= n;
-            }
-            client
-        });
-        wire.write_all(&vec![0u8; total]).unwrap();
-        let client = reader.join().unwrap();
-        let returns = idle_returns(&mut wire);
-        assert!(returns <= 20, "{returns} idle reads after a stalled write");
-        drop(client);
-
-        let (mut wire, _client) = connected();
-        let err = wire.write_all(&vec![0u8; 64 << 20]).unwrap_err();
+        let err = write_until_it_fails(&mut wire, &vec![0u8; 8 << 20]);
         assert_eq!(err.kind(), io::ErrorKind::TimedOut, "{err}");
+        let stalls = wire.stalls;
         let returns = idle_returns(&mut wire);
         assert!(
             returns <= 20,
             "{returns} idle reads after a timed-out write"
         );
+
+        wire.stall_limit = Duration::from_secs(5);
+        let tail = vec![MARK; 16 << 20];
+        let expected = tail.len();
+        let reader = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(1));
+            let mut marked = 0;
+            let mut buf = vec![0u8; 1 << 16];
+            // The tail is the last data sent: stop once all of it is counted, so the socket stays
+            // connected and writable for the idle check.
+            while marked < expected {
+                let n = client.read(&mut buf).unwrap();
+                assert!(
+                    n > 0,
+                    "closed with {} marked bytes unread",
+                    expected - marked
+                );
+                marked += buf[..n].iter().filter(|&&b| b == MARK).count();
+            }
+            (client, marked)
+        });
+        let started = Instant::now();
+        wire.write_all(&tail).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "slept the stall limit"
+        );
+        assert!(wire.stalls > stalls, "the write did not stall");
+        let (client, marked) = reader.join().unwrap();
+        assert_eq!(marked, expected);
+        let returns = idle_returns(&mut wire);
+        assert!(returns <= 20, "{returns} idle reads after a stalled write");
+        drop(client);
     }
 }
