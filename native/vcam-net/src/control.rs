@@ -7,13 +7,15 @@
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use mio::net::TcpStream as MioStream;
+use mio::{Events, Interest, Poll, Token};
 use vcam_protocol::{
     ControlError, ControlErrorMsg, ControlMessage, Endpoint, HEADER_LEN, Hello, HostPairing,
     PROTOCOL_VERSION, PairError, Role, SessionChallenge, SessionHandshake,
@@ -360,6 +362,9 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>, events: &Sender<Con
                 let spawned = std::thread::Builder::new()
                     .name("vcam-ctl-conn".into())
                     .spawn(move || {
+                        let Ok(stream) = Wire::new(stream) else {
+                            return;
+                        };
                         let mut conn = Conn {
                             stream,
                             peer,
@@ -383,15 +388,117 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>, events: &Sender<Con
     }
 }
 
-/// Blocking reads and writes that give up after `POLL`, so the connection loop can check `stop`.
-/// On macOS and Windows an accepted socket inherits the listener's non-blocking mode: without
-/// `set_nonblocking(false)` the timeouts don't apply and every read returns `WouldBlock` at once,
-/// so an idle connection spins a CPU core.
-fn configure_stream(stream: &TcpStream) -> io::Result<()> {
-    stream.set_nonblocking(false)?;
-    stream.set_read_timeout(Some(POLL))?;
-    stream.set_write_timeout(Some(POLL))?;
-    stream.set_nodelay(true)
+/// An accepted control connection: a non-blocking socket plus readiness polling.
+///
+/// Not `SO_RCVTIMEO`/`SO_SNDTIMEO`: on Windows a send or receive that times out leaves the socket
+/// state indeterminate and TCP can lose data, which would break the framing of a handshake
+/// message that arrives as the timeout fires (the same reason `UdpReceiver` polls). The accepted
+/// socket inherits the listener's non-blocking mode on macOS and Windows; the stream stays
+/// non-blocking and every wait goes through `poll`, so an idle connection sleeps in the kernel
+/// for `POLL` at a time instead of spinning a core, and the callers still see `stop` and their
+/// deadlines every `POLL`.
+struct Wire {
+    stream: MioStream,
+    poll: Poll,
+    events: Events,
+}
+
+impl Wire {
+    fn new(stream: TcpStream) -> io::Result<Self> {
+        stream.set_nonblocking(true)?;
+        stream.set_nodelay(true)?;
+        let mut stream = MioStream::from_std(stream);
+        let poll = Poll::new()?;
+        poll.registry()
+            .register(&mut stream, Token(0), Interest::READABLE)?;
+        Ok(Self {
+            stream,
+            poll,
+            events: Events::with_capacity(4),
+        })
+    }
+
+    /// Sleeps until the socket is ready or `timeout` passes. Readiness is edge-triggered, so
+    /// callers try the I/O first and only wait after it returned `WouldBlock`; spurious wakes
+    /// are fine because they retry the I/O.
+    ///
+    /// The socket is registered for `READABLE` only. On Windows mio re-arms the registered
+    /// interests after every `WouldBlock`, and an idle connected socket is always writable, so
+    /// a `WRITABLE` registration would make every wait return at once: a spin. A stalled write
+    /// adds `WRITABLE` for its own duration (`write_all`).
+    fn wait(&mut self, timeout: Duration) -> io::Result<()> {
+        match self.poll.poll(&mut self.events, Some(timeout)) {
+            Err(e) if e.kind() != io::ErrorKind::Interrupted => Err(e),
+            _ => Ok(()),
+        }
+    }
+
+    /// Reads what is available. When nothing is, waits up to `POLL` for data; `WouldBlock` then
+    /// means a quiet interval, not an error.
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self.stream.read(buf) {
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                self.wait(POLL)?;
+                self.stream.read(buf)
+            }
+            other => other,
+        }
+    }
+
+    /// Writes all of `buf`; fails with `TimedOut` if the peer accepts nothing for `POLL`.
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        let mut writable = false;
+        let written = self.write_stalling(buf, &mut writable);
+        if writable {
+            // Back to `READABLE` only, so the reads after this write wait in `poll` (see `wait`).
+            let restored = self.arm(Interest::READABLE);
+            return written.and(restored);
+        }
+        written
+    }
+
+    /// The write loop of `write_all`. The first `WouldBlock` registers `WRITABLE` too and sets
+    /// `writable`, so the caller restores `READABLE` however the loop ends.
+    fn write_stalling(&mut self, mut buf: &[u8], writable: &mut bool) -> io::Result<()> {
+        let mut stalled_until: Option<Instant> = None;
+        while !buf.is_empty() {
+            match self.stream.write(buf) {
+                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+                Ok(n) => {
+                    buf = buf.get(n..).unwrap_or_default();
+                    stalled_until = None;
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    if !*writable {
+                        // Set first: a failed re-registration still gets `READABLE` restored.
+                        *writable = true;
+                        self.arm(Interest::READABLE | Interest::WRITABLE)?;
+                    }
+                    let until = *stalled_until.get_or_insert_with(|| Instant::now() + POLL);
+                    let left = until.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return Err(io::ErrorKind::TimedOut.into());
+                    }
+                    self.wait(left)?;
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    /// Changes the registered interests. Re-registering reports the socket's current readiness
+    /// again, so a socket that became writable since the `WouldBlock` is not missed.
+    fn arm(&mut self, interests: Interest) -> io::Result<()> {
+        self.poll
+            .registry()
+            .reregister(&mut self.stream, Token(0), interests)
+    }
+
+    fn shutdown(&self, how: Shutdown) -> io::Result<()> {
+        self.stream.shutdown(how)
+    }
 }
 
 /// Why a connection ended.
@@ -420,7 +527,7 @@ impl From<ControlError> for End {
 }
 
 struct Conn<'a> {
-    stream: TcpStream,
+    stream: Wire,
     peer: SocketAddr,
     shared: &'a Shared,
     events: &'a Sender<ControlEvent>,
@@ -429,9 +536,6 @@ struct Conn<'a> {
 
 impl Conn<'_> {
     fn serve(&mut self) {
-        if configure_stream(&self.stream).is_err() {
-            return;
-        }
         if let Err(End::Error(code, message)) = self.run() {
             let msg = ControlMessage::Error(ControlErrorMsg {
                 code,
@@ -443,14 +547,14 @@ impl Conn<'_> {
                 self.linger_close();
             }
         }
-        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+        let _ = self.stream.shutdown(Shutdown::Both);
     }
 
     /// Sends FIN after an `ERROR`, then discards what the peer still sends until it
     /// closes (bounded by `ERROR_LINGER`). Closing with unread input makes the stack
     /// send RST, and Windows then drops the `ERROR` the peer hasn't read yet.
     fn linger_close(&mut self) {
-        if self.stream.shutdown(std::net::Shutdown::Write).is_err() {
+        if self.stream.shutdown(Shutdown::Write).is_err() {
             return;
         }
         let deadline = Instant::now() + ERROR_LINGER;
@@ -748,11 +852,11 @@ impl From<io::Error> for PairFailure {
 mod tests {
     use super::*;
 
-    #[test]
-    fn an_idle_accepted_connection_waits_for_the_read_timeout() {
+    /// A connected pair; the server side comes from a non-blocking listener, as in `accept_loop`.
+    fn connected() -> (Wire, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
-        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         let stream = loop {
             match listener.accept() {
@@ -763,21 +867,115 @@ mod tests {
                 Err(e) => panic!("accept: {e}"),
             }
         };
-        configure_stream(&stream).unwrap();
+        (Wire::new(stream).unwrap(), client)
+    }
+
+    fn is_quiet(e: &io::Error) -> bool {
+        matches!(
+            e.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        )
+    }
+
+    /// How many times an idle read returns in 400 ms.
+    fn idle_returns(wire: &mut Wire) -> usize {
         let started = Instant::now();
-        let err = (&stream).read(&mut [0u8; 1]).unwrap_err();
+        let mut returns = 0;
+        while started.elapsed() < Duration::from_millis(400) {
+            let err = wire.read(&mut [0u8; 1]).unwrap_err();
+            assert!(is_quiet(&err), "{err}");
+            returns += 1;
+        }
+        returns
+    }
+
+    /// NFR-PERF-002: an idle connection must sleep in `poll`, not spin on `WouldBlock`. A spinning
+    /// read returns thousands of times in 400 ms; waiting `POLL` (50 ms) at a time returns about
+    /// eight times, plus a spurious wake or two. A slow runner only lowers the count. Run on macOS
+    /// only so far: the Windows case (mio re-arms the registered interests after a `WouldBlock`,
+    /// so a `WRITABLE` registration would spin there) is unverified until `windows-latest` runs it.
+    #[test]
+    fn an_idle_connection_waits_in_poll_instead_of_spinning() {
+        let (mut wire, _client) = connected();
+        let returns = idle_returns(&mut wire);
         assert!(
-            matches!(
-                err.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            ),
-            "{err}"
+            returns <= 20,
+            "{returns} reads returned in 400 ms: the idle connection is spinning"
         );
-        // A non-blocking socket returns at once; a blocking one waits for POLL (50 ms).
+    }
+
+    /// NET-004: a message that arrives in pieces across several `POLL` timeouts is read intact
+    /// (socket timeouts can lose bytes on Windows, which is why `Wire` polls instead).
+    #[test]
+    fn a_message_split_across_poll_timeouts_is_read_intact() {
+        let (mut wire, mut client) = connected();
+        let message: Vec<u8> = (0..=255u8).cycle().take(300).collect();
+        let sent = message.clone();
+        let writer = std::thread::spawn(move || {
+            for piece in sent.chunks(100) {
+                client.write_all(piece).unwrap();
+                std::thread::sleep(POLL * 3);
+            }
+            client
+        });
+        let mut got = Vec::new();
+        let mut quiet_waits = 0;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while got.len() < message.len() {
+            assert!(Instant::now() < deadline, "read {} bytes", got.len());
+            let mut buf = [0u8; 64];
+            match wire.read(&mut buf) {
+                Ok(0) => panic!("closed after {} bytes", got.len()),
+                Ok(n) => got.extend_from_slice(&buf[..n]),
+                Err(e) if is_quiet(&e) => quiet_waits += 1,
+                Err(e) => panic!("{e}"),
+            }
+        }
+        assert_eq!(got, message);
+        assert!(quiet_waits >= 2, "the pieces did not span poll timeouts");
+        drop(writer.join().unwrap());
+    }
+
+    #[test]
+    fn a_write_to_a_peer_that_never_reads_times_out() {
+        let (mut wire, _client) = connected();
+        let started = Instant::now();
+        let err = wire.write_all(&vec![0u8; 64 << 20]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut, "{err}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    /// A write that stalls waits for `WRITABLE` and finishes once the peer drains; afterwards the
+    /// connection is back to `READABLE` only, so an idle read sleeps again (after a failed stall
+    /// as well as a successful one).
+    #[test]
+    fn a_stalled_write_finishes_when_the_peer_drains_and_idle_reads_still_sleep() {
+        let (mut wire, mut client) = connected();
+        let total: usize = 32 << 20;
+        let reader = std::thread::spawn(move || {
+            std::thread::sleep(POLL / 2);
+            let mut left = total;
+            let mut buf = vec![0u8; 1 << 16];
+            while left > 0 {
+                let n = client.read(&mut buf).unwrap();
+                assert!(n > 0, "closed with {left} bytes unread");
+                left -= n;
+            }
+            client
+        });
+        wire.write_all(&vec![0u8; total]).unwrap();
+        let client = reader.join().unwrap();
+        let returns = idle_returns(&mut wire);
+        assert!(returns <= 20, "{returns} idle reads after a stalled write");
+        drop(client);
+
+        let (mut wire, _client) = connected();
+        let err = wire.write_all(&vec![0u8; 64 << 20]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut, "{err}");
+        let returns = idle_returns(&mut wire);
         assert!(
-            started.elapsed() >= POLL / 2,
-            "read returned after {:?}",
-            started.elapsed()
+            returns <= 20,
+            "{returns} idle reads after a timed-out write"
         );
     }
 }
