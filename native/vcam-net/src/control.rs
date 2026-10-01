@@ -262,6 +262,33 @@ impl ControlServer {
         self.shared.udp().smoothing()
     }
 
+    /// Starts recording a take; returns its start on [`ControlServer::host_clock_ns`]. The
+    /// take spans session changes. `AlreadyExists` if one is recording.
+    pub fn take_start(&self, take_id: u32) -> io::Result<u64> {
+        self.shared.udp().take_start(take_id)
+    }
+
+    /// Ends the take and returns its raw data (`None` if none was recording).
+    #[must_use]
+    pub fn take_stop(&self) -> Option<crate::RawTake> {
+        self.shared.udp().take_stop()
+    }
+
+    #[must_use]
+    pub fn take_status(&self) -> crate::TakeStatus {
+        self.shared.udp().take_status()
+    }
+
+    /// See [`UdpReceiver::take_note_applied`].
+    pub fn take_note_applied(&self, pose: Option<(u32, u32)>, kind: crate::AppliedKind) {
+        self.shared.udp().take_note_applied(pose, kind);
+    }
+
+    /// See [`UdpReceiver::take_note_frame`].
+    pub fn take_note_frame(&self, frame: f64) {
+        self.shared.udp().take_note_frame(frame);
+    }
+
     /// Publish state applied by Blender for the current session (not just received samples).
     pub fn update_status(&self, session_id: u32, status: HostStatus) -> io::Result<()> {
         self.shared.udp().update_status(session_id, status)

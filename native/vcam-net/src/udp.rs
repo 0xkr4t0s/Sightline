@@ -25,6 +25,7 @@ use vcam_protocol::{
 };
 
 use crate::smooth::{PoseFilter, Smoothing};
+use crate::take::{AppliedKind, RawTake, TakeRecorder, TakeStatus};
 
 /// How often the thread checks for `stop` while idle (NFR-REL-002: stop within 1 s).
 const POLL: Duration = Duration::from_millis(50);
@@ -86,6 +87,9 @@ impl HostStatus {
 /// The newest accepted pose, when it arrived, and from where.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PoseSample {
+    /// Session it was accepted under; pass `(session_id, pose.seq)` to
+    /// [`UdpReceiver::take_note_applied`], since a reset can intervene before the note.
+    pub session_id: u32,
     /// Exactly as received: always kept for recording (FR-BL-006).
     pub pose: Pose,
     /// What to apply: `pose` after smoothing, or equal to `pose` when smoothing is off.
@@ -190,6 +194,22 @@ struct ActiveSession {
     video_frame_id: u32,
 }
 
+impl ActiveSession {
+    fn new(endpoint: Endpoint) -> Self {
+        Self {
+            endpoint,
+            started_at: Instant::now(),
+            last_received: None,
+            status: HostStatus::default().into_message(0),
+            status_dirty: true,
+            last_status: None,
+            last_clock: None,
+            clock: ClockEstimator::default(),
+            video_frame_id: 0,
+        }
+    }
+}
+
 #[derive(Default)]
 struct State {
     active: Option<ActiveSession>,
@@ -202,18 +222,29 @@ struct State {
     smoothing: Option<Smoothing>,
     /// Per-session filter state.
     pose_smoother: PoseFilter,
+    /// Per-receiver, like `smoothing`: a take outlives the sessions it records (FR-TAKE-001).
+    take: TakeRecorder,
     /// (arrival, seq) of accepted poses within `WINDOW`.
     window: VecDeque<(Instant, u32)>,
     stats: ReceiverStats,
 }
 
 impl State {
-    /// Clears everything session-related but keeps the smoothing setting.
-    fn reset(&mut self) {
+    /// Replaces everything session-related with `active`'s fresh state, keeping the smoothing
+    /// setting and the take, whose next record opens a new segment.
+    fn restart(&mut self, active: Option<ActiveSession>) {
+        let mut take = std::mem::take(&mut self.take);
+        take.break_segment();
         *self = Self {
+            active,
             smoothing: self.smoothing,
+            take,
             ..Self::default()
         };
+    }
+
+    fn reset(&mut self) {
+        self.restart(None);
     }
 
     fn expire(&mut self, now: Instant) {
@@ -239,14 +270,17 @@ impl State {
         };
         active.last_received = Some(now);
         self.stats.source = Some(from);
+        let session_id = active.endpoint.session_id();
         match msg {
             Message::Pose(pose) => {
                 if self.pose_filter.accept(pose.seq) {
+                    self.take.push_pose(session_id, &pose, host_ns, false);
                     let smoothed = match &self.smoothing {
                         Some(params) => self.pose_smoother.apply(&pose, params),
                         None => pose,
                     };
                     self.pose = Some(PoseSample {
+                        session_id,
                         pose,
                         smoothed,
                         received_at: now,
@@ -255,11 +289,20 @@ impl State {
                     self.stats.poses_applied += 1;
                     self.window.push_back((now, pose.seq));
                 } else {
+                    // Kept for the take, flagged late unless it repeats the newest seq.
+                    let newest = self.pose.map_or(0, |p| p.pose.seq);
+                    self.take
+                        .push_pose(session_id, &pose, host_ns, pose.seq < newest);
                     self.stats.poses_stale += 1;
                 }
             }
             Message::ControlState(state) => {
                 if self.control_filter.accept(state.state_seq) {
+                    let last_pose = self
+                        .pose
+                        .map_or((0, 0), |p| (p.pose.seq, p.pose.capture_time_ns));
+                    self.take
+                        .push_control(session_id, &state, host_ns, last_pose);
                     self.control = Some(ControlSample {
                         state,
                         received_at: now,
@@ -270,6 +313,8 @@ impl State {
             Message::Clock(Clock::Reply { t1, t2, t3 }) => {
                 if active.clock.reply(t1, t2, t3, host_ns).is_err() {
                     self.stats.clock_rejected += 1;
+                } else if let Some(estimate) = active.clock.estimate() {
+                    self.take.push_clock(session_id, host_ns, &estimate);
                 }
             }
             Message::VideoReport(report) => {
@@ -420,21 +465,7 @@ impl UdpReceiver {
                 "receiver stopped",
             ));
         }
-        *state = State {
-            active: Some(ActiveSession {
-                endpoint,
-                started_at: Instant::now(),
-                last_received: None,
-                status: HostStatus::default().into_message(0),
-                status_dirty: true,
-                last_status: None,
-                last_clock: None,
-                clock: ClockEstimator::default(),
-                video_frame_id: 0,
-            }),
-            smoothing: state.smoothing,
-            ..State::default()
-        };
+        state.restart(Some(ActiveSession::new(endpoint)));
         Ok(())
     }
 
@@ -514,6 +545,61 @@ impl UdpReceiver {
     #[must_use]
     pub fn smoothing(&self) -> Option<Smoothing> {
         lock(&self.state).smoothing
+    }
+
+    /// Starts recording a take: from now every authenticated pose (also reordered and
+    /// duplicated ones), accepted `CONTROL_STATE` and clock estimate is kept, across session
+    /// changes (FR-TAKE-001). Returns the host time of the start, on the [`host_clock_ns`]
+    /// clock.
+    ///
+    /// # Errors
+    /// `AlreadyExists` if a take is already recording; it is left running.
+    ///
+    /// [`host_clock_ns`]: Self::host_clock_ns
+    pub fn take_start(&self, take_id: u32) -> io::Result<u64> {
+        let mut state = lock(&self.state);
+        let host_ns = host_clock(self.epoch);
+        if state.take.start(host_ns, take_id) {
+            Ok(host_ns)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "a take is already recording",
+            ))
+        }
+    }
+
+    /// Ends the take and returns its raw data, or `None` if none was recording. Works after
+    /// the session has ended or the receiver has stopped. The buffers are moved out under the
+    /// lock, not copied.
+    #[must_use]
+    pub fn take_stop(&self) -> Option<RawTake> {
+        let mut state = lock(&self.state);
+        state.take.stop(host_clock(self.epoch))
+    }
+
+    #[must_use]
+    pub fn take_status(&self) -> TakeStatus {
+        lock(&self.state).take.status(host_clock(self.epoch))
+    }
+
+    /// Notes that the live rig now applies something different, from Blender's main thread
+    /// after its apply step. `pose` is `(session_id, seq)` of the pose a pose-coupled change
+    /// (zero, motion scale, locks) took effect with, from [`PoseSample`]; `None` keys it by this
+    /// call's host time (lens, focus). Ignored when no take is recording, or when the take holds
+    /// no segment of the pose's session.
+    pub fn take_note_applied(&self, pose: Option<(u32, u32)>, kind: AppliedKind) {
+        let mut state = lock(&self.state);
+        let host_ns = host_clock(self.epoch);
+        state.take.note_applied(host_ns, pose, kind);
+    }
+
+    /// Notes that the timeline shows scene `frame` now (FR-TAKE-002). Ignored when no take is
+    /// recording.
+    pub fn take_note_frame(&self, frame: f64) {
+        let mut state = lock(&self.state);
+        let host_ns = host_clock(self.epoch);
+        state.take.note_frame(host_ns, frame);
     }
 
     #[must_use]
@@ -832,4 +918,54 @@ fn send(
 fn is_oversize(e: &io::Error) -> bool {
     const WSAEMSGSIZE: i32 = 10040;
     cfg!(windows) && e.raw_os_error() == Some(WSAEMSGSIZE)
+}
+
+#[cfg(test)]
+mod tests {
+    use vcam_protocol::Role;
+
+    use super::*;
+
+    fn endpoint(role: Role, session_id: u32) -> Endpoint {
+        Endpoint::new(role, session_id, &[0x11; 32], &[0x22; 32]).unwrap()
+    }
+
+    fn pose_datagram(session_id: u32, seq: u32) -> Vec<u8> {
+        let pose = Pose {
+            seq,
+            capture_time_ns: u64::from(seq) * 16_666_667,
+            position_m: [0.0, 0.0, 1.5],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+            tracking_state: Pose::TRACKING_NORMAL,
+            flags: 0,
+        };
+        let mut out = Vec::new();
+        endpoint(Role::Device, session_id)
+            .seal(&Message::Pose(pose), &mut out)
+            .unwrap();
+        out
+    }
+
+    #[test]
+    fn an_idle_expiry_keeps_the_take_and_the_next_session_opens_a_new_segment() {
+        let from: SocketAddr = "127.0.0.1:9".parse().unwrap();
+        let t0 = Instant::now();
+        let mut state = State::default();
+        assert!(state.take.start(0, 1));
+        state.restart(Some(ActiveSession::new(endpoint(Role::Host, 5))));
+        state.handle(&pose_datagram(5, 1), from, t0, 100);
+
+        // Ten idle seconds end the session (vcp.md §8); the datagram that arrives then is dropped.
+        state.handle(&pose_datagram(5, 2), from, t0 + IDLE_TIMEOUT, 200);
+        assert!(state.active.is_none());
+        assert_eq!(state.stats.dropped.session, 1);
+
+        state.restart(Some(ActiveSession::new(endpoint(Role::Host, 6))));
+        state.handle(&pose_datagram(6, 1), from, t0 + IDLE_TIMEOUT, 300);
+        let take = state.take.stop(400).unwrap();
+        let seen: Vec<(u32, u32)> = take.poses.iter().map(|p| (p.seg, p.pose.seq)).collect();
+        assert_eq!(seen, [(0, 1), (1, 1)]);
+        let sessions: Vec<u32> = take.segments.iter().map(|s| s.session_id).collect();
+        assert_eq!(sessions, [5, 6]);
+    }
 }
