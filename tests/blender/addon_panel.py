@@ -64,9 +64,25 @@ assert bpy.ops.vcam.pairing_start() == {'FINISHED'}
 code = live.pairing_code()
 
 child = subprocess.Popen(
-    [FAKE, "--host", f"127.0.0.1:{live.port()}", "--state", os.path.join(session.config_dir(), "k"),
-     "--code", code, "--motion", os.path.join(MOTION, "scripted.bin"), "--rate", "60", "--linger", "1.5"],
-    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    [
+        FAKE,
+        "--host",
+        f"127.0.0.1:{live.port()}",
+        "--state",
+        os.path.join(session.config_dir(), "k"),
+        "--code",
+        code,
+        "--motion",
+        os.path.join(MOTION, "scripted.bin"),
+        "--rate",
+        "60",
+        "--linger",
+        "1.5",
+    ],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
 
 # Device, tracking state and latency (once the clock estimate exists).
 poll_until("device", lambda: session.state.session_id is not None)
@@ -96,7 +112,7 @@ assert apply.ZERO_YAW_KEY not in origin
 session._poll()
 pose = live.latest_pose()
 expected = apply.pose_matrix(pose["smoothed_position"], pose["smoothed_orientation"])
-err = max(abs(a - b) for ra, rb in zip(camera.matrix_basis, expected) for a, b in zip(ra, rb))
+err = max(abs(a - b) for ra, rb in zip(camera.matrix_basis, expected, strict=True) for a, b in zip(ra, rb, strict=True))
 assert err < 1e-6, err
 assert bpy.ops.vcam.origin_clear.poll() is False
 
@@ -110,5 +126,7 @@ poll_until("session end", lambda: session.state.session_id is None)
 assert bpy.ops.vcam.origin_set.poll() is False
 assert bpy.ops.vcam.session_stop() == {'FINISHED'}
 addon_utils.disable(MODULE, default_set=True)
-print(f"VCAM_ADDON_PANEL_OK latency_ms={latency:.2f} jitter_ms={jitter:.3f} pairing=start/cancel/start "
-      f"set_origin=zeroed clear_origin=raw smoothing=toggled")
+print(
+    f"VCAM_ADDON_PANEL_OK latency_ms={latency:.2f} jitter_ms={jitter:.3f} pairing=start/cancel/start "
+    f"set_origin=zeroed clear_origin=raw smoothing=toggled"
+)

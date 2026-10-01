@@ -232,27 +232,56 @@ VIDEO_MAX_FRAME = 4 * 1024 * 1024
 assert VIDEO_HEADER.size == 32 and VIDEO_MAX_DATA == 1148
 
 
-def video_payload(frame_id, frame_len, index, count, size, data, render_time_ns=2_000_000_000,
-                  pose_seq=1, quality=80, codec=1, color=0, flags=0) -> bytes:
-    return VIDEO_HEADER.pack(frame_id, frame_len, index, count, size, codec, color, render_time_ns,
-                             pose_seq, quality, flags, 0) + data
+def video_payload(
+    frame_id,
+    frame_len,
+    index,
+    count,
+    size,
+    data,
+    render_time_ns=2_000_000_000,
+    pose_seq=1,
+    quality=80,
+    codec=1,
+    color=0,
+    flags=0,
+) -> bytes:
+    return (
+        VIDEO_HEADER.pack(
+            frame_id, frame_len, index, count, size, codec, color, render_time_ns, pose_seq, quality, flags, 0
+        )
+        + data
+    )
 
 
 def video_fragments(frame_id, frame: bytes, size=VIDEO_MAX_DATA, **meta) -> list[bytes]:
     """The host's split (§6.5 Sending): fragments of `size` data bytes in index order."""
     count = -(-len(frame) // size)
-    return [video_payload(frame_id, len(frame), i, count, size, frame[i * size:(i + 1) * size], **meta)
-            for i in range(count)]
+    return [
+        video_payload(frame_id, len(frame), i, count, size, frame[i * size : (i + 1) * size], **meta)
+        for i in range(count)
+    ]
 
 
 def video_fields(payload: bytes) -> dict:
-    (frame_id, frame_len, index, count, size, codec, color, rt, pose_seq, quality, flags,
-     _) = VIDEO_HEADER.unpack_from(payload)
+    (frame_id, frame_len, index, count, size, codec, color, rt, pose_seq, quality, flags, _) = VIDEO_HEADER.unpack_from(
+        payload
+    )
     data_len = min(size, frame_len - index * size)
-    return {"frame_id": frame_id, "frame_len": frame_len, "frag_index": index, "frag_count": count,
-            "frag_size": size, "codec": codec, "color": color, "render_time_ns": rt,
-            "pose_seq": pose_seq, "quality": quality, "flags": flags,
-            "data": hx(payload[32:32 + data_len])}
+    return {
+        "frame_id": frame_id,
+        "frame_len": frame_len,
+        "frag_index": index,
+        "frag_count": count,
+        "frag_size": size,
+        "codec": codec,
+        "color": color,
+        "render_time_ns": rt,
+        "pose_seq": pose_seq,
+        "quality": quality,
+        "flags": flags,
+        "data": hx(payload[32 : 32 + data_len]),
+    }
 
 
 REPORT = struct.Struct("<IIIHH")  # vcp.md §6.6, 16 bytes
@@ -261,6 +290,7 @@ assert REPORT.size == 16
 
 def report_payload(report_seq, newest_frame_id, frames_complete, m2p_p95_ms, reserved=0) -> bytes:
     return REPORT.pack(report_seq, newest_frame_id, frames_complete, m2p_p95_ms, reserved)
+
 
 # --------------------------------------------------------------------------------------------
 # Vector builders
@@ -295,43 +325,145 @@ def build_messages() -> tuple[dict, dict[str, bytes]]:
         )
 
     pos, quat = (0.5, -1.25, 1.6), (s, 0.0, 0.0, s)
-    add("pose_normal", "udp", "d2h", 0x01, pose_payload(1, 1_000_000_000, pos, quat, 5),
-        {"seq": 1, "capture_time_ns": 1_000_000_000, "position_m": [f32(v) for v in pos],
-         "orientation": [f32(v) for v in quat], "tracking_state": 5, "flags": 0},
-        "vcp.md §6.1 example")
-    add("pose_limited_relocalizing", "udp", "d2h", 0x01,
+    add(
+        "pose_normal",
+        "udp",
+        "d2h",
+        0x01,
+        pose_payload(1, 1_000_000_000, pos, quat, 5),
+        {
+            "seq": 1,
+            "capture_time_ns": 1_000_000_000,
+            "position_m": [f32(v) for v in pos],
+            "orientation": [f32(v) for v in quat],
+            "tracking_state": 5,
+            "flags": 0,
+        },
+        "vcp.md §6.1 example",
+    )
+    add(
+        "pose_limited_relocalizing",
+        "udp",
+        "d2h",
+        0x01,
         pose_payload(4_000_000_000, 123_456_789_012_345, (-3.0, 0.0, 12.75), (0.0, 0.0, 0.0, 1.0), 4),
-        {"seq": 4_000_000_000, "capture_time_ns": 123_456_789_012_345,
-         "position_m": [-3.0, 0.0, 12.75], "orientation": [0.0, 0.0, 0.0, 1.0],
-         "tracking_state": 4, "flags": 0},
-        "large seq and timestamp, identity orientation, limited(relocalizing)")
-    add("control_state_full", "udp", "d2h", 0x02, control_payload(7, 0b111, 10.0, 0b010, 3),
+        {
+            "seq": 4_000_000_000,
+            "capture_time_ns": 123_456_789_012_345,
+            "position_m": [-3.0, 0.0, 12.75],
+            "orientation": [0.0, 0.0, 0.0, 1.0],
+            "tracking_state": 4,
+            "flags": 0,
+        },
+        "large seq and timestamp, identity orientation, limited(relocalizing)",
+    )
+    add(
+        "control_state_full",
+        "udp",
+        "d2h",
+        0x02,
+        control_payload(7, 0b111, 10.0, 0b010, 3),
         {"state_seq": 7, "fields": 7, "motion_scale": 10.0, "lock_flags": 2, "origin_epoch": 3},
-        "vcp.md §6.2 example")
-    add("control_state_epoch_only", "udp", "d2h", 0x02, control_payload(8, 0b100, 0.0, 0, 65535),
+        "vcp.md §6.2 example",
+    )
+    add(
+        "control_state_epoch_only",
+        "udp",
+        "d2h",
+        0x02,
+        control_payload(8, 0b100, 0.0, 0, 65535),
         {"state_seq": 8, "fields": 4, "motion_scale": 0.0, "lock_flags": 0, "origin_epoch": 65535},
-        "only origin_epoch present; motion_scale/lock_flags bytes are present but must be ignored")
-    add("clock_request", "udp", "h2d", 0x03, clock_payload(0, 5_000_000_000, 0, 0),
-        {"mode": 0, "t1": 5_000_000_000, "t2": 0, "t3": 0}, "vcp.md §6.3 request example")
-    add("clock_reply", "udp", "d2h", 0x03, clock_payload(1, 5_000_000_000, 1_000_400_000, 1_000_450_000),
-        {"mode": 1, "t1": 5_000_000_000, "t2": 1_000_400_000, "t3": 1_000_450_000,
-         "t4_host_on_receipt": 5_001_000_000, "expected_offset_ns": -4_000_075_000,
-         "expected_delay_ns": 950_000},
-        "vcp.md §6.3 reply example; offset/delay per the §6.3 formulas with the given t4")
-    add("status_camera", "udp", "h2d", 0x04, status_payload(2, 1, 7, 0, 0b11, "Camera"),
-        {"status_seq": 2, "applied_pose_seq": 1, "control_ack": 7, "error_code": 0, "flags": 3,
-         "camera_name": "Camera"}, "vcp.md §6.4 example")
-    add("status_no_camera_utf8", "udp", "h2d", 0x04, status_payload(3, 0, 0, 1, 0b01, "Kamera Ω"),
-        {"status_seq": 3, "applied_pose_seq": 0, "control_ack": 0, "error_code": 1, "flags": 1,
-         "camera_name": "Kamera Ω"}, "error 1 (no camera), non-ASCII name (str8 counts bytes)")
+        "only origin_epoch present; motion_scale/lock_flags bytes are present but must be ignored",
+    )
+    add(
+        "clock_request",
+        "udp",
+        "h2d",
+        0x03,
+        clock_payload(0, 5_000_000_000, 0, 0),
+        {"mode": 0, "t1": 5_000_000_000, "t2": 0, "t3": 0},
+        "vcp.md §6.3 request example",
+    )
+    add(
+        "clock_reply",
+        "udp",
+        "d2h",
+        0x03,
+        clock_payload(1, 5_000_000_000, 1_000_400_000, 1_000_450_000),
+        {
+            "mode": 1,
+            "t1": 5_000_000_000,
+            "t2": 1_000_400_000,
+            "t3": 1_000_450_000,
+            "t4_host_on_receipt": 5_001_000_000,
+            "expected_offset_ns": -4_000_075_000,
+            "expected_delay_ns": 950_000,
+        },
+        "vcp.md §6.3 reply example; offset/delay per the §6.3 formulas with the given t4",
+    )
+    add(
+        "status_camera",
+        "udp",
+        "h2d",
+        0x04,
+        status_payload(2, 1, 7, 0, 0b11, "Camera"),
+        {
+            "status_seq": 2,
+            "applied_pose_seq": 1,
+            "control_ack": 7,
+            "error_code": 0,
+            "flags": 3,
+            "camera_name": "Camera",
+        },
+        "vcp.md §6.4 example",
+    )
+    add(
+        "status_no_camera_utf8",
+        "udp",
+        "h2d",
+        0x04,
+        status_payload(3, 0, 0, 1, 0b01, "Kamera Ω"),
+        {
+            "status_seq": 3,
+            "applied_pose_seq": 0,
+            "control_ack": 0,
+            "error_code": 1,
+            "flags": 1,
+            "camera_name": "Kamera Ω",
+        },
+        "error 1 (no camera), non-ASCII name (str8 counts bytes)",
+    )
     dev = bytes.fromhex("00112233445566778899aabbccddeeff")
-    add("hello_pair", "tcp", "d2h", 0x40, hello_payload(0, dev, b"\xa5" * 16, "iPhone"),
-        {"mode": 0, "proto_min": 1, "proto_max": 1, "device_id": hx(dev), "nonce_d": "a5" * 16,
-         "device_name": "iPhone"}, "vcp.md §9.3 example")
-    add("error_not_paired", "tcp", "h2d", 0x4F, error_payload(3, "device not paired"),
-        {"code": 3, "message": "device not paired"}, "vcp.md §11")
-    return {"cases": cases, "float_tolerance": 0.0,
-            "note": "floats in fields are the exact binary32 values on the wire"}, files
+    add(
+        "hello_pair",
+        "tcp",
+        "d2h",
+        0x40,
+        hello_payload(0, dev, b"\xa5" * 16, "iPhone"),
+        {
+            "mode": 0,
+            "proto_min": 1,
+            "proto_max": 1,
+            "device_id": hx(dev),
+            "nonce_d": "a5" * 16,
+            "device_name": "iPhone",
+        },
+        "vcp.md §9.3 example",
+    )
+    add(
+        "error_not_paired",
+        "tcp",
+        "h2d",
+        0x4F,
+        error_payload(3, "device not paired"),
+        {"code": 3, "message": "device not paired"},
+        "vcp.md §11",
+    )
+    return {
+        "cases": cases,
+        "float_tolerance": 0.0,
+        "note": "floats in fields are the exact binary32 values on the wire",
+    }, files
 
 
 def build_receive() -> dict:
@@ -346,17 +478,20 @@ def build_receive() -> dict:
             c["fields"] = fields
         cases.append(c)
 
-    def reframe(payload=good_pose, msg_type=0x01, sid=SID, version=1, key=K_D2H, len_field=None,
-                magic=b"VCP1"):
-        h = magic + struct.pack("<BBIH", version, msg_type, sid,
-                                len(payload) if len_field is None else len_field)
+    def reframe(payload=good_pose, msg_type=0x01, sid=SID, version=1, key=K_D2H, len_field=None, magic=b"VCP1"):
+        h = magic + struct.pack("<BBIH", version, msg_type, sid, len(payload) if len_field is None else len_field)
         return h + payload + tag(key, h + payload)
 
     case("valid_pose", good, True, "all", fields={"seq": 1})
     case("too_short_datagram", good[:19], False, "4.3.1")
     case("oversize_datagram", reframe(good_pose + bytes(1200 - 20 - len(good_pose) + 1)), False, "4.3.1")
-    case("max_size_datagram_accepted", reframe(good_pose + bytes(1200 - 20 - len(good_pose))), True,
-         "4.3.1 (1200 bytes is allowed; extra payload bytes ignored per §2)", fields={"seq": 1})
+    case(
+        "max_size_datagram_accepted",
+        reframe(good_pose + bytes(1200 - 20 - len(good_pose))),
+        True,
+        "4.3.1 (1200 bytes is allowed; extra payload bytes ignored per §2)",
+        fields={"seq": 1},
+    )
     case("bad_magic", reframe(magic=b"VCP2"), False, "4.3.2")
     case("unknown_version", reframe(version=2), False, "4.3.3")
     case("len_too_large", reframe(len_field=len(good_pose) + 1), False, "4.3.4")
@@ -372,27 +507,68 @@ def build_receive() -> dict:
     case("payload_bit_flip", bytes(body_flip), False, "4.3.6")
     case("wrong_direction_key", reframe(key=K_H2D), False, "4.3.6 (reflected datagram)")
     case("unknown_type", reframe(msg_type=0x7E), False, "4.3.7")
-    case("clock_request_from_device", udp(0x03, SID, clock_payload(0, 1, 0, 0), K_D2H), False,
-         "4.3.7 (CLOCK mode 0 is host→device only)")
+    case(
+        "clock_request_from_device",
+        udp(0x03, SID, clock_payload(0, 1, 0, 0), K_D2H),
+        False,
+        "4.3.7 (CLOCK mode 0 is host→device only)",
+    )
     case("pose_payload_short", reframe(payload=good_pose[:41]), False, "4.3.8")
-    case("pose_payload_longer_accepted", reframe(payload=good_pose + b"\xee" * 6), True,
-         "§2 forward compatibility (tail ignored)", fields={"seq": 1, "tracking_state": 5})
-    case("pose_nan_position", udp(0x01, SID, pose_payload(2, 1, (math.nan, 0.0, 0.0), (0, 0, 0, 1), 5), K_D2H),
-         False, "§6.1 non-finite")
-    case("pose_inf_quat", udp(0x01, SID, pose_payload(2, 1, (0, 0, 0), (math.inf, 0, 0, 1), 5), K_D2H),
-         False, "§6.1 non-finite")
-    case("pose_quat_norm_1_2", udp(0x01, SID, pose_payload(2, 1, (0, 0, 0), (0, 0, 0, 1.2), 5), K_D2H),
-         False, "§6.1 quaternion norm outside 0.9–1.1")
-    case("pose_quat_norm_1_05_accepted", udp(0x01, SID, pose_payload(2, 1, (0, 0, 0), (0, 0, 0, 1.05), 5), K_D2H),
-         True, "§6.1 (renormalised by the host)", fields={"seq": 2, "orientation_renormalised": [0.0, 0.0, 0.0, 1.0]})
+    case(
+        "pose_payload_longer_accepted",
+        reframe(payload=good_pose + b"\xee" * 6),
+        True,
+        "§2 forward compatibility (tail ignored)",
+        fields={"seq": 1, "tracking_state": 5},
+    )
+    case(
+        "pose_nan_position",
+        udp(0x01, SID, pose_payload(2, 1, (math.nan, 0.0, 0.0), (0, 0, 0, 1), 5), K_D2H),
+        False,
+        "§6.1 non-finite",
+    )
+    case(
+        "pose_inf_quat",
+        udp(0x01, SID, pose_payload(2, 1, (0, 0, 0), (math.inf, 0, 0, 1), 5), K_D2H),
+        False,
+        "§6.1 non-finite",
+    )
+    case(
+        "pose_quat_norm_1_2",
+        udp(0x01, SID, pose_payload(2, 1, (0, 0, 0), (0, 0, 0, 1.2), 5), K_D2H),
+        False,
+        "§6.1 quaternion norm outside 0.9–1.1",
+    )
+    case(
+        "pose_quat_norm_1_05_accepted",
+        udp(0x01, SID, pose_payload(2, 1, (0, 0, 0), (0, 0, 0, 1.05), 5), K_D2H),
+        True,
+        "§6.1 (renormalised by the host)",
+        fields={"seq": 2, "orientation_renormalised": [0.0, 0.0, 0.0, 1.0]},
+    )
     for scale in (0.0005, 1500.0, math.nan):
-        case(f"control_scale_{str(scale).replace('.', '_')}",
-             udp(0x02, SID, control_payload(1, 0b111, scale, 0, 0), K_D2H), False, "§6.2 motion_scale range")
-    case("control_scale_absent_ignored", udp(0x02, SID, control_payload(1, 0b110, math.nan, 0, 0), K_D2H), True,
-         "§6.2 (motion_scale not present, so its bytes are ignored)", fields={"state_seq": 1, "fields": 6})
-    return {"receiver": {"session_id": SID, "k_d2h": hx(K_D2H), "k_h2d": hx(K_H2D),
-                         "role": "host for direction d2h, device for h2d"},
-            "cases": cases}
+        case(
+            f"control_scale_{str(scale).replace('.', '_')}",
+            udp(0x02, SID, control_payload(1, 0b111, scale, 0, 0), K_D2H),
+            False,
+            "§6.2 motion_scale range",
+        )
+    case(
+        "control_scale_absent_ignored",
+        udp(0x02, SID, control_payload(1, 0b110, math.nan, 0, 0), K_D2H),
+        True,
+        "§6.2 (motion_scale not present, so its bytes are ignored)",
+        fields={"state_seq": 1, "fields": 6},
+    )
+    return {
+        "receiver": {
+            "session_id": SID,
+            "k_d2h": hx(K_D2H),
+            "k_h2d": hx(K_H2D),
+            "role": "host for direction d2h, device for h2d",
+        },
+        "cases": cases,
+    }
 
 
 def build_freshness() -> dict:
@@ -412,21 +588,28 @@ def build_freshness() -> dict:
             {"message": "POSE.seq", "input": pose_in, "applied": newest(pose_in)},
             {"message": "CONTROL_STATE.state_seq", "input": control_in, "applied": newest(control_in)},
             {"message": "STATUS.status_seq", "input": [2, 1, 3], "applied": newest([2, 1, 3])},
-            {"message": "CONTROL_STATE.origin_epoch (reset when changed, including wrap)",
-             "input": [3, 3, 4, 65535, 0, 0], "resets_at_index": [2, 3, 4]},
+            {
+                "message": "CONTROL_STATE.origin_epoch (reset when changed, including wrap)",
+                "input": [3, 3, 4, 65535, 0, 0],
+                "resets_at_index": [2, 3, 4],
+            },
         ],
     }
 
 
 def build_video_fragments() -> dict:
     frame = bytes((i * 7 + 3) & 0xFF for i in range(2600))
-    first, _, last = video_fragments(9, frame, render_time_ns=123_456_789_012, pose_seq=4_000_000_000,
-                                     quality=100)
+    first, _, last = video_fragments(9, frame, render_time_ns=123_456_789_012, pose_seq=4_000_000_000, quality=100)
     cases = []
 
     def case(name, payload, accept, rule, direction="h2d", reason=None):
-        c = {"name": name, "hex": hx(udp(0x05, SID, payload, KEYS[direction])), "direction": direction,
-             "accept": accept, "rule": rule}
+        c = {
+            "name": name,
+            "hex": hx(udp(0x05, SID, payload, KEYS[direction])),
+            "direction": direction,
+            "accept": accept,
+            "rule": rule,
+        }
         if accept:
             c["fields"] = video_fields(payload)
         else:
@@ -442,28 +625,36 @@ def build_video_fragments() -> dict:
     case("video_data_short", last[:-1], False, "§6.5 data shorter than its fragment", reason="too_short")
     case("video_frame_id_zero", video_payload(0, 4, 0, 1, 4, b"abcd"), False, "§6.5 frame_id", reason="layout")
     case("video_frame_len_zero", video_payload(1, 0, 0, 0, 4, b""), False, "§6.5 frame_len", reason="layout")
-    case("video_frame_len_over_4mib", video_payload(1, VIDEO_MAX_FRAME + 1, 0, 3654, VIDEO_MAX_DATA,
-                                                    frame[:VIDEO_MAX_DATA]),
-         False, "§6.5 frame_len", reason="layout")
-    case("video_frag_size_zero", video_payload(1, 4, 0, 1, 0, b"abcd"), False, "§6.5 frag_size",
-         reason="layout")
-    case("video_frag_size_1149", video_payload(1, 10, 0, 1, 1149, bytes(10)), False, "§6.5 frag_size",
-         reason="layout")
-    case("video_frag_count_wrong", video_payload(1, 4, 0, 2, 4, b"abcd"), False, "§6.5 frag_count",
-         reason="layout")
-    case("video_frag_index_past_end", video_payload(1, 8, 2, 2, 4, b""), False, "§6.5 frag_index",
-         reason="layout")
-    case("video_codec_h264_reserved", video_payload(1, 4, 0, 1, 4, b"abcd", codec=2), False,
-         "§6.5 codec", reason="format")
-    case("video_color_unknown", video_payload(1, 4, 0, 1, 4, b"abcd", color=1), False, "§6.5 color",
-         reason="format")
-    case("video_from_device", example, False, "4.3.7 (host → device only)", direction="d2h",
-         reason="direction")
-    return {"receiver": {"session_id": SID, "k_d2h": hx(K_D2H), "k_h2d": hx(K_H2D),
-                         "role": "device for direction h2d, host for d2h"},
-            "limits": {"header_len": VIDEO_HEADER.size, "max_data": VIDEO_MAX_DATA,
-                       "max_frame_len": VIDEO_MAX_FRAME},
-            "cases": cases}
+    case(
+        "video_frame_len_over_4mib",
+        video_payload(1, VIDEO_MAX_FRAME + 1, 0, 3654, VIDEO_MAX_DATA, frame[:VIDEO_MAX_DATA]),
+        False,
+        "§6.5 frame_len",
+        reason="layout",
+    )
+    case("video_frag_size_zero", video_payload(1, 4, 0, 1, 0, b"abcd"), False, "§6.5 frag_size", reason="layout")
+    case("video_frag_size_1149", video_payload(1, 10, 0, 1, 1149, bytes(10)), False, "§6.5 frag_size", reason="layout")
+    case("video_frag_count_wrong", video_payload(1, 4, 0, 2, 4, b"abcd"), False, "§6.5 frag_count", reason="layout")
+    case("video_frag_index_past_end", video_payload(1, 8, 2, 2, 4, b""), False, "§6.5 frag_index", reason="layout")
+    case(
+        "video_codec_h264_reserved",
+        video_payload(1, 4, 0, 1, 4, b"abcd", codec=2),
+        False,
+        "§6.5 codec",
+        reason="format",
+    )
+    case("video_color_unknown", video_payload(1, 4, 0, 1, 4, b"abcd", color=1), False, "§6.5 color", reason="format")
+    case("video_from_device", example, False, "4.3.7 (host → device only)", direction="d2h", reason="direction")
+    return {
+        "receiver": {
+            "session_id": SID,
+            "k_d2h": hx(K_D2H),
+            "k_h2d": hx(K_H2D),
+            "role": "device for direction h2d, host for d2h",
+        },
+        "limits": {"header_len": VIDEO_HEADER.size, "max_data": VIDEO_MAX_DATA, "max_frame_len": VIDEO_MAX_FRAME},
+        "cases": cases,
+    }
 
 
 class Reassembler:
@@ -514,16 +705,26 @@ def build_reassembly() -> dict:
     odd = frags(1, pose_seq=11)
     sequences = {
         "in_order": ("fragments in order complete the frame", [f1[0], f1[1], f1[2]]),
-        "reordered_and_repeated": ("any order; a repeated index and a late copy are dropped",
-                                   [f1[2], f1[0], f1[2], f1[1], f1[0]]),
-        "newer_frame_wins": ("frame 2 starts before frame 1 is complete: frame 1 is lost and its "
-                             "last fragment is stale", [f1[0], f1[1], f2[0], f1[2], f2[1], f2[2]]),
-        "gaps_in_frame_id": ("frame ids may skip; an older id after a newer one is stale",
-                             [f3[0], f3[1], f3[2], f5[0], f5[1], f5[2], f4[0]]),
-        "inconsistent_fields": ("a fragment whose frame fields differ abandons the frame",
-                                [f1[0], odd[1], f1[1], f1[2], f2[0], f2[1], f2[2]]),
-        "single_fragment_frames": ("a frame no larger than frag_size completes at once",
-                                   [frags(1, 4)[0], frags(2, 3)[0]]),
+        "reordered_and_repeated": (
+            "any order; a repeated index and a late copy are dropped",
+            [f1[2], f1[0], f1[2], f1[1], f1[0]],
+        ),
+        "newer_frame_wins": (
+            "frame 2 starts before frame 1 is complete: frame 1 is lost and its last fragment is stale",
+            [f1[0], f1[1], f2[0], f1[2], f2[1], f2[2]],
+        ),
+        "gaps_in_frame_id": (
+            "frame ids may skip; an older id after a newer one is stale",
+            [f3[0], f3[1], f3[2], f5[0], f5[1], f5[2], f4[0]],
+        ),
+        "inconsistent_fields": (
+            "a fragment whose frame fields differ abandons the frame",
+            [f1[0], odd[1], f1[1], f1[2], f2[0], f2[1], f2[2]],
+        ),
+        "single_fragment_frames": (
+            "a frame no larger than frag_size completes at once",
+            [frags(1, 4)[0], frags(2, 3)[0]],
+        ),
     }
     out = []
     for name, (description, payloads) in sequences.items():
@@ -532,47 +733,76 @@ def build_reassembly() -> dict:
             outcome = r.push(p)
             step = {"hex": hx(udp(0x05, SID, p, K_H2D)), "outcome": outcome}
             if outcome == "complete":
-                step["frame"] = {"frame_id": r.newest, "data": hx(r.frame_bytes()),
-                                 "render_time_ns": r.frame["render_time_ns"],
-                                 "pose_seq": r.frame["pose_seq"]}
+                step["frame"] = {
+                    "frame_id": r.newest,
+                    "data": hx(r.frame_bytes()),
+                    "render_time_ns": r.frame["render_time_ns"],
+                    "pose_seq": r.frame["pose_seq"],
+                }
             steps.append(step)
-        out.append({"name": name, "description": description, "steps": steps,
-                    "complete": r.complete, "lost": r.lost})
-    return {"note": "Each sequence starts a new session (fresh receiver). Datagrams use the vcp.md §11 "
-                    "example keys, host -> device; frag_size is 4 to keep the vectors short.",
-            "session_id": SID, "k_h2d": hx(K_H2D), "sequences": out}
+        out.append({"name": name, "description": description, "steps": steps, "complete": r.complete, "lost": r.lost})
+    return {
+        "note": "Each sequence starts a new session (fresh receiver). Datagrams use the vcp.md §11 "
+        "example keys, host -> device; frag_size is 4 to keep the vectors short.",
+        "session_id": SID,
+        "k_h2d": hx(K_H2D),
+        "sequences": out,
+    }
 
 
 def build_video_report() -> dict:
     cases = []
 
     def case(name, payload, accept, rule, direction="d2h", reason=None):
-        c = {"name": name, "hex": hx(udp(0x07, SID, payload, KEYS[direction])), "direction": direction,
-             "accept": accept, "rule": rule}
+        c = {
+            "name": name,
+            "hex": hx(udp(0x07, SID, payload, KEYS[direction])),
+            "direction": direction,
+            "accept": accept,
+            "rule": rule,
+        }
         if accept:
             seq, newest, complete, m2p, _ = REPORT.unpack_from(payload)
-            c["fields"] = {"report_seq": seq, "newest_frame_id": newest, "frames_complete": complete,
-                           "m2p_p95_ms": m2p}
+            c["fields"] = {"report_seq": seq, "newest_frame_id": newest, "frames_complete": complete, "m2p_p95_ms": m2p}
         else:
             c["reason"] = reason
         cases.append(c)
 
     example = report_payload(3, 120, 117, 95)
     case("report_example", example, True, "vcp.md §6.6 example")
-    case("report_nothing_complete", report_payload(1, 5, 0, 0), True,
-         "§6.6 a fragment arrived but no frame completed; m2p not measured")
-    case("report_all_complete", report_payload(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFF), True,
-         "§6.6 frames_complete = newest_frame_id is allowed; u32/u16 maxima")
+    case(
+        "report_nothing_complete",
+        report_payload(1, 5, 0, 0),
+        True,
+        "§6.6 a fragment arrived but no frame completed; m2p not measured",
+    )
+    case(
+        "report_all_complete",
+        report_payload(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFF),
+        True,
+        "§6.6 frames_complete = newest_frame_id is allowed; u32/u16 maxima",
+    )
     case("report_reserved_ignored", report_payload(4, 9, 8, 30, reserved=0xBEEF), True, "§2 reserved ignored")
     case("report_payload_longer_accepted", example + b"\xee" * 4, True, "§2 (extra bytes ignored)")
     case("report_short", example[:15], False, "§6.6 shorter than 16 bytes", reason="too_short")
-    case("report_complete_above_newest", report_payload(2, 7, 8, 0), False,
-         "§6.6 frames_complete > newest_frame_id", reason="counts")
-    case("report_from_host", example, False, "4.3.7 (device → host only)", direction="h2d",
-         reason="direction")
-    return {"receiver": {"session_id": SID, "k_d2h": hx(K_D2H), "k_h2d": hx(K_H2D),
-                         "role": "host for direction d2h, device for h2d"},
-            "len": REPORT.size, "cases": cases}
+    case(
+        "report_complete_above_newest",
+        report_payload(2, 7, 8, 0),
+        False,
+        "§6.6 frames_complete > newest_frame_id",
+        reason="counts",
+    )
+    case("report_from_host", example, False, "4.3.7 (device → host only)", direction="h2d", reason="direction")
+    return {
+        "receiver": {
+            "session_id": SID,
+            "k_d2h": hx(K_D2H),
+            "k_h2d": hx(K_H2D),
+            "role": "host for direction d2h, device for h2d",
+        },
+        "len": REPORT.size,
+        "cases": cases,
+    }
 
 
 def build_clock_sync() -> dict:
@@ -588,8 +818,12 @@ def build_clock_sync() -> dict:
             return None
         best = min(reversed(window), key=lambda s: s[1])  # first minimum = newest
         sq = sum(min(abs(o - best[0]), 2**64 - 1) ** 2 for o, _ in window)
-        return {"offset_ns": best[0], "delay_ns": best[1], "jitter_ns": math.isqrt(sq // len(window)),
-                "samples": len(window)}
+        return {
+            "offset_ns": best[0],
+            "delay_ns": best[1],
+            "jitter_ns": math.isqrt(sq // len(window)),
+            "samples": len(window),
+        }
 
     def request(t1):
         if len(outstanding) == outstanding_max:
@@ -615,8 +849,7 @@ def build_clock_sync() -> dict:
                     window.pop(0)
                 window.append((offset, delay))
         assert result == expect, (note, result)
-        e = {"op": "reply", "t1": t1, "t2": t2, "t3": t3, "t4": t4, "result": result,
-             "estimate": estimate()}
+        e = {"op": "reply", "t1": t1, "t2": t2, "t3": t3, "t4": t4, "result": result, "estimate": estimate()}
         if note:
             e["note"] = note
         events.append(e)
@@ -629,30 +862,46 @@ def build_clock_sync() -> dict:
         reply(t1, t2, t2 + proc, t1 + up + proc + down, expect, note)
 
     # (uplink, device processing, downlink) in ns: asymmetric paths shift θ by (up−down)/2.
-    paths = [(3_000_001, 40_000, 2_000_000), (900_000, 50_000, 800_001), (7_000_000, 30_000, 1_000_000),
-             (1_200_000, 60_000, 1_500_000), (2_500_000, 45_000, 2_600_003)]
+    paths = [
+        (3_000_001, 40_000, 2_000_000),
+        (900_000, 50_000, 800_001),
+        (7_000_000, 30_000, 1_000_000),
+        (1_200_000, 60_000, 1_500_000),
+        (2_500_000, 45_000, 2_600_003),
+    ]
     t = 10_000_000_000
     for up, proc, down in paths:
         exchange(t, up, proc, down)
         t += 1_000_000_000
     # Replay of the newest answered reply, still well inside 2 s: only consumption rejects it.
     dup = events[-1]
-    reply(dup["t1"], dup["t2"], dup["t3"], dup["t4"] + 1_000_000, "unmatched",
-          "duplicate reply to an answered request")
+    reply(dup["t1"], dup["t2"], dup["t3"], dup["t4"] + 1_000_000, "unmatched", "duplicate reply to an answered request")
     reply(t + 123, 1, 2, t + 500, "unmatched", "t1 never requested")
     for i in range(5):  # five unanswered requests evict the first one
         request(t + i * 1_000_000_000)
     reply(t, t + theta, t + theta + 1, t + 4_500_000_000, "unmatched", "request evicted by four newer ones")
     last = t + 4_000_000_000
-    reply(last, last + 1_000_000 + theta, last + 1_050_000 + theta, last + timeout, "expired",
-          "arrived exactly 2 s after the request")
+    reply(
+        last,
+        last + 1_000_000 + theta,
+        last + 1_050_000 + theta,
+        last + timeout,
+        "expired",
+        "arrived exactly 2 s after the request",
+    )
     t += 5_000_000_000
     request(t)
     reply(t, t + 5_000 + theta, t + 4_000 + theta, t + 20_000, "invalid", "t3 before t2")
     t += 1_000_000_000
     request(t)
-    reply(t, t + 100 + theta, t + 2_000_100 + theta, t + 1_000_000, "invalid",
-          "negative round trip (device processing longer than the round trip)")
+    reply(
+        t,
+        t + 100 + theta,
+        t + 2_000_100 + theta,
+        t + 1_000_000,
+        "invalid",
+        "negative round trip (device processing longer than the round trip)",
+    )
     t += 1_000_000_000
     exchange(t, 1_999_000_000, 10_000, 900_000, "accepted", "just inside the 2 s limit")
     t += 1_000_000_000
@@ -668,14 +917,13 @@ def build_clock_sync() -> dict:
     assert max(abs(o - theta) for o, _ in window) < 10_000_000, "2 s sample must have left the window"
     return {
         "note": "vcp.md §6.3 host side. Feed events in order into one estimator; 'request' records t1 "
-                "as sent; for 'reply', t4 is the host clock on receipt. 'estimate' is the state after "
-                "the reply (null before the first accepted sample).",
+        "as sent; for 'reply', t4 is the host clock on receipt. 'estimate' is the state after "
+        "the reply (null before the first accepted sample).",
         "outstanding": outstanding_max,
         "reply_timeout_ns": timeout,
         "window": window_max,
         "events": events,
     }
-
 
 
 def build_pairing() -> tuple[dict, dict]:
@@ -709,10 +957,23 @@ def build_pairing() -> tuple[dict, dict]:
         raise SystemExit("SELF-CHECK FAILED: wrong-code pairing produced the correct secret")
 
     vec = {
-        "params": {"group": "RFC 5054 3072-bit", "g": G3072, "hash": "SHA-256", "N": format(N3072, "X"),
-                   "I": I.decode(), "code": code},
-        "inputs": {"s": hx(s), "a": format(a, "X"), "b": format(b, "X"), "device_id": hx(device_id),
-                   "host_id": hx(host_id), "nonce_d": "a5" * 16, "device_name": "iPhone"},
+        "params": {
+            "group": "RFC 5054 3072-bit",
+            "g": G3072,
+            "hash": "SHA-256",
+            "N": format(N3072, "X"),
+            "I": I.decode(),
+            "code": code,
+        },
+        "inputs": {
+            "s": hx(s),
+            "a": format(a, "X"),
+            "b": format(b, "X"),
+            "device_id": hx(device_id),
+            "host_id": hx(host_id),
+            "nonce_d": "a5" * 16,
+            "device_name": "iPhone",
+        },
         "srp": {k: format(r[k], "X") for k in ("k", "x", "v", "A", "B", "u", "S")},
         "K": hx(K),
         "T_pair": hx(t_pair),
@@ -725,8 +986,11 @@ def build_pairing() -> tuple[dict, dict]:
             "PAIR_PROOF": hx(tcp(0x42, proof)),
             "PAIR_ACCEPT": hx(tcp(0x43, m2)),
         },
-        "wrong_code": {"code": "042918", "M1": hx(m1_wrong),
-                       "expect": "host rejects with ERROR 2 (M1 differs from the correct one)"},
+        "wrong_code": {
+            "code": "042918",
+            "M1": hx(m1_wrong),
+            "expect": "host rejects with ERROR 2 (M1 differs from the correct one)",
+        },
     }
     return vec, {"pk": pk, "device_id": device_id, "host_id": host_id}
 
@@ -763,14 +1027,28 @@ def build_session(ctx: dict) -> dict:
 
 def build_rfc5054() -> dict:
     v = RFC5054_B
-    r = srp(N1024, 2, hashlib.sha1, v["I"].encode(), v["P"].encode(), bytes.fromhex(v["s"]),
-            int(v["a"], 16), int(v["b"], 16))
+    r = srp(
+        N1024,
+        2,
+        hashlib.sha1,
+        v["I"].encode(),
+        v["P"].encode(),
+        bytes.fromhex(v["s"]),
+        int(v["a"], 16),
+        int(v["b"], 16),
+    )
     for key in ("k", "x", "v", "A", "B", "u", "S"):
         got = format(r[key], "X").rjust(len(v[key]), "0")
         if got != v[key]:
             raise SystemExit(f"SELF-CHECK FAILED: RFC 5054 Appendix B {key}: {got} != {v[key]}")
-    return {"source": "RFC 5054 Appendix B", "group": "RFC 5054 1024-bit", "g": 2, "hash": "SHA-1",
-            "N": format(N1024, "X"), **v}
+    return {
+        "source": "RFC 5054 Appendix B",
+        "group": "RFC 5054 1024-bit",
+        "g": 2,
+        "hash": "SHA-1",
+        "N": format(N1024, "X"),
+        **v,
+    }
 
 
 # --- coordinates (vcp.md §7) -----------------------------------------------------------------
@@ -779,8 +1057,12 @@ def build_rfc5054() -> dict:
 def qmul(a, b):
     ax, ay, az, aw = a
     bx, by, bz, bw = b
-    return (aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
-            aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz)
+    return (
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    )
 
 
 def qaxis(axis, deg):
@@ -830,8 +1112,15 @@ def build_motion() -> tuple[dict, bytes]:
         for _ in range(hold):
             emit(p, q)
         pos, rot = frames[-1]
-        keys.append({"name": name, "frame": len(frames) - 1, "position": list(pos),
-                     "orientation": list(rot), "matrix_world": [rnd(r) for r in qmatrix(rot, pos)]})
+        keys.append(
+            {
+                "name": name,
+                "frame": len(frames) - 1,
+                "position": list(pos),
+                "orientation": list(rot),
+                "matrix_world": [rnd(r) for r in qmatrix(rot, pos)],
+            }
+        )
 
     def ramp(fn):
         for i in range(1, move + 1):
@@ -857,10 +1146,10 @@ def build_motion() -> tuple[dict, bytes]:
         return qrot(k["orientation"], (0, 0, -1))
 
     by = {k["name"]: k for k in keys}
-    assert all(abs(a - b) < 1e-6 for a, b in zip(forward(by["start"]), (0, 1, 0)))
-    assert all(abs(a - b) < 1e-6 for a, b in zip(forward(by["pan"]), (-1, 0, 0)))
+    assert all(abs(a - b) < 1e-6 for a, b in zip(forward(by["start"]), (0, 1, 0), strict=True))
+    assert all(abs(a - b) < 1e-6 for a, b in zip(forward(by["pan"]), (-1, 0, 0), strict=True))
     c, s30 = math.cos(math.radians(30)), math.sin(math.radians(30))
-    assert all(abs(a - b) < 1e-6 for a, b in zip(forward(by["tilt"]), (-c, 0, -s30)))
+    assert all(abs(a - b) < 1e-6 for a, b in zip(forward(by["tilt"]), (-c, 0, -s30), strict=True))
     assert by["crane"]["position"] == [f32(-2.0), 0.0, f32(3.1)], by["crane"]["position"]
 
     blob = b"VCMO" + struct.pack("<HHI", 1, rate, len(frames))
@@ -868,8 +1157,8 @@ def build_motion() -> tuple[dict, bytes]:
         blob += struct.pack("<7f", *pos, *rot)
     doc = {
         "note": "Canonical axes (vcp.md §7). Stream frames in order at rate_hz (seq = index + 1). "
-                "Each keypose is the last frame of a 0.5 s hold; matrix_world is row-major with "
-                "an identity rig (VCam_Origin at the world origin, scale 1).",
+        "Each keypose is the last frame of a 0.5 s hold; matrix_world is row-major with "
+        "an identity rig (VCam_Origin at the world origin, scale 1).",
         "rate_hz": rate,
         "frames": [{"position": list(pos), "orientation": list(rot)} for pos, rot in frames],
         "keyposes": keys,
@@ -886,9 +1175,11 @@ def build_rig(motion: dict) -> dict:
 
     def mat(q):
         x, y, z, w = q
-        return [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-                [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-                [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+        return [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ]
 
     def mmul(a, b):
         return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
@@ -912,8 +1203,12 @@ def build_rig(motion: dict) -> dict:
     def quat(m):
         # Largest-component extraction, then w >= 0.
         t = m[0][0] + m[1][1] + m[2][2]
-        cands = [(1 + t, 3), (1 + m[0][0] - m[1][1] - m[2][2], 0), (1 - m[0][0] + m[1][1] - m[2][2], 1),
-                 (1 - m[0][0] - m[1][1] + m[2][2], 2)]
+        cands = [
+            (1 + t, 3),
+            (1 + m[0][0] - m[1][1] - m[2][2], 0),
+            (1 - m[0][0] + m[1][1] - m[2][2], 1),
+            (1 - m[0][0] - m[1][1] + m[2][2], 2),
+        ]
         v, k = max(cands)
         r = math.sqrt(v) * 2
         if k == 3:
@@ -933,7 +1228,7 @@ def build_rig(motion: dict) -> dict:
         p0, yaw0 = ([0.0, 0.0, 0.0], 0.0) if zero_pose is None else (list(zero_pose[0]), heading(mat(zero_pose[1])))
         un = rz(-yaw0)
         r = mmul(un, mat(q))
-        prel = mvec(un, [a - b for a, b in zip(p, p0)])
+        prel = mvec(un, [a - b for a, b in zip(p, p0, strict=True)])
         if locks & 4:
             prel = [0.0, 0.0, 0.0]
         if locks & 1:
@@ -964,24 +1259,59 @@ def build_rig(motion: dict) -> dict:
         if zero_pose is not None:
             zero_pose = (rnd(zero_pose[0]), rnd(zero_pose[1]))
         pos, rot, yaw0 = expected(p, q, zero_pose, scale, locks)
-        cases.append({
-            "name": name, "note": note, "position": rnd(p), "orientation": rnd(q),
-            "zero_pose": None if zero_pose is None else {"position": rnd(zero_pose[0]), "orientation": rnd(zero_pose[1])},
-            "zero_yaw": round(yaw0, 12), "motion_scale": scale, "lock_flags": locks,
-            "expected_position": rnd(pos), "expected_orientation": rnd(rot),
-        })
+        cases.append(
+            {
+                "name": name,
+                "note": note,
+                "position": rnd(p),
+                "orientation": rnd(q),
+                "zero_pose": None
+                if zero_pose is None
+                else {"position": rnd(zero_pose[0]), "orientation": rnd(zero_pose[1])},
+                "zero_yaw": round(yaw0, 12),
+                "motion_scale": scale,
+                "lock_flags": locks,
+                "expected_position": rnd(pos),
+                "expected_orientation": rnd(rot),
+            }
+        )
 
     case("identity", (0, 0, 0), (0, 0, 0, 1), note="no zero, no locks: local = device pose")
     case("scale_10", (0.5, -1.25, 1.6), level, scale=10.0, note="1:10 motion scale; rotation unscaled")
-    case("lock_roll", (1, 2, 1.7), tilted, locks=2, note="yaw 30, pitch -20, roll 15 -> roll removed, heading and pitch kept")
+    case(
+        "lock_roll",
+        (1, 2, 1.7),
+        tilted,
+        locks=2,
+        note="yaw 30, pitch -20, roll 15 -> roll removed, heading and pitch kept",
+    )
     case("lock_height", (1, 2, 1.7), tilted, locks=1, note="local z = 0")
     case("pan_only", (1, 2, 1.7), tilted, locks=4, note="position locked at the origin")
-    case("set_origin_then_walk", (-1, 0.5, 1.2), cam(100, -5), zero_pose=((1, 1, 1.6), cam(90)),
-         note="zero at a camera facing -X; 2 m along -X and 0.5 m to its left -> local (-0.5, 2, -0.4) (forward +Y, right +X), yaw +10")
-    case("combined", (-1, 0.5, 1.2), cam(100, -5, 8), zero_pose=((1, 1, 1.6), cam(90)), scale=2.0, locks=3,
-         note="zero + scale 2 + lock height + lock roll")
-    case("straight_down_lock_roll", (0, 0, 2), (0, 0, 0, 1), zero_pose=((0, 0, 2), qaxis((0, 0, 1), 45)), locks=2,
-         note="looking straight down: heading from the up vector; roll undefined, so the rotation is kept")
+    case(
+        "set_origin_then_walk",
+        (-1, 0.5, 1.2),
+        cam(100, -5),
+        zero_pose=((1, 1, 1.6), cam(90)),
+        note="zero at a camera facing -X; 2 m along -X and 0.5 m to its left -> local (-0.5, 2, -0.4) "
+        "(forward +Y, right +X), yaw +10",
+    )
+    case(
+        "combined",
+        (-1, 0.5, 1.2),
+        cam(100, -5, 8),
+        zero_pose=((1, 1, 1.6), cam(90)),
+        scale=2.0,
+        locks=3,
+        note="zero + scale 2 + lock height + lock roll",
+    )
+    case(
+        "straight_down_lock_roll",
+        (0, 0, 2),
+        (0, 0, 0, 1),
+        zero_pose=((0, 0, 2), qaxis((0, 0, 1), 45)),
+        locks=2,
+        note="looking straight down: heading from the up vector; roll undefined, so the rotation is kept",
+    )
 
     keys = {k["name"]: k for k in motion["keyposes"]}
     pan = keys["pan"]
@@ -990,25 +1320,37 @@ def build_rig(motion: dict) -> dict:
     scripted = []
     for name in ("tilt", "dolly", "crane"):
         k = keys[name]
-        case(f"scripted_{name}", k["position"], k["orientation"], zero_pose=(pan["position"], pan["orientation"]),
-             scale=2.0, locks=1, note=f"fake iPhone --scale 2 --locks 1 --set-origin-at {set_origin_at}: {name} keypose")
+        case(
+            f"scripted_{name}",
+            k["position"],
+            k["orientation"],
+            zero_pose=(pan["position"], pan["orientation"]),
+            scale=2.0,
+            locks=1,
+            note=f"fake iPhone --scale 2 --locks 1 --set-origin-at {set_origin_at}: {name} keypose",
+        )
         scripted.append(f"scripted_{name}")
     dolly = next(c for c in cases if c["name"] == "scripted_dolly")
-    assert all(abs(a - b) < 1e-6 for a, b in zip(dolly["expected_position"], (0.0, 4.0, 0.0))), dolly
+    assert all(abs(a - b) < 1e-6 for a, b in zip(dolly["expected_position"], (0.0, 4.0, 0.0), strict=True)), dolly
 
     walk = next(c for c in cases if c["name"] == "set_origin_then_walk")
-    assert all(abs(a - b) < 1e-9 for a, b in zip(walk["expected_position"], (-0.5, 2.0, -0.4))), walk
+    assert all(abs(a - b) < 1e-9 for a, b in zip(walk["expected_position"], (-0.5, 2.0, -0.4), strict=True)), walk
     assert abs(walk["zero_yaw"] - math.pi / 2) < 1e-12, walk
     # Lock roll on a rolled camera equals the same camera without roll (independent of the matrix path).
     no_roll = next(c for c in cases if c["name"] == "lock_roll")["expected_orientation"]
-    assert all(abs(a - b) < 1e-9 for a, b in zip(no_roll, rnd(cam(30, -20)))), no_roll
+    assert all(abs(a - b) < 1e-9 for a, b in zip(no_roll, rnd(cam(30, -20)), strict=True)), no_roll
     return {
         "note": "Camera local pose under VCam_Origin (BlenderAddOn/core/rig.py). Quaternions are "
-                "x, y, z, w with w >= 0; compare positions and orientations to 1e-9 (q and -q are "
-                "equal). zero_pose null means no Set origin yet (identity zero).",
+        "x, y, z, w with w >= 0; compare positions and orientations to 1e-9 (q and -q are "
+        "equal). zero_pose null means no Set origin yet (identity zero).",
         "lock_flags": {"lock_height": 1, "lock_roll": 2, "pan_only": 4},
-        "scripted": {"motion": "motion/scripted.bin", "set_origin_at": set_origin_at, "motion_scale": 2.0,
-                     "lock_flags": 1, "cases": scripted},
+        "scripted": {
+            "motion": "motion/scripted.bin",
+            "set_origin_at": set_origin_at,
+            "motion_scale": 2.0,
+            "lock_flags": 1,
+            "cases": scripted,
+        },
         "cases": cases,
     }
 
@@ -1035,26 +1377,56 @@ def build_hold(motion: dict) -> dict:
 
     def sequence(name, note, steps, expected):
         assert rule(steps) == expected, (name, rule(steps), expected)
-        sequences.append({"name": name, "note": note, "steps": [
-            {"seq": seq, "tracking_state": state, "hold": hold, "shown_seq": shown, "holding": holding}
-            for (seq, state, hold), (shown, holding) in zip(steps, expected)]})
+        sequences.append(
+            {
+                "name": name,
+                "note": note,
+                "steps": [
+                    {"seq": seq, "tracking_state": state, "hold": hold, "shown_seq": shown, "holding": holding}
+                    for (seq, state, hold), (shown, holding) in zip(steps, expected, strict=True)
+                ],
+            }
+        )
 
-    sequence("limited_span_held", "hold on: every non-normal state keeps the last normal pose; normal resumes",
-             [(1, N, True), (2, MOTION, True), (3, RELOC, True), (4, FEATURES, True), (5, NOT_AVAIL, True),
-              (6, OTHER, True), (7, N, True), (8, N, True)],
-             [(1, False), (1, True), (1, True), (1, True), (1, True), (1, True), (7, False), (8, False)])
-    sequence("hold_off_applies_degraded", "hold off: limited poses are applied as ARKit reported them",
-             [(1, N, False), (2, MOTION, False), (3, RELOC, False), (4, N, False)],
-             [(1, False), (2, False), (3, False), (4, False)])
-    sequence("starts_limited", "no normal pose yet: the camera isn't moved until the first one",
-             [(1, INIT, True), (2, INIT, True), (3, N, True), (4, RELOC, True)],
-             [(None, True), (None, True), (3, False), (3, True)])
-    sequence("enabled_mid_span", "turned on during a limited span: holds the last normal pose, not the last applied one",
-             [(1, N, True), (2, RELOC, False), (3, RELOC, False), (4, RELOC, True), (5, RELOC, False), (6, N, True)],
-             [(1, False), (2, False), (3, False), (1, True), (5, False), (6, False)])
-    sequence("normal_while_off_is_remembered", "normal poses count as good while the option is off",
-             [(1, N, False), (2, N, False), (3, RELOC, True)],
-             [(1, False), (2, False), (2, True)])
+    sequence(
+        "limited_span_held",
+        "hold on: every non-normal state keeps the last normal pose; normal resumes",
+        [
+            (1, N, True),
+            (2, MOTION, True),
+            (3, RELOC, True),
+            (4, FEATURES, True),
+            (5, NOT_AVAIL, True),
+            (6, OTHER, True),
+            (7, N, True),
+            (8, N, True),
+        ],
+        [(1, False), (1, True), (1, True), (1, True), (1, True), (1, True), (7, False), (8, False)],
+    )
+    sequence(
+        "hold_off_applies_degraded",
+        "hold off: limited poses are applied as ARKit reported them",
+        [(1, N, False), (2, MOTION, False), (3, RELOC, False), (4, N, False)],
+        [(1, False), (2, False), (3, False), (4, False)],
+    )
+    sequence(
+        "starts_limited",
+        "no normal pose yet: the camera isn't moved until the first one",
+        [(1, INIT, True), (2, INIT, True), (3, N, True), (4, RELOC, True)],
+        [(None, True), (None, True), (3, False), (3, True)],
+    )
+    sequence(
+        "enabled_mid_span",
+        "turned on during a limited span: holds the last normal pose, not the last applied one",
+        [(1, N, True), (2, RELOC, False), (3, RELOC, False), (4, RELOC, True), (5, RELOC, False), (6, N, True)],
+        [(1, False), (2, False), (3, False), (1, True), (5, False), (6, False)],
+    )
+    sequence(
+        "normal_while_off_is_remembered",
+        "normal poses count as good while the option is off",
+        [(1, N, False), (2, N, False), (3, RELOC, True)],
+        [(1, False), (2, False), (2, True)],
+    )
 
     keys = {k["name"]: k for k in motion["keyposes"]}
     pan, tilt = keys["pan"], keys["tilt"]
@@ -1064,15 +1436,19 @@ def build_hold(motion: dict) -> dict:
     assert keys["dolly"]["frame"] - 28 > end, "dolly's hold must be after the span"
     return {
         "note": "Hold last good pose (BlenderAddOn/core/rig.py PoseHold, core/apply.py). Steps run in order "
-                "in one session. shown_seq null means the camera is not moved; holding is what the "
-                "N-panel shows. tracking_state codes are vcp.md §6.1 (5 = normal).",
+        "in one session. shown_seq null means the camera is not moved; holding is what the "
+        "N-panel shows. tracking_state codes are vcp.md §6.1 (5 = normal).",
         "tracking_normal": N,
         "sequences": sequences,
         "scripted": {
-            "motion": "motion/scripted.bin", "limited_frames": [first, end], "tracking_state": RELOC,
-            "held_keypose": "pan", "hidden_keyposes": ["tilt"], "resumed_keyposes": ["dolly", "crane"],
+            "motion": "motion/scripted.bin",
+            "limited_frames": [first, end],
+            "tracking_state": RELOC,
+            "held_keypose": "pan",
+            "hidden_keyposes": ["tilt"],
+            "resumed_keyposes": ["dolly", "crane"],
             "note": f"fake iPhone --limited {first}-{end}: frames [{first}, {end}) are sent with "
-                    f"tracking_state {RELOC}; with hold on the camera shows the pan keypose throughout",
+            f"tracking_state {RELOC}; with hold on the camera shows the pan keypose throughout",
         },
     }
 
@@ -1105,21 +1481,35 @@ def build_coords() -> dict:
         fwd, up = qrot(cq, (0, 0, -1)), qrot(cq, (0, 1, 0))
         if want_fwd is not None:
             for got, want, label in ((fwd, want_fwd, "forward"), (up, want_up, "up")):
-                if max(abs(g - w) for g, w in zip(got, want)) > 1e-12:
+                if max(abs(g - w) for g, w in zip(got, want, strict=True)) > 1e-12:
                     raise SystemExit(f"SELF-CHECK FAILED: coords {name} {label} {got} != {want}")
-        cases.append({
-            "name": name,
-            "arkit_attitude_deg": {"pan": att.get("pan", 0), "tilt": att.get("tilt", 0), "roll": att.get("roll", 0)},
-            "arkit": {"position": rnd(p), "orientation": rnd(q), "transform_row_major": [rnd(r) for r in qmatrix(q, p)]},
-            "canonical": {"position": rnd(cp), "orientation": rnd(cq),
-                          "matrix_world_row_major": [rnd(r) for r in qmatrix(cq, cp)],
-                          "view_direction": rnd(fwd), "up": rnd(up)},
-        })
+        cases.append(
+            {
+                "name": name,
+                "arkit_attitude_deg": {
+                    "pan": att.get("pan", 0),
+                    "tilt": att.get("tilt", 0),
+                    "roll": att.get("roll", 0),
+                },
+                "arkit": {
+                    "position": rnd(p),
+                    "orientation": rnd(q),
+                    "transform_row_major": [rnd(r) for r in qmatrix(q, p)],
+                },
+                "canonical": {
+                    "position": rnd(cp),
+                    "orientation": rnd(cq),
+                    "matrix_world_row_major": [rnd(r) for r in qmatrix(cq, cp)],
+                    "view_direction": rnd(fwd),
+                    "up": rnd(up),
+                },
+            }
+        )
     return {
         "convention": "vcp.md §7. ARKit: Y up (worldAlignment .gravity). Canonical = Blender: Z up. "
-                      "Camera looks down local -Z with local +Y up on both sides. "
-                      "pan = rotation about world up, tilt = about camera +X, roll = about camera +Z; "
-                      "q_arkit = q_pan ⊗ q_tilt ⊗ q_roll. matrix_world is for a VCam_Origin at identity, scale 1.",
+        "Camera looks down local -Z with local +Y up on both sides. "
+        "pan = rotation about world up, tilt = about camera +X, roll = about camera +Z; "
+        "q_arkit = q_pan ⊗ q_tilt ⊗ q_roll. matrix_world is for a VCam_Origin at identity, scale 1.",
         "tolerance": 1e-6,
         "quaternion_order": "x, y, z, w (w >= 0)",
         "cases": cases,
@@ -1147,8 +1537,9 @@ def self_check_spec(messages: dict, video: dict, report: dict):
     for block in blocks:
         joined = re.sub(r"\b(header|payload|tag)\b", " ", block)
         wanted.append(bytes.fromhex(re.sub(r"\s+", "", joined)))
-    generated = {bytes.fromhex(c["hex"]) for c in messages["cases"] + video["cases"] + report["cases"]
-                 if c.get("accept", True)}
+    generated = {
+        bytes.fromhex(c["hex"]) for c in messages["cases"] + video["cases"] + report["cases"] if c.get("accept", True)
+    }
     missing = [w.hex() for w in wanted if w not in generated]
     if len(wanted) != 8 or missing:
         raise SystemExit(f"SELF-CHECK FAILED: vcp.md examples ({len(wanted)} found) not generated: {missing}")
@@ -1198,8 +1589,12 @@ def main():
     files = build_all()
     if args.check:
         stale = [p for p, data in files.items() if not (OUT / p).exists() or (OUT / p).read_bytes() != data]
-        extra = [str(p.relative_to(OUT)) for d in ("vcp", "coords", "motion", "rig", "video") for p in (OUT / d).glob("*")
-                 if str(p.relative_to(OUT)) not in files]
+        extra = [
+            str(p.relative_to(OUT))
+            for d in ("vcp", "coords", "motion", "rig", "video")
+            for p in (OUT / d).glob("*")
+            if str(p.relative_to(OUT)) not in files
+        ]
         if stale or extra:
             print(f"testdata/ is out of date. stale={stale} extra={extra}. Run tools/gen_testdata.py")
             sys.exit(1)

@@ -4,8 +4,8 @@ import Foundation
 import ImageIO
 import Metal
 import MetalKit
-import Synchronization
 import SwiftUI
+import Synchronization
 import UIKit
 
 /// One decoded viewfinder frame: an IOSurface-backed BGRA pixel buffer from the decoder's pool and
@@ -19,8 +19,10 @@ nonisolated final class ViewfinderFrame: @unchecked Sendable {
     private let pixelBuffer: CVPixelBuffer
     private let metalTexture: CVMetalTexture
 
-    fileprivate init(info: VCPVideoFrameInfo, texture: any MTLTexture, pixelBuffer: CVPixelBuffer,
-                     metalTexture: CVMetalTexture) {
+    fileprivate init(
+        info: VCPVideoFrameInfo, texture: any MTLTexture, pixelBuffer: CVPixelBuffer,
+        metalTexture: CVMetalTexture
+    ) {
         self.info = info
         self.texture = texture
         self.pixelBuffer = pixelBuffer
@@ -70,7 +72,7 @@ nonisolated final class ViewfinderDecoder: @unchecked Sendable {
     init?(device: any MTLDevice, onFrame: @escaping @Sendable (ViewfinderFrame) -> Void) {
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &cache) == kCVReturnSuccess,
-              let cache
+            let cache
         else { return nil }
         textureCache = cache
         self.onFrame = onFrame
@@ -109,33 +111,36 @@ nonisolated final class ViewfinderDecoder: @unchecked Sendable {
 
     private func decode(_ info: VCPVideoFrameInfo, _ jpeg: Data) -> ViewfinderFrame? {
         guard let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = properties[kCGImagePropertyPixelWidth] as? Int,
-              let height = properties[kCGImagePropertyPixelHeight] as? Int,
-              (1...Self.maxSide).contains(width), (1...Self.maxSide).contains(height),
-              let image = CGImageSourceCreateImageAtIndex(
-                  source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary),
-              image.width == width, image.height == height,
-              let sRGB,
-              let buffer = pixelBuffer(width: width, height: height)
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+            let width = properties[kCGImagePropertyPixelWidth] as? Int,
+            let height = properties[kCGImagePropertyPixelHeight] as? Int,
+            (1...Self.maxSide).contains(width), (1...Self.maxSide).contains(height),
+            let image = CGImageSourceCreateImageAtIndex(
+                source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary),
+            image.width == width, image.height == height,
+            let sRGB,
+            let buffer = pixelBuffer(width: width, height: height)
         else { return nil }
 
         CVPixelBufferLockBaseAddress(buffer, [])
         // Row 0 of a bitmap context is the top of the image, as it is for the texture.
-        let context = CGContext(data: CVPixelBufferGetBaseAddress(buffer), width: width, height: height,
-                                bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
-                                space: sRGB,
-                                bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue
-                                    | CGBitmapInfo.byteOrder32Little.rawValue)
+        let context = CGContext(
+            data: CVPixelBufferGetBaseAddress(buffer), width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+            space: sRGB,
+            bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue
+                | CGBitmapInfo.byteOrder32Little.rawValue)
         context?.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         CVPixelBufferUnlockBaseAddress(buffer, [])
         guard context != nil else { return nil }
 
         var metalTexture: CVMetalTexture?
-        guard CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, textureCache, buffer, nil,
-                                                        .bgra8Unorm, width, height, 0, &metalTexture)
+        guard
+            CVMetalTextureCacheCreateTextureFromImage(
+                kCFAllocatorDefault, textureCache, buffer, nil,
+                .bgra8Unorm, width, height, 0, &metalTexture)
                 == kCVReturnSuccess,
-              let metalTexture, let texture = CVMetalTextureGetTexture(metalTexture)
+            let metalTexture, let texture = CVMetalTextureGetTexture(metalTexture)
         else { return nil }
         return ViewfinderFrame(info: info, texture: texture, pixelBuffer: buffer, metalTexture: metalTexture)
     }
@@ -154,9 +159,10 @@ nonisolated final class ViewfinderDecoder: @unchecked Sendable {
                     kCVPixelBufferMetalCompatibilityKey: true,
                 ]
                 var created: CVPixelBufferPool?
-                guard CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, attributes as CFDictionary, &created)
+                guard
+                    CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, attributes as CFDictionary, &created)
                         == kCVReturnSuccess,
-                      let created
+                    let created
                 else { return nil }
                 current = Pool(pool: created, width: width, height: height)
             }
@@ -229,14 +235,14 @@ final class ViewfinderRenderer: NSObject, MTKViewDelegate {
     /// Nil without Metal.
     init?(device: (any MTLDevice)? = MTLCreateSystemDefaultDevice()) {
         guard let device, let commandQueue = device.makeCommandQueue(),
-              let library = try? device.makeLibrary(source: Self.shaderSource, options: nil)
+            let library = try? device.makeLibrary(source: Self.shaderSource, options: nil)
         else { return nil }
         let descriptor = MTLRenderPipelineDescriptor()
         descriptor.vertexFunction = library.makeFunction(name: "viewfinder_vertex")
         descriptor.fragmentFunction = library.makeFunction(name: "viewfinder_fragment")
         descriptor.colorAttachments[0].pixelFormat = Self.pixelFormat
         guard descriptor.vertexFunction != nil, descriptor.fragmentFunction != nil,
-              let pipelineState = try? device.makeRenderPipelineState(descriptor: descriptor)
+            let pipelineState = try? device.makeRenderPipelineState(descriptor: descriptor)
         else { return nil }
         self.device = device
         self.commandQueue = commandQueue
@@ -272,7 +278,7 @@ final class ViewfinderRenderer: NSObject, MTKViewDelegate {
 
     func draw(in view: MTKView) {
         guard let pass = view.currentRenderPassDescriptor, let drawable = view.currentDrawable,
-              let commandBuffer = commandQueue.makeCommandBuffer()
+            let commandBuffer = commandQueue.makeCommandBuffer()
         else { return }
         encode(frame, pass: pass, drawableSize: view.drawableSize, into: commandBuffer)
         commandBuffer.present(drawable)
@@ -280,8 +286,10 @@ final class ViewfinderRenderer: NSObject, MTKViewDelegate {
     }
 
     /// Clears `pass` to black and draws `frame` letterboxed into it.
-    func encode(_ frame: ViewfinderFrame?, pass: MTLRenderPassDescriptor, drawableSize: CGSize,
-                into commandBuffer: any MTLCommandBuffer) {
+    func encode(
+        _ frame: ViewfinderFrame?, pass: MTLRenderPassDescriptor, drawableSize: CGSize,
+        into commandBuffer: any MTLCommandBuffer
+    ) {
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }

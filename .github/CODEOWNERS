@@ -1,0 +1,10 @@
+# Reviewers requested automatically for pull requests. Later lines take precedence.
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+*                   @0xKr4t0s
+
+/native/            @0xKr4t0s
+/BlenderAddOn/      @0xKr4t0s
+/SightlineIOS/      @0xKr4t0s
+/docs/protocol/     @0xKr4t0s
+/testdata/          @0xKr4t0s

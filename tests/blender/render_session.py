@@ -34,8 +34,14 @@ class Recorder:
 
     def submit(self, pixels, pose_seq, render_time_ns):
         frame_id = self.slot.submit(pixels, pose_seq, render_time_ns)
-        self.frames.append({"frame_id": frame_id, "pose_seq": pose_seq, "render_time_ns": render_time_ns,
-                            "shape": tuple(pixels.dimensions)})
+        self.frames.append(
+            {
+                "frame_id": frame_id,
+                "pose_seq": pose_seq,
+                "render_time_ns": render_time_ns,
+                "shape": tuple(pixels.dimensions),
+            }
+        )
         return frame_id
 
 
@@ -51,16 +57,33 @@ def take(stream):
 
 scene = bpy.context.scene
 camera = scene.camera
-assert (scene.vcam_props.stream_resolution, scene.vcam_props.stream_fps,
-        scene.vcam_props.stream_shading, scene.vcam_props.render_budget_ms) == ('540p', '30', 'SOLID', 12)
+assert (
+    scene.vcam_props.stream_resolution,
+    scene.vcam_props.stream_fps,
+    scene.vcam_props.stream_shading,
+    scene.vcam_props.render_budget_ms,
+) == ('540p', '30', 'SOLID', 12)
 session.start(port=0, bind="127.0.0.1", stream=True)
 live = session.current()
 child = subprocess.Popen(
-    [os.environ["FAKE_IPHONE"], "--host", f"127.0.0.1:{live.port()}",
-     "--state", os.path.join(session.config_dir(), "stream-test.key"),
-     "--code", live.enable_pairing(), "--motion", os.path.join(ROOT, "testdata/motion/scripted.bin"),
-     "--rate", "120", "--linger", "8"],
-    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    [
+        os.environ["FAKE_IPHONE"],
+        "--host",
+        f"127.0.0.1:{live.port()}",
+        "--state",
+        os.path.join(session.config_dir(), "stream-test.key"),
+        "--code",
+        live.enable_pairing(),
+        "--motion",
+        os.path.join(ROOT, "testdata/motion/scripted.bin"),
+        "--rate",
+        "120",
+        "--linger",
+        "8",
+    ],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
 )
 
 try:
@@ -176,19 +199,37 @@ try:
     scene.vcam_props.stream_resolution = '540p'
     old_session = session.state.session_id
     child = subprocess.Popen(
-        [os.environ["FAKE_IPHONE"], "--host", f"127.0.0.1:{live.port()}",
-         "--state", os.path.join(session.config_dir(), "stream-test.key"),
-         "--motion", os.path.join(ROOT, "testdata/motion/scripted.bin"),
-         "--rate", "60", "--linger", "40", "--m2p", "150"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        [
+            os.environ["FAKE_IPHONE"],
+            "--host",
+            f"127.0.0.1:{live.port()}",
+            "--state",
+            os.path.join(session.config_dir(), "stream-test.key"),
+            "--motion",
+            os.path.join(ROOT, "testdata/motion/scripted.bin"),
+            "--rate",
+            "60",
+            "--linger",
+            "40",
+            "--m2p",
+            "150",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
     poll_until("resolution drop", lambda: adapt().get("resolution_drop") == 1)
     assert session.state.session_id not in (None, old_session)
     stream = session._stream
     assert stream.max_resolution_drop == 1
     change = adapt()["last_change"]
-    assert (change["from_quality"], change["to_quality"], change["from_resolution_drop"],
-            change["to_resolution_drop"], change["reason"]) == (50, 50, 0, 1, "m2p"), change
+    assert (
+        change["from_quality"],
+        change["to_quality"],
+        change["from_resolution_drop"],
+        change["to_resolution_drop"],
+        change["reason"],
+    ) == (50, 50, 0, 1, "m2p"), change
     poll_until("frame at the lowered size", lambda: (live.video_stats()["last_sent"] or {}).get("width") == 640)
     assert (stream.renderer.width, stream.renderer.height) == (640, 360)
     labels = status.video_labels(live.video_stats(), '540p')
@@ -203,8 +244,7 @@ try:
     # A larger size allows steps again; the still-slow link takes one at once.
     scene.vcam_props.stream_resolution = '1080p'
     poll_until("drop below 1080p", lambda: adapt().get("resolution_drop") == 1)
-    poll_until("frame one size below 1080p",
-               lambda: (live.video_stats()["last_sent"] or {}).get("width") == 1280)
+    poll_until("frame one size below 1080p", lambda: (live.video_stats()["last_sent"] or {}).get("width") == 1280)
     assert session._stream is stream and stream.max_resolution_drop == 3
     assert adapt()["changes"] == changes + 1, adapt()
     session.stop()
@@ -226,8 +266,10 @@ finally:
     child.communicate(timeout=5)
     addon_utils.disable(MODULE, default_set=True)
 
-print(f"VCAM_RENDER_SESSION_OK frames={frames} modes=Material/EEVEE/Solid "
-      f"sizes=720p/360p/1080p saved=true budget_ms=2 stopped=true "
-      f"video_sent={video['sent']} video_skipped={video['encoded_skipped']} "
-      f"video_1080p_jpeg={video['last_sent']['jpeg_bytes']} video_restarted_with_camera=true "
-      f"adapt_sizes=960x540>640x360,cap@360p,1920x1080>1280x720 adapt_changes={changes + 1}")
+print(
+    f"VCAM_RENDER_SESSION_OK frames={frames} modes=Material/EEVEE/Solid "
+    f"sizes=720p/360p/1080p saved=true budget_ms=2 stopped=true "
+    f"video_sent={video['sent']} video_skipped={video['encoded_skipped']} "
+    f"video_1080p_jpeg={video['last_sent']['jpeg_bytes']} video_restarted_with_camera=true "
+    f"adapt_sizes=960x540>640x360,cap@360p,1920x1080>1280x720 adapt_changes={changes + 1}"
+)

@@ -87,7 +87,8 @@ nonisolated final class UDPSender {
         address.family = chosen.pointee.ai_family
         address.length = chosen.pointee.ai_addrlen
         withUnsafeMutableBytes(of: &address.storage) { storage in
-            storage.copyMemory(from: UnsafeRawBufferPointer(start: chosen.pointee.ai_addr, count: Int(chosen.pointee.ai_addrlen)))
+            storage.copyMemory(
+                from: UnsafeRawBufferPointer(start: chosen.pointee.ai_addr, count: Int(chosen.pointee.ai_addrlen)))
         }
         return .success(address)
     }

@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import bpy
+
 from .scene_props import VCamProperties
 
-_classes = (
-    VCamProperties,
-)
+_classes = (VCamProperties,)
 
 
 def register():

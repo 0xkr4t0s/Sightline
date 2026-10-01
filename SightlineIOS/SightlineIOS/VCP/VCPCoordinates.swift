@@ -7,7 +7,8 @@ nonisolated enum VCPCoordinates {
     static let arkitToCanonical = simd_quatf(angle: .pi / 2, axis: SIMD3<Float>(1, 0, 0))
 
     /// Canonical position and orientation (x, y, z, w with w ≥ 0) for an ARKit camera transform.
-    static func canonicalPose(fromARKit transform: simd_float4x4) -> (position: SIMD3<Float>, orientation: SIMD4<Float>) {
+    static func canonicalPose(fromARKit transform: simd_float4x4) -> (position: SIMD3<Float>, orientation: SIMD4<Float>)
+    {
         let t = transform.columns.3
         let position = SIMD3<Float>(t.x, -t.z, t.y)
         let rotation = simd_float3x3(

@@ -29,9 +29,12 @@ struct SettingsView: View {
                             HStack {
                                 VStack(alignment: .leading) {
                                     Text(host.machine)
-                                    Text(host.isCompatible ? host.fileLabel : "\(host.fileLabel) · unsupported VCP version")
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
+                                    Text(
+                                        host.isCompatible
+                                            ? host.fileLabel : "\(host.fileLabel) · unsupported VCP version"
+                                    )
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
                                 }
                                 Spacer()
                                 if controller.selectedServiceName == host.id {
@@ -53,17 +56,26 @@ struct SettingsView: View {
 
                 Section("Blender") {
                     Button("Use manual address") { controller.selectManual() }
-                        .disabled(controller.selectedServiceName == nil || controller.isTracking || controller.isPairing)
+                        .disabled(
+                            controller.selectedServiceName == nil || controller.isTracking || controller.isPairing)
                     TextField("Address or name of the Mac/PC running Blender", text: $controller.host)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .disabled(controller.selectedServiceName != nil || controller.isTracking || controller.isPairing || controller.isStarting)
+                        .disabled(
+                            controller.selectedServiceName != nil || controller.isTracking || controller.isPairing
+                                || controller.isStarting
+                        )
                         .onChange(of: controller.host) { controller.manualAddressChanged() }
+                        .accessibilityIdentifier("settings.host")
 
                     TextField("Control port (\(TrackingSettings.defaultPort))", text: $controller.portText)
                         .keyboardType(.numberPad)
                         .onChange(of: controller.portText) { controller.manualAddressChanged() }
-                        .disabled(controller.selectedServiceName != nil || controller.isTracking || controller.isPairing || controller.isStarting)
+                        .disabled(
+                            controller.selectedServiceName != nil || controller.isTracking || controller.isPairing
+                                || controller.isStarting
+                        )
+                        .accessibilityIdentifier("settings.port")
                     if let selected = controller.selectedServiceName {
                         Text("Selected network host: \(browser.hosts.first { $0.id == selected }?.machine ?? selected)")
                             .foregroundStyle(.secondary)
@@ -71,11 +83,14 @@ struct SettingsView: View {
                 }
 
                 Section("Pair with Blender") {
-                    Text("In Blender, enable pairing in the Sightline sidebar and enter its six-digit code. Keep both devices on the same network. Allow Local Network access for Sightline on iOS and Blender on macOS; on Windows, allow Blender through the firewall prompt.")
-                        .font(.footnote)
+                    Text(
+                        "In Blender, enable pairing in the Sightline sidebar and enter its six-digit code. Keep both devices on the same network. Allow Local Network access for Sightline on iOS and Blender on macOS; on Windows, allow Blender through the firewall prompt."
+                    )
+                    .font(.footnote)
                     TextField("Six-digit code", text: $pairingCode)
                         .keyboardType(.numberPad)
                         .textContentType(.oneTimeCode)
+                        .accessibilityIdentifier("settings.pairingCode")
                     Button(controller.isPairing ? "Pairing…" : "Pair") {
                         Task {
                             await controller.pair(code: pairingCode)
@@ -83,8 +98,10 @@ struct SettingsView: View {
                         }
                     }
                     .disabled(controller.isPairing || controller.isTracking)
+                    .accessibilityIdentifier("settings.pair")
                     Text(controller.pairing == nil ? "Not paired" : "Paired with selected Blender host")
                         .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("settings.pairingStatus")
                 }
 
                 Section("Tracking") {
@@ -98,13 +115,16 @@ struct SettingsView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("settings.startStop")
 
                     LabeledContent("Packets Sent", value: "\(controller.packetsSent)")
+                        .accessibilityIdentifier("settings.packetsSent")
                     if let leg = controller.sendLeg {
                         LabeledContent("Send leg p95", value: Self.sendLegText(leg))
                             .foregroundStyle(leg.meetsTarget ? Color.primary : Color.orange)
                     }
                     LabeledContent("Session", value: controller.sessionStatus)
+                        .accessibilityIdentifier("settings.session")
                     if let seconds = controller.lastReconnectSeconds {
                         LabeledContent("Last reconnect", value: String(format: "%.2f s", seconds))
                     }
@@ -122,6 +142,7 @@ struct SettingsView: View {
                         controller.controls.setOrigin()
                     }
                     .disabled(!controller.isTracking)
+                    .accessibilityIdentifier("settings.setOrigin")
 
                     Picker("Motion scale", selection: $controller.controls.motionScale) {
                         ForEach(Self.scalePresets, id: \.self) { scale in
@@ -132,6 +153,7 @@ struct SettingsView: View {
                                 .tag(controller.controls.motionScale)
                         }
                     }
+                    .accessibilityIdentifier("settings.motionScale")
                     HStack {
                         Text("Custom 1:")
                         TextField("25", text: $customScale)
@@ -145,9 +167,13 @@ struct SettingsView: View {
                     }
 
                     Toggle("Lock height", isOn: lock(DeviceControls.lockHeight))
+                        .accessibilityIdentifier("settings.lockHeight")
                     Toggle("Lock roll", isOn: lock(DeviceControls.lockRoll))
+                        .accessibilityIdentifier("settings.lockRoll")
                     Toggle("Pan only (lock position)", isOn: lock(DeviceControls.panOnly))
+                        .accessibilityIdentifier("settings.panOnly")
                     LabeledContent("Blender", value: controlStatus)
+                        .accessibilityIdentifier("settings.controlStatus")
                 }
 
                 Section("Framing") {
@@ -160,24 +186,32 @@ struct SettingsView: View {
                             Text(Self.aspectLabel(aspect)).tag(Double?.some(aspect))
                         }
                     }
+                    .accessibilityIdentifier("settings.framing.aspect")
                     HStack {
                         Text("Custom")
                         TextField("2.2 or 16:9", text: $customAspect)
                             .keyboardType(.numbersAndPunctuation)
+                            .accessibilityIdentifier("settings.framing.customAspect")
                         Button("Apply") {
                             controller.framing.maskAspect = FramingSettings.parseAspect(customAspect)
                         }
                         .disabled(FramingSettings.parseAspect(customAspect) == nil)
+                        .accessibilityIdentifier("settings.framing.applyAspect")
                     }
                     Toggle("Rule of thirds", isOn: $controller.framing.thirds)
+                        .accessibilityIdentifier("settings.framing.thirds")
                     Toggle("Centre cross", isOn: $controller.framing.centreCross)
+                        .accessibilityIdentifier("settings.framing.centreCross")
                     Toggle("Action and title safe", isOn: $controller.framing.safeAreas)
+                        .accessibilityIdentifier("settings.framing.safeAreas")
                     Toggle("Horizon level", isOn: $controller.framing.horizon)
+                        .accessibilityIdentifier("settings.framing.horizon")
                 }
 
                 Section("Pose (Blender axes)") {
                     let pose = controller.latestPose
                     LabeledContent("Seq", value: pose.map { "\($0.seq)" } ?? "–")
+                        .accessibilityIdentifier("settings.pose.seq")
                     LabeledContent("Position (m)", value: pose.map { formatted($0.position) } ?? "–")
                     LabeledContent("Orientation (x y z w)", value: pose.map { formatted($0.orientation) } ?? "–")
                 }
@@ -185,11 +219,13 @@ struct SettingsView: View {
                 Section("Status") {
                     Text(controller.lastError ?? "No errors")
                         .foregroundStyle(controller.lastError == nil ? Color.secondary : Color.red)
+                        .accessibilityIdentifier("settings.status")
                 }
             }
             .navigationTitle("Sightline")
             .toolbar {
                 Button("Done") { dismiss() }
+                    .accessibilityIdentifier("settings.done")
             }
             .task { await browser.run() }
             .disabled(controller.isStarting)
@@ -218,8 +254,9 @@ struct SettingsView: View {
     }
 
     private func lock(_ flag: UInt8) -> Binding<Bool> {
-        Binding(get: { controller.controls.isLocked(flag) },
-                set: { controller.controls.setLock(flag, $0) })
+        Binding(
+            get: { controller.controls.isLocked(flag) },
+            set: { controller.controls.setLock(flag, $0) })
     }
 
     /// Whether Blender has applied the latest controls (`STATUS.control_ack`, vcp.md §6.2).

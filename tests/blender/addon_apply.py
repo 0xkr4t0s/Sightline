@@ -72,9 +72,24 @@ def run_fake(*extra, observe=None):
 
     `observe()` runs after every poll."""
     child = subprocess.Popen(
-        [FAKE, "--host", f"127.0.0.1:{live.port()}", "--state", state_file,
-         "--motion", os.path.join(MOTION, "scripted.bin"), "--rate", "120", "--linger", "1.0", *extra],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        [
+            FAKE,
+            "--host",
+            f"127.0.0.1:{live.port()}",
+            "--state",
+            state_file,
+            "--motion",
+            os.path.join(MOTION, "scripted.bin"),
+            "--rate",
+            "120",
+            "--linger",
+            "1.0",
+            *extra,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     seen = {}
     deadline = time.monotonic() + 30
     while child.poll() is None:
@@ -103,7 +118,7 @@ def run_fake(*extra, observe=None):
 
 
 def max_diff(a, b):
-    return max(abs(x - y) for ra, rb in zip(a, b) for x, y in zip(ra, rb))
+    return max(abs(x - y) for ra, rb in zip(a, b, strict=True) for x, y in zip(ra, rb, strict=True))
 
 
 # Run 1: pair, default controls (scale 1, no locks, no Set origin): local = device pose.
@@ -124,8 +139,9 @@ assert fields["control_ack"] == "1", fields  # the fake's first and only CONTROL
 # Run 2 (task 1.3.2b): reconnect with the stored pairing and scripted controls over the real
 # wire — Set origin inside the pan hold, motion scale 2, lock height — against the rig vectors.
 sc = rig_doc["scripted"]
-seen, fields = run_fake("--scale", str(sc["motion_scale"]), "--locks", str(sc["lock_flags"]),
-                        "--set-origin-at", str(sc["set_origin_at"]))
+seen, fields = run_fake(
+    "--scale", str(sc["motion_scale"]), "--locks", str(sc["lock_flags"]), "--set-origin-at", str(sc["set_origin_at"])
+)
 scripted_err = 0.0
 for name in sc["cases"]:
     case = rig_cases[name]
@@ -212,16 +228,24 @@ def control(seq, scale, locks, epoch):
 case = rig_cases["combined"]
 zp = case["zero_pose"]
 stub, applier = Stub(), apply.Applier()
-stub.pose = {"seq": 1, "smoothed_position": zp["position"], "smoothed_orientation": zp["orientation"],
-             "tracking_state": 5}
+stub.pose = {
+    "seq": 1,
+    "smoothed_position": zp["position"],
+    "smoothed_orientation": zp["orientation"],
+    "tracking_state": 5,
+}
 stub.control = control(1, 1.0, 0, 7)  # first epoch in a session: not a Set origin
 applier.tick(stub, 11, bpy.context.scene, 0.0)
 stub.control = control(2, None, None, 8)  # operator pressed Set origin at the zero pose
 applier.tick(stub, 11, bpy.context.scene, 0.1)
 assert abs(origin[apply.ZERO_YAW_KEY] - case["zero_yaw"]) < 1e-9, origin[apply.ZERO_YAW_KEY]
 stub.control = control(3, case["motion_scale"], case["lock_flags"], None)
-stub.pose = {"seq": 2, "smoothed_position": case["position"], "smoothed_orientation": case["orientation"],
-             "tracking_state": 5}
+stub.pose = {
+    "seq": 2,
+    "smoothed_position": case["position"],
+    "smoothed_orientation": case["orientation"],
+    "tracking_state": 5,
+}
 applier.tick(stub, 11, bpy.context.scene, 0.2)
 rig_err = max_diff(camera.matrix_basis, apply.pose_matrix(case["expected_position"], case["expected_orientation"]))
 assert rig_err < 1e-6, rig_err
@@ -231,8 +255,10 @@ assert stub.calls[-1] == (11, 2, 3, apply.ERROR_NONE, camera.name), stub.calls[-
 # change still applies, to the held pose.
 stub.pose = {"seq": 3, "smoothed_position": (9, 9, 9), "smoothed_orientation": (0, 0, 0, 1), "tracking_state": 2}
 applier.tick(stub, 11, bpy.context.scene, 0.3)
-assert applier.holding and max_diff(camera.matrix_basis, apply.pose_matrix(case["expected_position"],
-                                                                             case["expected_orientation"])) < 1e-6
+assert (
+    applier.holding
+    and max_diff(camera.matrix_basis, apply.pose_matrix(case["expected_position"], case["expected_orientation"])) < 1e-6
+)
 stub.control = control(4, 1.0, 0, None)
 applier.tick(stub, 11, bpy.context.scene, 0.4)
 held = rig.local_pose(case["position"], case["orientation"], apply.read_zero(origin))
@@ -254,6 +280,8 @@ assert len(stub.calls) == 2, "STATUS repeats at 2 Hz"
 
 assert bpy.ops.vcam.session_stop() == {'FINISHED'}
 addon_utils.disable(MODULE, default_set=True)
-print(f"VCAM_ADDON_APPLY_OK keyposes=5 max_err={worst:.2e} scripted_err={scripted_err:.2e} rig_err={rig_err:.2e} "
-      f"applied_pose_seq={fields['applied_pose_seq']} camera={fields['camera']} "
-      f"held_ticks={watch_on.holding_ticks} held_err={watch_on.held_err:.2e} resumed_err={hold_err:.2e}")
+print(
+    f"VCAM_ADDON_APPLY_OK keyposes=5 max_err={worst:.2e} scripted_err={scripted_err:.2e} rig_err={rig_err:.2e} "
+    f"applied_pose_seq={fields['applied_pose_seq']} camera={fields['camera']} "
+    f"held_ticks={watch_on.holding_ticks} held_err={watch_on.held_err:.2e} resumed_err={hold_err:.2e}"
+)

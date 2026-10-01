@@ -42,12 +42,13 @@ nonisolated struct VCPPose: Equatable, Sendable {
     static func decode(_ payload: ArraySlice<UInt8>) throws(VCPPayloadError) -> VCPPose {
         var r = VCPReader(payload)
         guard let seq = r.u32(), let time = r.u64(),
-              let px = r.f32(), let py = r.f32(), let pz = r.f32(),
-              let qx = r.f32(), let qy = r.f32(), let qz = r.f32(), let qw = r.f32(),
-              let state = r.u8(), let flags = r.u8()
+            let px = r.f32(), let py = r.f32(), let pz = r.f32(),
+            let qx = r.f32(), let qy = r.f32(), let qz = r.f32(), let qw = r.f32(),
+            let state = r.u8(), let flags = r.u8()
         else { throw .tooShort }
-        let pose = VCPPose(seq: seq, captureTimeNs: time, position: SIMD3(px, py, pz),
-                           orientation: SIMD4(qx, qy, qz, qw), trackingState: state, flags: flags)
+        let pose = VCPPose(
+            seq: seq, captureTimeNs: time, position: SIMD3(px, py, pz),
+            orientation: SIMD4(qx, qy, qz, qw), trackingState: state, flags: flags)
         let all = [px, py, pz, qx, qy, qz, qw]
         guard all.allSatisfy(\.isFinite) else { throw .nonFinite }
         let norm = (pose.orientation * pose.orientation).sum().squareRoot()
@@ -81,17 +82,19 @@ nonisolated struct VCPControlState: Equatable, Sendable {
     static func decode(_ payload: ArraySlice<UInt8>) throws(VCPPayloadError) -> VCPControlState {
         var r = VCPReader(payload)
         guard let seq = r.u32(), let fields = r.u32(), let scale = r.f32(), let locks = r.u8(),
-              r.u8() != nil, let epoch = r.u16()
+            r.u8() != nil, let epoch = r.u16()
         else { throw .tooShort }
         let motionScale = fields & hasScale != 0 ? scale : nil
         if let s = motionScale, !(s.isFinite && (0.001...1000).contains(s)) { throw .motionScaleRange }
-        return VCPControlState(stateSeq: seq, motionScale: motionScale,
-                               lockFlags: fields & hasLocks != 0 ? locks : nil,
-                               originEpoch: fields & hasEpoch != 0 ? epoch : nil)
+        return VCPControlState(
+            stateSeq: seq, motionScale: motionScale,
+            lockFlags: fields & hasLocks != 0 ? locks : nil,
+            originEpoch: fields & hasEpoch != 0 ? epoch : nil)
     }
 
     func encode(into out: inout [UInt8]) {
-        let fields = (motionScale == nil ? 0 : Self.hasScale) | (lockFlags == nil ? 0 : Self.hasLocks)
+        let fields =
+            (motionScale == nil ? 0 : Self.hasScale) | (lockFlags == nil ? 0 : Self.hasLocks)
             | (originEpoch == nil ? 0 : Self.hasEpoch)
         out.appendLE(stateSeq)
         out.appendLE(fields)
@@ -124,10 +127,11 @@ nonisolated enum VCPClock: Equatable, Sendable {
     }
 
     func encode(into out: inout [UInt8]) {
-        let (mode, t1, t2, t3): (UInt8, UInt64, UInt64, UInt64) = switch self {
-        case let .request(t1): (0, t1, 0, 0)
-        case let .reply(t1, t2, t3): (1, t1, t2, t3)
-        }
+        let (mode, t1, t2, t3): (UInt8, UInt64, UInt64, UInt64) =
+            switch self {
+            case let .request(t1): (0, t1, 0, 0)
+            case let .reply(t1, t2, t3): (1, t1, t2, t3)
+            }
         out.append(contentsOf: [mode, 0, 0, 0])
         out.appendLE(t1)
         out.appendLE(t2)
@@ -150,13 +154,14 @@ nonisolated struct VCPStatus: Equatable, Sendable {
     static func decode(_ payload: ArraySlice<UInt8>) throws(VCPPayloadError) -> VCPStatus {
         var r = VCPReader(payload)
         guard let seq = r.u32(), let applied = r.u32(), let ack = r.u32(), let error = r.u16(),
-              let flags = r.u8(), let nameLength = r.u8()
+            let flags = r.u8(), let nameLength = r.u8()
         else { throw .tooShort }
         guard let nameBytes = r.bytes(Int(nameLength)) else { throw .tooShort }
         guard nameBytes.count <= maxName, let name = String(validating: nameBytes, as: UTF8.self)
         else { throw .badName }
-        return VCPStatus(statusSeq: seq, appliedPoseSeq: applied, controlAck: ack, errorCode: error,
-                         flags: flags, cameraName: name)
+        return VCPStatus(
+            statusSeq: seq, appliedPoseSeq: applied, controlAck: ack, errorCode: error,
+            flags: flags, cameraName: name)
     }
 
     func encode(into out: inout [UInt8]) throws(VCPPayloadError) {

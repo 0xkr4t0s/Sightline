@@ -75,8 +75,7 @@ def test_fps_cap_and_switch_under_load():
 
 def test_resolution_steps_go_down_the_stream_sizes_and_stop_at_the_smallest():
     assert [resolution_steps(k) for k in ('360p', '540p', '720p', '1080p')] == [0, 1, 2, 3]
-    assert [adapted_resolution('1080p', d) for d in range(4)] == [
-        (1920, 1080), (1280, 720), (960, 540), (640, 360)]
+    assert [adapted_resolution('1080p', d) for d in range(4)] == [(1920, 1080), (1280, 720), (960, 540), (640, 360)]
     # A drop left over from a larger user size (the adapter is capped straight after) never
     # goes below the list.
     assert adapted_resolution('540p', 3) == (640, 360)

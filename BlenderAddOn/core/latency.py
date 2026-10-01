@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from collections.abc import Iterable
+from typing import Any
 
 # Histogram: 0.5 ms bins from 0 to 100 ms; values outside count as underflow/overflow.
 BIN_MS = 0.5
@@ -33,7 +35,7 @@ def percentile(ordered: list[float], q: float) -> float:
     return ordered[rank - 1]
 
 
-def summarize(values) -> dict | None:
+def summarize(values: Iterable[float]) -> dict[str, Any] | None:
     """count/min/mean/p50/p95/p99/max in ms plus the fixed-bin histogram; None if empty."""
     ordered = sorted(values)
     if not ordered:
@@ -65,6 +67,9 @@ class LatencyLog:
     """Samples of one device session. A new `session_id` starts a fresh log."""
 
     def __init__(self, max_samples: int = MAX_SAMPLES) -> None:
+        self._reset(max_samples)
+
+    def _reset(self, max_samples: int) -> None:
         self.session_id: int | None = None
         self.last_seq: int | None = None
         self.pose_leg_ms: deque[float] = deque(maxlen=max_samples)
@@ -78,7 +83,7 @@ class LatencyLog:
     def record(self, session_id: int | None, seq: int, apply_ms: float, pose_leg_ms: float | None) -> bool:
         """Adds one applied pose; a re-apply of the same `seq` is not a new sample."""
         if session_id != self.session_id:
-            self.__init__(self.pose_leg_ms.maxlen or MAX_SAMPLES)
+            self._reset(self.pose_leg_ms.maxlen or MAX_SAMPLES)
             self.session_id = session_id
         if seq == self.last_seq:
             return False
@@ -92,7 +97,7 @@ class LatencyLog:
             self.pose_leg_ms.append(pose_leg_ms)
         return True
 
-    def report(self, **meta) -> dict:
+    def report(self, **meta: Any) -> dict[str, Any]:
         """The report artefact: `meta` (date, platform, device, clock, …) plus both legs."""
         pose_leg, apply = summarize(self.pose_leg_ms), summarize(self.apply_ms)
         return {
@@ -118,6 +123,8 @@ class LatencyLog:
             if s is None:
                 parts.append(f"{name}=none")
             else:
-                parts.append(f"{name}_ms n={s['count']} p50={s['p50']:.2f} p95={s['p95']:.2f} "
-                             f"p99={s['p99']:.2f} max={s['max']:.2f}")
+                parts.append(
+                    f"{name}_ms n={s['count']} p50={s['p50']:.2f} p95={s['p95']:.2f} "
+                    f"p99={s['p99']:.2f} max={s['max']:.2f}"
+                )
         return " ".join(parts)

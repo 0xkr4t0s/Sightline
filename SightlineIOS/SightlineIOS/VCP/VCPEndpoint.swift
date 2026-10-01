@@ -92,8 +92,12 @@ nonisolated struct VCPEndpoint: Sendable {
         let authed = Self.headerLength + Int(len)
         guard authed + Self.tagLength == d.count else { return .failure(.length) }
         guard sid != 0, sid == sessionID else { return .failure(.session) }
-        let expected = datagram.withUnsafeBytes { Self.mac(UnsafeRawBufferPointer(rebasing: $0[..<authed]), key: receiveKey) }
-        guard withUnsafeBytes(of: expected, { Self.constantTimeEqual(Array($0.prefix(Self.tagLength)), Array(d[authed...])) })
+        let expected = datagram.withUnsafeBytes {
+            Self.mac(UnsafeRawBufferPointer(rebasing: $0[..<authed]), key: receiveKey)
+        }
+        guard
+            withUnsafeBytes(
+                of: expected, { Self.constantTimeEqual(Array($0.prefix(Self.tagLength)), Array(d[authed...])) })
         else { return .failure(.tag) }
         let payload = d[Self.headerLength..<authed]
         let message: VCPMessage
@@ -121,8 +125,9 @@ nonisolated struct VCPEndpoint: Sendable {
         var mac: (UInt64, UInt64, UInt64, UInt64) = (0, 0, 0, 0)
         withUnsafeMutableBytes(of: &mac) { out in
             key.withUnsafeBytes { k in
-                CCHmac(CCHmacAlgorithm(kCCHmacAlgSHA256), k.baseAddress, k.count, data.baseAddress, data.count,
-                       out.baseAddress)
+                CCHmac(
+                    CCHmacAlgorithm(kCCHmacAlgSHA256), k.baseAddress, k.count, data.baseAddress, data.count,
+                    out.baseAddress)
             }
         }
         return mac
@@ -138,7 +143,7 @@ nonisolated struct VCPEndpoint: Sendable {
     private static func maySend(_ role: VCPRole, _ message: VCPMessage) -> Bool {
         switch (role, message) {
         case (.device, .pose), (.device, .controlState), (.device, .clock(.reply)), (.device, .videoReport),
-             (.host, .status), (.host, .clock(.request)), (.host, .videoFragment):
+            (.host, .status), (.host, .clock(.request)), (.host, .videoFragment):
             true
         default:
             false

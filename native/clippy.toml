@@ -1,2 +1,6 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+# Ceilings for the complexity lints denied in Cargo.toml, set just above the largest function
+# when they were introduced (cognitive 26, 112 lines). Split a function rather than raise them.
+cognitive-complexity-threshold = 30
+too-many-lines-threshold = 120

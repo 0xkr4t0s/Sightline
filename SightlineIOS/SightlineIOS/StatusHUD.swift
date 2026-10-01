@@ -129,8 +129,9 @@ nonisolated struct StreamMeter: Sendable {
         }
         guard let rates else { return nil }
         let silent = nowNs > lastHostNs && nowNs - lastHostNs > Self.silenceNs
-        return StreamStats(framesPerSecond: rates.fps, bitsPerSecond: rates.bps,
-                           quality: silent ? .poor : windowQuality)
+        return StreamStats(
+            framesPerSecond: rates.fps, bitsPerSecond: rates.bps,
+            quality: silent ? .poor : windowQuality)
     }
 }
 
@@ -207,9 +208,11 @@ nonisolated struct HUDLayout: Equatable, Sendable {
         let stripHeight = min(Self.statusHeight, size.height * Self.maxShare)
         let railWidth = min(Self.railWidth, size.width * Self.maxShare)
         statusStrip = CGRect(x: 0, y: 0, width: size.width, height: stripHeight)
-        controlRail = CGRect(x: size.width - railWidth, y: stripHeight,
-                             width: railWidth, height: size.height - stripHeight)
-        centre = CGRect(x: size.width / 4, y: size.height / 4,
-                        width: size.width / 2, height: size.height / 2)
+        controlRail = CGRect(
+            x: size.width - railWidth, y: stripHeight,
+            width: railWidth, height: size.height - stripHeight)
+        centre = CGRect(
+            x: size.width / 4, y: size.height / 4,
+            width: size.width / 2, height: size.height / 2)
     }
 }

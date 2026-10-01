@@ -20,6 +20,8 @@ Material Preview/Rendered; Solid follows Blender's Workbench viewport. The resul
 """
 
 import time
+from collections.abc import Callable
+from typing import Any
 
 DEFAULT_BUDGET_MS = 12
 STREAM_RESOLUTIONS = {'360p': (640, 360), '540p': (960, 540), '720p': (1280, 720), '1080p': (1920, 1080)}
@@ -66,7 +68,7 @@ class FramePacer:
         self.next_due_ns = now_ns + frames * (1_000_000_000 // self.fps)
 
 
-def stream_view():
+def stream_view() -> tuple[Any, Any] | None:
     """(space, region) to draw the stream with: a `VIEW_3D` on a hidden screen, else one on screen.
 
     None when no screen has a 3D view. Looked up every tick: the add-on keeps no `bpy` data
@@ -92,14 +94,14 @@ def stream_view():
 class StreamRenderer:
     """Renders the camera into `slot` (a `vcam_native.FrameSlot`), one tick behind."""
 
-    def __init__(self, slot, width: int = 960, height: int = 540, shading: str = 'SOLID') -> None:
+    def __init__(self, slot: Any, width: int = 960, height: int = 540, shading: str = 'SOLID') -> None:
         self.slot = slot
         self.width = width
         self.height = height
         self.shading = shading
-        self._offscreen = None
+        self._offscreen: Any = None
         # (pose_seq, render_time_ns) of the frame drawn but not read yet.
-        self._pending = None
+        self._pending: tuple[int, int] | None = None
         self.read_ns = 0
         self.draw_ns = 0
 
@@ -111,7 +113,7 @@ class StreamRenderer:
         self.width, self.height, self.shading = width, height, shading
         return True
 
-    def tick(self, scene, view_layer, depsgraph, camera, pose_seq: int, now_ns: int):
+    def tick(self, scene: Any, view_layer: Any, depsgraph: Any, camera: Any, pose_seq: int, now_ns: int) -> int | None:
         """Submits the frame drawn on the previous tick, then draws `camera` for the next one.
 
         `depsgraph` must be evaluated (`context.evaluated_depsgraph_get()`), so the camera's
@@ -123,7 +125,7 @@ class StreamRenderer:
         if self._offscreen is None:
             self._offscreen = gpu.types.GPUOffScreen(self.width, self.height, format='RGBA8')
         self.read_ns = self.draw_ns = 0
-        submitted = None
+        submitted: int | None = None
         if self._pending is not None:
             seq, drawn_ns = self._pending
             self._pending = None
@@ -137,7 +139,7 @@ class StreamRenderer:
             self._pending = (pose_seq, now_ns)
         return submitted
 
-    def _draw(self, scene, view_layer, depsgraph, camera) -> None:
+    def _draw(self, scene: Any, view_layer: Any, depsgraph: Any, camera: Any) -> None:
         view = stream_view()
         if view is None:
             raise RuntimeError("No 3D view to render the stream from")
@@ -175,15 +177,24 @@ class StreamRenderer:
 class StreamLoop:
     """One connected device's renderer and adaptive fps schedule."""
 
-    def __init__(self, slot, max_resolution_drop: int = 0) -> None:
+    def __init__(self, slot: Any, max_resolution_drop: int = 0) -> None:
         self.renderer = StreamRenderer(slot)
         self.pacer = FramePacer()
         # The resolution steps the video stream's adapter may drop (NET-VID-005), kept in step
         # with the user's resolution.
         self.max_resolution_drop = max_resolution_drop
 
-    def tick(self, context, camera, pose_seq: int, clock_ns, budget_ms: int,
-             fps: int, resolution: tuple[int, int], shading: str):
+    def tick(
+        self,
+        context: Any,
+        camera: Any,
+        pose_seq: int,
+        clock_ns: Callable[[], int],
+        budget_ms: int,
+        fps: int,
+        resolution: tuple[int, int],
+        shading: str,
+    ) -> int | None:
         if self.renderer.configure(*resolution, shading):
             self.pacer.next_due_ns = 0
             self.pacer.cost_ns = 0  # a new mode's GPU cost may be very different

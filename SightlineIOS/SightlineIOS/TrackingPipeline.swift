@@ -203,8 +203,10 @@ actor TrackingPipeline {
     /// vcp.md §6.2: the latest state is repeated this often until the host acknowledges it.
     static let controlRepeatInterval: DispatchTimeInterval = .milliseconds(500)
 
-    init(publish: @escaping @Sendable (TrackingSnapshot) -> Void,
-         videoFrame: @escaping @Sendable (VCPVideoFrameInfo, Data) -> Void = { _, _ in }) {
+    init(
+        publish: @escaping @Sendable (TrackingSnapshot) -> Void,
+        videoFrame: @escaping @Sendable (VCPVideoFrameInfo, Data) -> Void = { _, _ in }
+    ) {
         self.publish = publish
         self.videoFrame = videoFrame
         sender = UDPSender(queue: queue)
@@ -298,9 +300,10 @@ actor TrackingPipeline {
         }
         seq &+= 1
         let canonical = VCPCoordinates.canonicalPose(fromARKit: transform)
-        let pose = VCPPose(seq: seq, captureTimeNs: UInt64(max(0, (timestamp * 1e9).rounded())),
-                           position: canonical.position, orientation: canonical.orientation,
-                           trackingState: trackingState)
+        let pose = VCPPose(
+            seq: seq, captureTimeNs: UInt64(max(0, (timestamp * 1e9).rounded())),
+            position: canonical.position, orientation: canonical.orientation,
+            trackingState: trackingState)
         snapshot.pose = pose
         if send(.pose(pose)) {
             sendLeg.add(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) &- arrived)
@@ -308,9 +311,10 @@ actor TrackingPipeline {
         if throttle.shouldPublish(at: timestamp) {
             snapshot.sendLeg = sendLeg.summary
             if destination?.endpoint != nil {
-                snapshot.stream = streamMeter.stats(atNs: clock_gettime_nsec_np(CLOCK_UPTIME_RAW),
-                                                    framesComplete: video.stats.complete,
-                                                    framesLost: video.stats.lost)
+                snapshot.stream = streamMeter.stats(
+                    atNs: clock_gettime_nsec_np(CLOCK_UPTIME_RAW),
+                    framesComplete: video.stats.complete,
+                    framesLost: video.stats.lost)
             }
             publish(snapshot)
         }
@@ -458,7 +462,7 @@ actor TrackingPipeline {
     private func handleIncoming(_ data: Data) {
         let received = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         guard let endpoint = destination?.endpoint,
-              case let .success(message) = endpoint.open([UInt8](data))
+            case let .success(message) = endpoint.open([UInt8](data))
         else {
             return
         }
@@ -468,8 +472,11 @@ actor TrackingPipeline {
         case let .clock(.request(t1)):
             // Uptime is the candidate ARFrame clock; O-1 still needs a physical-device
             // comparison before claiming capture-to-host latency accuracy.
-            _ = send(.clock(.reply(t1: t1, t2: received,
-                                  t3: clock_gettime_nsec_np(CLOCK_UPTIME_RAW))))
+            _ = send(
+                .clock(
+                    .reply(
+                        t1: t1, t2: received,
+                        t3: clock_gettime_nsec_np(CLOCK_UPTIME_RAW))))
         case let .status(status):
             guard statusFilter.accept(status.statusSeq) else { return }
             streamMeter.status(seq: status.statusSeq)
@@ -494,7 +501,9 @@ actor TrackingPipeline {
 
 /// `TrackingPipeline.receive`'s way into the actor: a free function, so referring to it captures
 /// nothing (a static method would capture its metatype: one heap block per call).
-private func handleFrame(_ pipeline: isolated TrackingPipeline, _ transform: simd_float4x4, _ timestamp: TimeInterval,
-                         _ trackingState: UInt8, _ arrived: UInt64) {
+private func handleFrame(
+    _ pipeline: isolated TrackingPipeline, _ transform: simd_float4x4, _ timestamp: TimeInterval,
+    _ trackingState: UInt8, _ arrived: UInt64
+) {
     pipeline.handle(transform: transform, timestamp: timestamp, trackingState: trackingState, arrived: arrived)
 }

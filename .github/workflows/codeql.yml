@@ -1,0 +1,44 @@
+# CodeQL code scanning for the workflows, the Blender extension/tools (Python) and the native
+# module (Rust). Swift is left out: it needs a macOS build of the app, which the ios job in
+# ci.yml already pays for. Not part of the required ci-ok check; findings appear under
+# Security -> Code scanning and as PR annotations.
+name: CodeQL
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "17 4 * * 1" # weekly on main, catches new queries against unchanged code
+  workflow_dispatch:
+
+# Same draft split as ci.yml: a skipped draft run must not cancel the real one.
+concurrency:
+  group: codeql-${{ github.ref }}-${{ github.event.pull_request.draft == true && 'draft' || 'ready' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    if: github.event.pull_request.draft != true
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # build-mode none: every language here is extracted from source without a build.
+        language: [actions, python, rust]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}

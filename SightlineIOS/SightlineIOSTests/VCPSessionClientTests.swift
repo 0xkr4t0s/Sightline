@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
-import simd
 import XCTest
+import simd
 
 /// The device's TCP control client (task 1.4.2b; vcp.md §3, §9–§11): pairing and session setup
 /// against a scripted host on 127.0.0.1 that replays the golden transcripts, the failure paths,
@@ -119,11 +119,13 @@ final class VCPSessionClientTests: XCTestCase {
     }
 
     /// `session.json`: its frames, `PK`, and the HELLO's device identity and nonce.
-    private func sessionVector() throws -> (m: [String: [UInt8]], s: [String: Any], hello: VCPHello, challenge: VCPSessionChallenge) {
+    private func sessionVector() throws -> (
+        m: [String: [UInt8]], s: [String: Any], hello: VCPHello, challenge: VCPSessionChallenge
+    ) {
         let s = try load("vcp/session.json")
         let m = (s["messages"] as! [String: Any]).mapValues { hex($0) }
         guard case let .hello(hello) = try VCPControlMessage.decode(m["HELLO"]!),
-              case let .sessionChallenge(challenge) = try VCPControlMessage.decode(m["SESSION_CHALLENGE"]!)
+            case let .sessionChallenge(challenge) = try VCPControlMessage.decode(m["SESSION_CHALLENGE"]!)
         else { throw ScriptFailure(description: "session.json frame types") }
         return (m, s, hello, challenge)
     }
@@ -143,7 +145,9 @@ final class VCPSessionClientTests: XCTestCase {
         addr.sin_addr.s_addr = inet_addr("127.0.0.1")
         var len = socklen_t(MemoryLayout<sockaddr_in>.size)
         let bound = withUnsafeMutablePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, len) == 0 && getsockname(fd, $0, &len) == 0 }
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, len) == 0 && getsockname(fd, $0, &len) == 0
+            }
         }
         guard fd >= 0, bound else { throw POSIXError(.EADDRNOTAVAIL) }
         return UInt16(bigEndian: addr.sin_port)
@@ -166,7 +170,8 @@ final class VCPSessionClientTests: XCTestCase {
             on: channel, device: VCPDeviceIdentity(deviceID: hello.deviceID, name: hello.deviceName),
             pairingKey: { $0 == challenge.hostID ? pk : nil }, nonce: hello.nonceD)
         XCTAssertNil(host.result())
-        XCTAssertEqual(live.keys, VCPSessionKeys(sessionID: challenge.sessionID, kD2H: hex(s["k_d2h"]), kH2D: hex(s["k_h2d"])))
+        XCTAssertEqual(
+            live.keys, VCPSessionKeys(sessionID: challenge.sessionID, kD2H: hex(s["k_d2h"]), kH2D: hex(s["k_h2d"])))
         XCTAssertEqual(live.hostID, challenge.hostID)
         XCTAssertEqual(live.destination.host, "127.0.0.1")
         XCTAssertEqual(live.destination.port, 47000)
@@ -242,17 +247,22 @@ final class VCPSessionClientTests: XCTestCase {
 
     /// §10.1: a host without our pairing answers `ERROR` 3, which reaches the caller as such.
     func testHostErrorIsReported() async throws {
-        let refusal = try VCPControlMessage.error(VCPControlErrorMessage(code: VCPControlErrorMessage.notPaired,
-                                                                         message: "device not paired")).encode()
+        let refusal = try VCPControlMessage.error(
+            VCPControlErrorMessage(
+                code: VCPControlErrorMessage.notPaired,
+                message: "device not paired")
+        ).encode()
         let host = try ScriptedHost { conn in
             _ = try conn.frame()
             conn.write(refusal)
         }
-        let pairing = VCPHostPairing(hostID: [UInt8](repeating: 1, count: 16), pairingKey: [UInt8](repeating: 2, count: 32))
+        let pairing = VCPHostPairing(
+            hostID: [UInt8](repeating: 1, count: 16), pairingKey: [UInt8](repeating: 2, count: 32))
         do throws(VCPLinkError) {
-            _ = try await VCPSessionClient.connect(host: "127.0.0.1", port: host.port,
-                                                   device: VCPDeviceIdentity(deviceID: [UInt8](repeating: 3, count: 16), name: "t"),
-                                                   pairing: pairing)
+            _ = try await VCPSessionClient.connect(
+                host: "127.0.0.1", port: host.port,
+                device: VCPDeviceIdentity(deviceID: [UInt8](repeating: 3, count: 16), name: "t"),
+                pairing: pairing)
             XCTFail("session started against ERROR 3")
         } catch {
             XCTAssertEqual(error, .host(code: VCPControlErrorMessage.notPaired, message: "device not paired"))
@@ -266,12 +276,14 @@ final class VCPSessionClientTests: XCTestCase {
             _ = try conn.frame()
             _ = conn.closedByPeer()  // hold the connection open until the device gives up
         }
-        let pairing = VCPHostPairing(hostID: [UInt8](repeating: 1, count: 16), pairingKey: [UInt8](repeating: 2, count: 32))
+        let pairing = VCPHostPairing(
+            hostID: [UInt8](repeating: 1, count: 16), pairingKey: [UInt8](repeating: 2, count: 32))
         let started = Date()
         do throws(VCPLinkError) {
-            _ = try await VCPSessionClient.connect(host: "127.0.0.1", port: host.port,
-                                                   device: VCPDeviceIdentity(deviceID: [UInt8](repeating: 3, count: 16), name: "t"),
-                                                   pairing: pairing, timeout: 0.5)
+            _ = try await VCPSessionClient.connect(
+                host: "127.0.0.1", port: host.port,
+                device: VCPDeviceIdentity(deviceID: [UInt8](repeating: 3, count: 16), name: "t"),
+                pairing: pairing, timeout: 0.5)
             XCTFail("a silent host produced a session")
         } catch {
             XCTAssertEqual(error, .timeout)
@@ -312,7 +324,8 @@ final class VCPSessionClientTests: XCTestCase {
     func testRefusedConnectionFailsFast() async throws {
         let host = try ScriptedHost { _ in }
         let port = host.port
-        let pairing = VCPHostPairing(hostID: [UInt8](repeating: 1, count: 16), pairingKey: [UInt8](repeating: 2, count: 32))
+        let pairing = VCPHostPairing(
+            hostID: [UInt8](repeating: 1, count: 16), pairingKey: [UInt8](repeating: 2, count: 32))
         // Connect once so the script ends and the listener can be closed.
         let probe = try VCPControlChannel(host: "127.0.0.1", port: port)
         try await probe.open()
@@ -321,9 +334,10 @@ final class VCPSessionClientTests: XCTestCase {
         _ = consume host  // closes the listening socket
         let started = Date()
         do throws(VCPLinkError) {
-            _ = try await VCPSessionClient.connect(host: "127.0.0.1", port: port,
-                                                   device: VCPDeviceIdentity(deviceID: [UInt8](repeating: 3, count: 16), name: "t"),
-                                                   pairing: pairing)
+            _ = try await VCPSessionClient.connect(
+                host: "127.0.0.1", port: port,
+                device: VCPDeviceIdentity(deviceID: [UInt8](repeating: 3, count: 16), name: "t"),
+                pairing: pairing)
             XCTFail("connected to a closed port")
         } catch {
             guard case .network = error else { return XCTFail("expected .network, got \(error)") }
@@ -337,7 +351,7 @@ final class VCPSessionClientTests: XCTestCase {
         let p = try load("vcp/pairing.json")
         let m = (p["messages"] as! [String: Any]).mapValues { hex($0) }
         guard case let .hello(hello) = try VCPControlMessage.decode(m["HELLO"]!),
-              case let .pairChallenge(challenge) = try VCPControlMessage.decode(m["PAIR_CHALLENGE"]!)
+            case let .pairChallenge(challenge) = try VCPControlMessage.decode(m["PAIR_CHALLENGE"]!)
         else { return XCTFail("pairing.json frame types") }
         let host = try ScriptedHost { conn in
             try conn.expect(m["HELLO"]!, "HELLO")
@@ -359,7 +373,12 @@ final class VCPSessionClientTests: XCTestCase {
         private let lock = NSLock()
         private var starts: [ContinuousClock.Instant] = []
         private var ends: [ContinuousClock.Instant] = []
-        func record() -> Int { lock.withLock { starts.append(.now); return starts.count } }
+        func record() -> Int {
+            lock.withLock {
+                starts.append(.now)
+                return starts.count
+            }
+        }
         func finished() { lock.withLock { ends.append(.now) } }
         var all: [ContinuousClock.Instant] { lock.withLock { starts } }
         var finishes: [ContinuousClock.Instant] { lock.withLock { ends } }
@@ -380,12 +399,14 @@ final class VCPSessionClientTests: XCTestCase {
         let attempts = Attempts()
         let reconnect = Task { () async -> Result<VCPLiveSession, VCPLinkError> in
             do throws(VCPLinkError) {
-                return .success(try await VCPReconnect.run { () async throws(VCPLinkError) -> VCPLiveSession in
-                    _ = attempts.record()
-                    defer { attempts.finished() }
-                    return try await VCPSessionClient.connect(host: "127.0.0.1", port: port, device: device, pairing: pairing,
-                                                              timeout: VCPReconnect.attemptTimeout, nonce: hello.nonceD)
-                })
+                return .success(
+                    try await VCPReconnect.run { () async throws(VCPLinkError) -> VCPLiveSession in
+                        _ = attempts.record()
+                        defer { attempts.finished() }
+                        return try await VCPSessionClient.connect(
+                            host: "127.0.0.1", port: port, device: device, pairing: pairing,
+                            timeout: VCPReconnect.attemptTimeout, nonce: hello.nonceD)
+                    })
             } catch {
                 return .failure(error)
             }
@@ -409,10 +430,13 @@ final class VCPSessionClientTests: XCTestCase {
         XCTAssertEqual(finishes.count, starts.count)
         for ((earlier, finished), later) in zip(zip(starts, finishes), starts.dropFirst()) {
             let due = max(earlier + VCPReconnect.retryInterval, finished)
-            XCTAssertLessThan(later - due, .milliseconds(150),
-                              "attempts must start 500 ms apart, or at once after a longer one (took \(finished - earlier))")
+            XCTAssertLessThan(
+                later - due, .milliseconds(150),
+                "attempts must start 500 ms apart, or at once after a longer one (took \(finished - earlier))")
         }
-        print("NET004_RECONNECT host_back_to_session_ms=\(took.components.attoseconds / 1_000_000_000_000_000 + took.components.seconds * 1000) attempts=\(starts.count) attempt_times=\(zip(starts, finishes).map { $1 - $0 }) start_gaps=\(zip(starts, starts.dropFirst()).map { $1 - $0 })")
+        print(
+            "NET004_RECONNECT host_back_to_session_ms=\(took.components.attoseconds / 1_000_000_000_000_000 + took.components.seconds * 1000) attempts=\(starts.count) attempt_times=\(zip(starts, finishes).map { $1 - $0 }) start_gaps=\(zip(starts, starts.dropFirst()).map { $1 - $0 })"
+        )
         live.close()
         XCTAssertNil(host.result())
     }
@@ -420,21 +444,26 @@ final class VCPSessionClientTests: XCTestCase {
     /// Retrying can't fix a pairing Blender no longer accepts: the loop stops at the first such
     /// error and reports it, so the app asks for a new pairing. Transient failures are retried.
     func testReconnectStopsAtARejectedPairing() async throws {
-        let refusal = try VCPControlMessage.error(VCPControlErrorMessage(code: VCPControlErrorMessage.notPaired,
-                                                                         message: "device not paired")).encode()
+        let refusal = try VCPControlMessage.error(
+            VCPControlErrorMessage(
+                code: VCPControlErrorMessage.notPaired,
+                message: "device not paired")
+        ).encode()
         let host = try ScriptedHost { conn in
             _ = try conn.frame()
             conn.write(refusal)
         }
         let port = host.port
-        let pairing = VCPHostPairing(hostID: [UInt8](repeating: 1, count: 16), pairingKey: [UInt8](repeating: 2, count: 32))
+        let pairing = VCPHostPairing(
+            hostID: [UInt8](repeating: 1, count: 16), pairingKey: [UInt8](repeating: 2, count: 32))
         let device = VCPDeviceIdentity(deviceID: [UInt8](repeating: 3, count: 16), name: "t")
         let attempts = Attempts()
         do throws(VCPLinkError) {
             _ = try await VCPReconnect.run { () async throws(VCPLinkError) -> VCPLiveSession in
                 // A retry would find no listener; end the loop with a different error instead of hanging.
                 guard attempts.record() == 1 else { throw .unknownHost }
-                return try await VCPSessionClient.connect(host: "127.0.0.1", port: port, device: device, pairing: pairing)
+                return try await VCPSessionClient.connect(
+                    host: "127.0.0.1", port: port, device: device, pairing: pairing)
             }
             XCTFail("a refused pairing produced a session")
         } catch {
@@ -446,8 +475,10 @@ final class VCPSessionClientTests: XCTestCase {
         XCTAssertTrue(VCPReconnect.isFatal(.host(code: VCPControlErrorMessage.proofFailed, message: "")))
         XCTAssertTrue(VCPReconnect.isFatal(.unknownHost))
         XCTAssertTrue(VCPReconnect.isFatal(.pairing(.badProof)))
-        for transient: VCPLinkError in [.network("down"), .timeout, .closed, .unexpected("x"),
-                                        .host(code: VCPControlErrorMessage.busy, message: "")] {
+        for transient: VCPLinkError in [
+            .network("down"), .timeout, .closed, .unexpected("x"),
+            .host(code: VCPControlErrorMessage.busy, message: ""),
+        ] {
             XCTAssertFalse(VCPReconnect.isFatal(transient), "\(transient) must be retried")
         }
     }
@@ -462,14 +493,17 @@ final class VCPSessionClientTests: XCTestCase {
             guard conn.closedByPeer() else { throw ScriptFailure(description: "no EOF after cancel") }
         }
         let port = host.port
-        let pairing = VCPHostPairing(hostID: [UInt8](repeating: 1, count: 16), pairingKey: [UInt8](repeating: 2, count: 32))
+        let pairing = VCPHostPairing(
+            hostID: [UInt8](repeating: 1, count: 16), pairingKey: [UInt8](repeating: 2, count: 32))
         let device = VCPDeviceIdentity(deviceID: [UInt8](repeating: 3, count: 16), name: "t")
         let reconnect = Task { () async -> Result<VCPLiveSession, VCPLinkError> in
             do throws(VCPLinkError) {
-                return .success(try await VCPReconnect.run { () async throws(VCPLinkError) -> VCPLiveSession in
-                    try await VCPSessionClient.connect(host: "127.0.0.1", port: port, device: device, pairing: pairing,
-                                                       timeout: VCPSessionClient.handshakeTimeout)
-                })
+                return .success(
+                    try await VCPReconnect.run { () async throws(VCPLinkError) -> VCPLiveSession in
+                        try await VCPSessionClient.connect(
+                            host: "127.0.0.1", port: port, device: device, pairing: pairing,
+                            timeout: VCPSessionClient.handshakeTimeout)
+                    })
             } catch {
                 return .failure(error)
             }
@@ -508,7 +542,8 @@ final class VCPSessionClientTests: XCTestCase {
             var transform = matrix_identity_float4x4
             transform.columns.3 = SIMD4(Float(i) / 100, 0, 0, 1)
             pipeline.queue.async {
-                pipeline.receive(transform: transform, timestamp: 100 + Double(i) / 60, trackingState: VCPTrackingState.normal)
+                pipeline.receive(
+                    transform: transform, timestamp: 100 + Double(i) / 60, trackingState: VCPTrackingState.normal)
             }
             try await Task.sleep(for: .milliseconds(16))
         }
@@ -523,8 +558,10 @@ final class VCPSessionClientTests: XCTestCase {
     /// Pass its TCP port and code as `TEST_RUNNER_VCAM_INTEROP_TCP` / `TEST_RUNNER_VCAM_INTEROP_CODE`.
     func testLiveSessionWithTheRustHost() async throws {
         let env = ProcessInfo.processInfo.environment
-        guard let portText = env["VCAM_INTEROP_TCP"], let port = UInt16(portText), let code = env["VCAM_INTEROP_CODE"] else {
-            throw XCTSkip("set TEST_RUNNER_VCAM_INTEROP_TCP and TEST_RUNNER_VCAM_INTEROP_CODE to run against a live Rust host")
+        guard let portText = env["VCAM_INTEROP_TCP"], let port = UInt16(portText), let code = env["VCAM_INTEROP_CODE"]
+        else {
+            throw XCTSkip(
+                "set TEST_RUNNER_VCAM_INTEROP_TCP and TEST_RUNNER_VCAM_INTEROP_CODE to run against a live Rust host")
         }
         let device = VCPDeviceIdentity(deviceID: VCPPairing.randomBytes(16), name: "Sightline interop")
         let channel = try VCPControlChannel(host: "127.0.0.1", port: port)
@@ -548,8 +585,9 @@ final class VCPSessionClientTests: XCTestCase {
         XCTAssertEqual(snapshot.controlSeq, 2)
         XCTAssertEqual(snapshot.controlAck, 2, "Blender's STATUS didn't acknowledge the controls")
         XCTAssertNil(snapshot.sendError)
-        print("VCAM_INTEROP_SESSION n=1 session=\(first.keys.sessionID) udp=\(first.udpHost):\(first.udpPort) " +
-              "sent=\(snapshot.packetsSent) ack=\(snapshot.controlAck)")
+        print(
+            "VCAM_INTEROP_SESSION n=1 session=\(first.keys.sessionID) udp=\(first.udpHost):\(first.udpPort) "
+                + "sent=\(snapshot.packetsSent) ack=\(snapshot.controlAck)")
         pipeline.stop()
         first.close()
 
@@ -559,7 +597,9 @@ final class VCPSessionClientTests: XCTestCase {
         try await feed(pipeline, frames: 30)
         let again = try XCTUnwrap(latest.snapshot)
         XCTAssertEqual(again.controlAck, 1, "the second session's first CONTROL_STATE wasn't acknowledged")
-        print("VCAM_INTEROP_SESSION n=2 session=\(second.keys.sessionID) sent=\(again.packetsSent) ack=\(again.controlAck)")
+        print(
+            "VCAM_INTEROP_SESSION n=2 session=\(second.keys.sessionID) sent=\(again.packetsSent) ack=\(again.controlAck)"
+        )
         pipeline.stop()
         second.close()
     }
@@ -573,8 +613,11 @@ final class VCPSessionClientTests: XCTestCase {
     /// it is listening again. Pass `TEST_RUNNER_VCAM_RESTART_TCP` / `TEST_RUNNER_VCAM_RESTART_CODE`.
     func testReconnectsAfterTheRustHostRestarts() async throws {
         let env = ProcessInfo.processInfo.environment
-        guard let portText = env["VCAM_RESTART_TCP"], let port = UInt16(portText), let code = env["VCAM_RESTART_CODE"] else {
-            throw XCTSkip("set TEST_RUNNER_VCAM_RESTART_TCP and TEST_RUNNER_VCAM_RESTART_CODE to run against a restarting Rust host")
+        guard let portText = env["VCAM_RESTART_TCP"], let port = UInt16(portText), let code = env["VCAM_RESTART_CODE"]
+        else {
+            throw XCTSkip(
+                "set TEST_RUNNER_VCAM_RESTART_TCP and TEST_RUNNER_VCAM_RESTART_CODE to run against a restarting Rust host"
+            )
         }
         let device = VCPDeviceIdentity(deviceID: VCPPairing.randomBytes(16), name: "Sightline reconnect")
         let channel = try VCPControlChannel(host: "127.0.0.1", port: port)
@@ -592,8 +635,9 @@ final class VCPSessionClientTests: XCTestCase {
         let attempts = Attempts()
         let second = try await VCPReconnect.run { () async throws(VCPLinkError) -> VCPLiveSession in
             _ = attempts.record()
-            return try await VCPSessionClient.connect(host: "127.0.0.1", port: port, device: device, pairing: pairing,
-                                                      timeout: VCPReconnect.attemptTimeout)
+            return try await VCPSessionClient.connect(
+                host: "127.0.0.1", port: port, device: device, pairing: pairing,
+                timeout: VCPReconnect.attemptTimeout)
         }
         let accepted = Date()
         XCTAssertNotEqual(second.keys.sessionID, first.keys.sessionID)
@@ -602,9 +646,13 @@ final class VCPSessionClientTests: XCTestCase {
         let snapshot = try XCTUnwrap(latest.snapshot)
         XCTAssertEqual(snapshot.sessionID, second.keys.sessionID)
         XCTAssertEqual(snapshot.controlAck, 1, "the new session's first CONTROL_STATE wasn't acknowledged")
-        print(String(format: "VCAM_RESTART end=%@ lost_at=%.3f accepted_at=%.3f loss_to_session_ms=%.0f attempts=%d session=%u ack=%u",
-                     "\(end)", lost.timeIntervalSince1970, accepted.timeIntervalSince1970,
-                     accepted.timeIntervalSince(lost) * 1000, attempts.all.count, second.keys.sessionID, snapshot.controlAck))
+        print(
+            String(
+                format:
+                    "VCAM_RESTART end=%@ lost_at=%.3f accepted_at=%.3f loss_to_session_ms=%.0f attempts=%d session=%u ack=%u",
+                "\(end)", lost.timeIntervalSince1970, accepted.timeIntervalSince1970,
+                accepted.timeIntervalSince(lost) * 1000, attempts.all.count, second.keys.sessionID, snapshot.controlAck)
+        )
         pipeline.stop()
         second.close()
     }

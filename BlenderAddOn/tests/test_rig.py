@@ -25,7 +25,7 @@ def test_local_pose_matches_vectors(case):
         assert heading(zp["orientation"]) == pytest.approx(case["zero_yaw"], abs=1e-9)
     p, q = local_pose(case["position"], case["orientation"], zero, case["motion_scale"], case["lock_flags"])
     assert p == pytest.approx(case["expected_position"], abs=1e-9)
-    dot = sum(a * b for a, b in zip(q, case["expected_orientation"]))
+    dot = sum(a * b for a, b in zip(q, case["expected_orientation"], strict=True))
     assert abs(dot) == pytest.approx(1.0, abs=1e-9), (q, case["expected_orientation"])
 
 
@@ -34,8 +34,9 @@ def test_set_origin_follows_the_shared_origin_epoch_vector():
     seq = next(s for s in vectors["sequences"] if s["message"].startswith("CONTROL_STATE.origin_epoch"))
     controls, resets = Controls(), []
     for i, epoch in enumerate(seq["input"]):
-        _, set_origin = controls.update({"state_seq": i + 1, "motion_scale": None, "lock_flags": None,
-                                         "origin_epoch": epoch})
+        _, set_origin = controls.update(
+            {"state_seq": i + 1, "motion_scale": None, "lock_flags": None, "origin_epoch": epoch}
+        )
         if set_origin:
             resets.append(i)
     assert resets == seq["resets_at_index"]

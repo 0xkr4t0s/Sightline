@@ -26,7 +26,8 @@
       buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
-      shouldUseLaunchSchemeArgsEnv = "YES">
+      shouldUseLaunchSchemeArgsEnv = "YES"
+      codeCoverageEnabled = "YES">
       <Testables>
          <TestableReference
             skipped = "NO">
@@ -35,6 +36,16 @@
                BlueprintIdentifier = "9E74B7DA2F84AF9400B754DD"
                BuildableName = "SightlineIOSTests.xctest"
                BlueprintName = "SightlineIOSTests"
+               ReferencedContainer = "container:SightlineIOS.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "5A17E5700000000000000005"
+               BuildableName = "SightlineIOSUITests.xctest"
+               BlueprintName = "SightlineIOSUITests"
                ReferencedContainer = "container:SightlineIOS.xcodeproj">
             </BuildableReference>
          </TestableReference>

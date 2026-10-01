@@ -52,8 +52,19 @@ with tempfile.TemporaryDirectory() as config_dir:
 
     # Before any device: empty samples and a stats dict with the documented keys.
     stats = s.stats()
-    expected = {"session_id", "last_datagram_age_s", "poses_applied", "poses_stale", "dropped",
-                "rate_hz", "loss", "last_pose_age_s", "source", "clock", "clock_rejected"}
+    expected = {
+        "session_id",
+        "last_datagram_age_s",
+        "poses_applied",
+        "poses_stale",
+        "dropped",
+        "rate_hz",
+        "loss",
+        "last_pose_age_s",
+        "source",
+        "clock",
+        "clock_rejected",
+    }
     assert set(stats) == expected, sorted(stats)
     assert stats["session_id"] is None and stats["clock"] is None and stats["poses_applied"] == 0
     assert s.latest_pose() is None
@@ -73,8 +84,13 @@ with tempfile.TemporaryDirectory() as config_dir:
     # FR-BL-006: smoothing is optional, off by default, validated, and can be turned off again.
     assert s.smoothing() is None
     s.set_smoothing(True)
-    assert s.smoothing() == {"position_min_cutoff": 1.0, "position_beta": 2.0,
-                             "rotation_min_cutoff": 1.0, "rotation_beta": 0.5, "d_cutoff": 1.0}
+    assert s.smoothing() == {
+        "position_min_cutoff": 1.0,
+        "position_beta": 2.0,
+        "rotation_min_cutoff": 1.0,
+        "rotation_beta": 0.5,
+        "d_cutoff": 1.0,
+    }
     raises(ValueError, s.set_smoothing, True, position_min_cutoff=0.0)
     raises(ValueError, s.set_smoothing, True, rotation_beta=float("nan"))
     assert s.smoothing()["position_beta"] == 2.0  # a rejected change keeps the old setting
@@ -113,5 +129,7 @@ with tempfile.TemporaryDirectory() as config_dir:
     assert (again.port(), again.udp_port()) == (port, udp_port)
     again.stop()
 
-print(f"VCAM_SESSION_OK tcp={port} udp={udp_port} stop_ms={stop_ms:.0f} "
-      f"panic=NativeError refused={type(raise_refused).__name__}")
+print(
+    f"VCAM_SESSION_OK tcp={port} udp={udp_port} stop_ms={stop_ms:.0f} "
+    f"panic=NativeError refused={type(raise_refused).__name__}"
+)

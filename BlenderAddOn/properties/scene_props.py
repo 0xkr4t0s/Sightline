@@ -61,8 +61,7 @@ class VCamProperties(bpy.types.PropertyGroup):
     stream_resolution: bpy.props.EnumProperty(
         name="Stream Resolution",
         description="Offscreen viewfinder resolution",
-        items=[(key, f"{w} × {h}", f"Stream at {w} × {h}")
-               for key, (w, h) in STREAM_RESOLUTIONS.items()],
+        items=[(key, f"{w} × {h}", f"Stream at {w} × {h}") for key, (w, h) in STREAM_RESOLUTIONS.items()],
         default='540p',
     )
     stream_fps: bpy.props.EnumProperty(
@@ -74,8 +73,10 @@ class VCamProperties(bpy.types.PropertyGroup):
     stream_shading: bpy.props.EnumProperty(
         name="Stream Shading",
         description="Shading mode for the viewfinder; EEVEE may slow Blender",
-        items=[('SOLID', "Solid", "Fast viewport shading"),
-               ('MATERIAL', "Material Preview", "Preview materials and lighting"),
-               ('RENDERED', "Rendered (EEVEE)", "Preview EEVEE; the UI may lag and stream fps may drop")],
+        items=[
+            ('SOLID', "Solid", "Fast viewport shading"),
+            ('MATERIAL', "Material Preview", "Preview materials and lighting"),
+            ('RENDERED', "Rendered (EEVEE)", "Preview EEVEE; the UI may lag and stream fps may drop"),
+        ],
         default='SOLID',
     )

@@ -123,8 +123,9 @@ final class HostDiscoveryTests: XCTestCase {
         listener.newConnectionHandler = { connection in
             connection.start(queue: DispatchQueue(label: "BonjourSelectionTest"))
         }
-        listener.service = NWListener.Service(name: name, type: DiscoveredHost.serviceType, domain: "local.",
-                                              txtRecord: NWTXTRecord(["vcp": "1", "host": "Test Blender"]))
+        listener.service = NWListener.Service(
+            name: name, type: DiscoveredHost.serviceType, domain: "local.",
+            txtRecord: NWTXTRecord(["vcp": "1", "host": "Test Blender"]))
         listener.start(queue: DispatchQueue(label: "BonjourSelectionListener"))
         defer { listener.cancel() }
 
@@ -162,6 +163,7 @@ final class HostDiscoveryTests: XCTestCase {
         XCTAssertEqual(host.blendFile, blend.isEmpty ? nil : blend)
         XCTAssertTrue(host.isCompatible)
         XCTAssertNotNil(host.tcpPort)
-        print("VCAM_INTEROP_FOUND id=\(host.id) machine=\(host.machine) file=\(host.fileLabel) tcp=\(host.tcpPort ?? 0)")
+        print(
+            "VCAM_INTEROP_FOUND id=\(host.id) machine=\(host.machine) file=\(host.fileLabel) tcp=\(host.tcpPort ?? 0)")
     }
 }

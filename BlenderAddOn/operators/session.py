@@ -12,7 +12,10 @@ from bpy_extras.io_utils import ExportHelper
 
 from ..core import session
 from ..core.apply import ZERO_YAW_KEY, find_origin, target_camera
+from ..core.log import get_logger
 from ..core.status import code_label
+
+_log = get_logger(__name__)
 
 
 class VCAM_OT_session_start(bpy.types.Operator):
@@ -83,6 +86,7 @@ class VCAM_OT_pairing_start(bpy.types.Operator):
         except (OSError, RuntimeError) as e:
             self.report({'ERROR'}, f"Pairing not started: {e}")
             return {'CANCELLED'}
+        _log.info("pairing enabled")  # never the code
         self.report({'INFO'}, f"Pairing code {code_label(code)}")
         return {'FINISHED'}
 
@@ -101,6 +105,7 @@ class VCAM_OT_pairing_cancel(bpy.types.Operator):
 
     def execute(self, context):
         session.current().disable_pairing()
+        _log.info("pairing cancelled")
         return {'FINISHED'}
 
 

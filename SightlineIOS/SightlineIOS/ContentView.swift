@@ -48,10 +48,15 @@ struct ContentView: View {
             // Same full-screen space as the Metal view, so the guides line up with the frame.
             ZStack {
                 ViewfinderView(renderer: controller.viewfinder)
-                FramingOverlayView(settings: controller.framing, frameSize: controller.videoFrameSize,
-                                   horizonAngle: controller.horizonAngle)
+                FramingOverlayView(
+                    settings: controller.framing, frameSize: controller.videoFrameSize,
+                    horizonAngle: controller.horizonAngle)
             }
             .ignoresSafeArea()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Viewfinder")
+            .accessibilityValue(viewfinderDescription)
+            .accessibilityIdentifier("viewfinder")
         }
         .preferredColorScheme(.dark)
         // Re-check visibility once the hide delay has passed since the last change.
@@ -71,13 +76,16 @@ struct ContentView: View {
         HStack(spacing: 16) {
             Label {
                 Text(controller.sessionStatus)
+                    .accessibilityIdentifier("status.session")
             } icon: {
                 Circle()
                     .fill(trackingColor)
                     .frame(width: 10, height: 10)
             }
             Text(controller.poseRate.map { "\(Int($0.rounded())) Hz" } ?? "– Hz")
+                .accessibilityIdentifier("status.rate")
             Text(connection)
+                .accessibilityIdentifier("status.connection")
             if let stream = controller.stream {
                 Text(stream.label)
                 Label(stream.quality.label, systemImage: "wifi")
@@ -86,9 +94,11 @@ struct ContentView: View {
             }
             Label("Thermal: \(controller.thermal.label)", systemImage: "thermometer.medium")
                 .foregroundStyle(controller.thermal.isWarning ? Color.orange : Color.white)
+                .accessibilityIdentifier("status.thermal")
             if let error = controller.lastError {
                 Text(error)
                     .foregroundStyle(.red)
+                    .accessibilityIdentifier("status.error")
             }
             Spacer(minLength: 0)
         }
@@ -111,6 +121,7 @@ struct ContentView: View {
         .padding(.vertical, 10)
         .background(Color.red.opacity(0.75), in: Capsule())
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("video.stalled")
     }
 
     private var controlRail: some View {
@@ -123,16 +134,33 @@ struct ContentView: View {
                     Task { await controller.startTracking() }
                 }
             }
+            .accessibilityIdentifier("control.startStop")
             railButton("Origin", systemImage: "scope") {
                 controller.controls.setOrigin()
             }
             .disabled(!controller.isTracking)
+            .accessibilityIdentifier("control.origin")
             railButton("Settings", systemImage: "gearshape") {
                 showsSettings = true
             }
+            .accessibilityIdentifier("control.settings")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.ultraThinMaterial)
+    }
+
+    /// The viewfinder's accessibility value: the frame on screen and the guides drawn over it, so
+    /// VoiceOver users and UI tests can tell what is shown ("1280x720; thirds, centre cross").
+    private var viewfinderDescription: String {
+        let frame = controller.videoFrameSize.map { "\(Int($0.width))x\(Int($0.height))" } ?? "No video"
+        let framing = controller.framing
+        var guides: [String] = []
+        if let aspect = framing.maskAspect { guides.append(String(format: "mask %.2f:1", aspect)) }
+        if framing.thirds { guides.append("thirds") }
+        if framing.centreCross { guides.append("centre cross") }
+        if framing.safeAreas { guides.append("safe areas") }
+        if framing.horizon { guides.append("horizon") }
+        return guides.isEmpty ? frame : "\(frame); \(guides.joined(separator: ", "))"
     }
 
     private func railButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {

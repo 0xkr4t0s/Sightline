@@ -85,5 +85,4 @@ assert not session.running() and refused(port)
 assert not bpy.app.timers.is_registered(session._poll)
 addon_utils.disable(MODULE, default_set=True)
 
-print(f"VCAM_ADDON_SESSION_OK tcp={port} udp={udp_port} disable_ms={disable_ms:.0f} "
-      f"host_id_stable=true")
+print(f"VCAM_ADDON_SESSION_OK tcp={port} udp={udp_port} disable_ms={disable_ms:.0f} host_id_stable=true")

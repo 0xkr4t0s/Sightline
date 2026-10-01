@@ -29,6 +29,8 @@ Controls still apply to the held pose.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 LOCK_HEIGHT = 1 << 0
 LOCK_ROLL = 1 << 1
@@ -36,8 +38,10 @@ PAN_ONLY = 1 << 2
 _EPS = 1e-9
 TRACKING_NORMAL = 5  # vcp.md §6.1
 
+Vec = Sequence[float]
 
-def qmul(a, b):
+
+def qmul(a: Vec, b: Vec) -> tuple[float, float, float, float]:
     ax, ay, az, aw = a
     bx, by, bz, bw = b
     return (
@@ -48,25 +52,25 @@ def qmul(a, b):
     )
 
 
-def qrot(q, v):
+def qrot(q: Vec, v: Vec) -> tuple[float, float, float]:
     """Rotates vector `v` by unit quaternion `q`."""
     x, y, z, w = q
     return qmul(qmul(q, (*v, 0.0)), (-x, -y, -z, w))[:3]
 
 
-def qyaw(angle):
+def qyaw(angle: float) -> tuple[float, float, float, float]:
     """Rotation by `angle` radians about +Z."""
     return (0.0, 0.0, math.sin(angle / 2), math.cos(angle / 2))
 
 
-def canonical(q):
+def canonical(q: Vec) -> tuple[float, ...]:
     """Unit quaternion with w >= 0 (q and −q are the same rotation)."""
     n = math.sqrt(sum(c * c for c in q))
     q = tuple(c / n for c in q)
     return tuple(-c for c in q) if q[3] < 0 else q
 
 
-def heading(q) -> float:
+def heading(q: Vec) -> float:
     """ψ of orientation `q` (radians): 0 along +Y, counter-clockwise about +Z."""
     fx, fy, _ = qrot(q, (0.0, 0.0, -1.0))
     if math.hypot(fx, fy) < 1e-6:  # looking straight up or down: use the up vector
@@ -74,12 +78,12 @@ def heading(q) -> float:
     return math.atan2(-fx, fy)
 
 
-def zero_from_pose(position, orientation):
+def zero_from_pose(position: Vec, orientation: Vec) -> tuple[tuple[float, ...], float]:
     """The Set origin zero (p₀, ψ₀) for the current pose."""
     return tuple(position), heading(orientation)
 
 
-def remove_roll(q):
+def remove_roll(q: Vec) -> tuple[float, ...]:
     """Same forward direction, up vector turned into the plane of forward and world +Z."""
     f = qrot(q, (0.0, 0.0, -1.0))
     up = (-f[0] * f[2], -f[1] * f[2], 1.0 - f[2] * f[2])  # Z minus its component along f
@@ -92,7 +96,7 @@ def remove_roll(q):
     return _quat_from_columns(right, u, back)
 
 
-def _quat_from_columns(x, y, z):
+def _quat_from_columns(x: Vec, y: Vec, z: Vec) -> tuple[float, ...]:
     """Quaternion of the rotation whose matrix columns are the orthonormal axes x, y, z."""
     m00, m01, m02 = x[0], y[0], z[0]
     m10, m11, m12 = x[1], y[1], z[1]
@@ -113,11 +117,17 @@ def _quat_from_columns(x, y, z):
     return canonical(q)
 
 
-def local_pose(position, orientation, zero=None, motion_scale=1.0, lock_flags=0):
+def local_pose(
+    position: Vec,
+    orientation: Vec,
+    zero: tuple[Vec, float] | None = None,
+    motion_scale: float = 1.0,
+    lock_flags: int = 0,
+) -> tuple[tuple[float, ...], tuple[float, ...]]:
     """Camera local (position, quaternion) under VCam_Origin for one device pose."""
     p0, yaw0 = zero if zero is not None else ((0.0, 0.0, 0.0), 0.0)
     unyaw = qyaw(-yaw0)
-    p = qrot(unyaw, tuple(a - b for a, b in zip(position, p0)))
+    p = qrot(unyaw, tuple(a - b for a, b in zip(position, p0, strict=True)))
     q = canonical(qmul(unyaw, orientation))
     if lock_flags & PAN_ONLY:
         p = (0.0, 0.0, 0.0)
@@ -141,7 +151,7 @@ class Controls:
         self.lock_flags = 0
         self.origin_epoch: int | None = None
 
-    def update(self, control) -> tuple[bool, bool]:
+    def update(self, control: Mapping[str, Any] | None) -> tuple[bool, bool]:
         """Merges `control` (a `latest_control()` dict or None): (changed, set_origin)."""
         if control is None or control["state_seq"] <= self.state_seq:
             return False, False
@@ -158,7 +168,7 @@ class Controls:
         return True, set_origin
 
 
-class PoseHold:
+class PoseHold[T]:
     """FR-TRK-002: which device pose to show, per session.
 
     `select` takes an opaque `sample` (the caller's pose) and returns (sample to apply, or None
@@ -168,9 +178,9 @@ class PoseHold:
     """
 
     def __init__(self) -> None:
-        self.good = None
+        self.good: T | None = None
 
-    def select(self, sample, tracking_state: int, enabled: bool):
+    def select(self, sample: T, tracking_state: int, enabled: bool) -> tuple[T | None, bool]:
         if tracking_state == TRACKING_NORMAL:
             self.good = sample
             return sample, False

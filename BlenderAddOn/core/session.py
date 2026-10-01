@@ -23,10 +23,13 @@ import sys
 import time
 from dataclasses import dataclass
 
-from .apply import Applier, clear_zero, find_origin, target_camera
+from .apply import Applier, camera_status, clear_zero, find_origin, target_camera
 from .latency import LatencyLog
+from .log import get_logger
 from .render import DEFAULT_BUDGET_MS, StreamLoop, adapted_resolution, resolution_steps
 from .status import pose_latency_ms
+
+_log = get_logger(__name__)
 
 HOST_ID_FILE = "host_id"
 HOST_ID_LEN = 16
@@ -46,6 +49,7 @@ class SessionState:
     device_id: str | None = None
     device_name: str | None = None
     session_id: int | None = None
+    tracking_state: int | None = None
     last_error: str | None = None
     # From the last applied pose (vcp.md §6.1) and the clock estimate (NET-003).
     latency_ms: float | None = None
@@ -64,6 +68,10 @@ _last_redraw = float("-inf")
 _stream: StreamLoop | None = None
 _stream_enabled = False
 _stream_failed = False
+# What the log last reported, so each change is logged once, not every tick.
+_logged_camera: tuple | None = None
+_logged_stream_level: tuple | None = None
+_logged_poll_error: str | None = None
 
 
 def load_or_create_host_id(directory: str) -> bytes:
@@ -119,9 +127,11 @@ def current():
 
 def _close_stream() -> None:
     """Ends the device's stream: joins the video threads (dropping their queued frames), frees the GPU."""
-    global _stream
+    global _stream, _logged_stream_level
     stream, _stream = _stream, None
     if stream is not None:
+        _log.info("stream stopped")
+        _logged_stream_level = None
         try:
             try:
                 if _session is not None:
@@ -134,7 +144,8 @@ def _close_stream() -> None:
 
 def start(port: int = DEFAULT_PORT, bind: str = "0.0.0.0", *, stream: bool | None = None) -> None:
     """Start the host. Background Blender needs stream=True after gpu.init()."""
-    global _session, _applier, _latency, _latency_clock, _stream_enabled, _stream_failed
+    global _session, _applier, _latency, _latency_clock, _stream_enabled, _stream_failed, _logged_camera
+    global _logged_poll_error
     import bpy
     import vcam_native
 
@@ -147,11 +158,14 @@ def start(port: int = DEFAULT_PORT, bind: str = "0.0.0.0", *, stream: bool | Non
     _latency, _latency_clock = LatencyLog(), None
     _stream_enabled = not bpy.app.background if stream is None else stream
     _stream_failed = False
+    _logged_camera = _logged_poll_error = None
+    _log.info("session started port=%d bind=%s stream=%s", session.port(), bind, _stream_enabled)
     try:
         session.advertise(socket.gethostname(), bpy.path.basename(bpy.data.filepath))
     except (OSError, ValueError) as e:
         # Discovery is a convenience; manual host entry still works (FR-UX-001).
         state.last_error = f"DNS-SD: {e}"
+        _log.warning("DNS-SD advertise failed: %s", e)
     smoothing = getattr(getattr(bpy.context.scene, "vcam_props", None), "smoothing", False)
     session.set_smoothing(bool(smoothing))
     _session = session
@@ -176,6 +190,7 @@ def stop() -> None:
     except Exception as e:  # noqa: BLE001 - unregister must always complete
         state.last_error = f"stop: {e}"
         print(f"Sightline: {state.last_error}")
+    _log.info("session stopped")
 
 
 def applier() -> Applier:
@@ -263,23 +278,48 @@ def _render_frame(session, context) -> None:
             stream = StreamLoop(slot, steps)
             session.start_video(slot, max_resolution_drop=steps)
             _stream = stream
+            _log.info("stream started camera=%r", camera.name)
         elif _stream.max_resolution_drop != steps:
             session.set_video_max_resolution_drop(steps)
             _stream.max_resolution_drop = steps
         # NET-VID-005: the adapter's resolution step, below the user's size.
-        adapt = session.video_stats()["adapt"]
+        stats = session.video_stats()
+        adapt = stats["adapt"]
         resolution = adapted_resolution(resolution_key, adapt["resolution_drop"] if adapt else 0)
-        _stream.tick(context, camera, _applier.applied_seq, session.host_clock_ns,
-                     budget_ms, fps, resolution, shading)
+        _log_stream_level((resolution, fps, shading, stats["quality"]))
+        _stream.tick(context, camera, _applier.applied_seq, session.host_clock_ns, budget_ms, fps, resolution, shading)
     except Exception as e:  # noqa: BLE001 - a broken GPU must not interrupt pose tracking
         state.stream_error = f"Stream: {e}"
+        _log.exception("stream failed")
         _stream_failed = True
         _close_stream()
 
 
+def _log_stream_level(level: tuple) -> None:
+    global _logged_stream_level
+    if level != _logged_stream_level:
+        (width, height), fps, shading, quality = level
+        _log.info("stream level resolution=%dx%d fps=%d shading=%s quality=%d", width, height, fps, shading, quality)
+        _logged_stream_level = level
+
+
+def _log_camera(scene) -> None:
+    """Logs the camera the session drives each time it changes, is renamed or goes missing."""
+    global _logged_camera
+    camera, warning = camera_status(scene)
+    seen = (camera.name if camera is not None else None, warning)
+    if seen == _logged_camera:
+        return
+    _logged_camera = seen
+    if camera is None:
+        _log.warning("no camera to drive: %s", warning)
+    else:
+        _log.info("target camera=%r", camera.name)
+
+
 def _poll() -> float | None:
     """Timer callback on the main thread: drains events, applies the pose. Never raises."""
-    global _latency_clock, _stream_failed
+    global _latency_clock, _stream_failed, _logged_poll_error
     import bpy
 
     session = _session
@@ -298,14 +338,20 @@ def _poll() -> float | None:
                 state.device_id = event["device_id"]
                 state.device_name = event["device_name"]
                 state.session_id = event["session_id"]
+                _log.info("device session started device=%r session_id=%d", event["device_name"], event["session_id"])
             elif kind == "session_ended" and event["session_id"] == state.session_id:
+                _log.info("device session ended device=%r session_id=%d", state.device_name, event["session_id"])
                 state.session_id = None
                 _close_stream()
+            elif kind == "paired":
+                _log.info("device paired device=%r", event["device_name"])
             elif kind == "pairing_storage_failed":
                 state.last_error = f"pairing not saved: {event['error']}"
+                _log.error("pairing not saved: %s", event["error"])
         error = session.discovery_error()
         if error:
             state.last_error = f"DNS-SD: {error}"
+        _log_camera(bpy.context.scene)
         now = time.monotonic()
         started = time.perf_counter()
         applied = _applier.tick(session, state.session_id, bpy.context.scene, now)
@@ -327,6 +373,9 @@ def _poll() -> float | None:
         _tag_redraw(now)
     except Exception as e:  # noqa: BLE001 - an exception would silently unregister the timer
         state.last_error = str(e)
+        if state.last_error != _logged_poll_error:  # once per distinct error, not 60 times a second
+            _logged_poll_error = state.last_error
+            _log.exception("poll failed")
     return POLL_INTERVAL
 
 

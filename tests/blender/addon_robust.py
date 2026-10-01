@@ -59,16 +59,31 @@ def expected_basis(pose):
 
 
 def max_diff(a, b):
-    return max(abs(x - y) for ra, rb in zip(a, b) for x, y in zip(ra, rb))
+    return max(abs(x - y) for ra, rb in zip(a, b, strict=True) for x, y in zip(ra, rb, strict=True))
 
 
 assert bpy.ops.vcam.session_start(port=0, bind="127.0.0.1") == {'FINISHED'}
 live = session.current()
 child = subprocess.Popen(
-    [FAKE, "--host", f"127.0.0.1:{live.port()}", "--state", os.path.join(session.config_dir(), "k"),
-     "--code", live.enable_pairing(), "--motion", os.path.join(MOTION, "scripted.bin"), "--rate", "60",
-     "--linger", "30"],
-    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    [
+        FAKE,
+        "--host",
+        f"127.0.0.1:{live.port()}",
+        "--state",
+        os.path.join(session.config_dir(), "k"),
+        "--code",
+        live.enable_pairing(),
+        "--motion",
+        os.path.join(MOTION, "scripted.bin"),
+        "--rate",
+        "60",
+        "--linger",
+        "30",
+    ],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
 poll_until("first pose", lambda: session.applier().applied_seq > 0)
 
 # Renamed camera: still driven, and the device is told the new name.
@@ -168,5 +183,7 @@ child.wait(timeout=10)
 assert bpy.ops.vcam.session_stop() == {'FINISHED'}
 addon_utils.disable(MODULE, default_set=True)
 assert all(h not in getattr(bpy.app.handlers, n) for n, h in session._HANDLERS), "handlers left behind"
-print(f"VCAM_ADDON_ROBUST_OK final_seq={final['seq']} rename=cam+rig undo=reapplied reload=same_session "
-      f"deleted=no_camera empty_file=no_camera")
+print(
+    f"VCAM_ADDON_ROBUST_OK final_seq={final['seq']} rename=cam+rig undo=reapplied reload=same_session "
+    f"deleted=no_camera empty_file=no_camera"
+)

@@ -24,13 +24,17 @@ final class ViewfinderTests: XCTestCase {
         }
         let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
         let image = try rgba.withUnsafeMutableBytes { bytes in
-            try XCTUnwrap(CGContext(data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8,
-                                    bytesPerRow: width * 4, space: space,
-                                    bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)?.makeImage())
+            try XCTUnwrap(
+                CGContext(
+                    data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                    bytesPerRow: width * 4, space: space,
+                    bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)?.makeImage())
         }
         let out = NSMutableData()
-        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil))
-        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
+        let destination = try XCTUnwrap(
+            CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(
+            destination, image, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
         XCTAssertTrue(CGImageDestinationFinalize(destination))
         return out as Data
     }
@@ -42,14 +46,17 @@ final class ViewfinderTests: XCTestCase {
     /// BGRA bytes of a shared-storage or IOSurface texture.
     private func pixels(_ texture: any MTLTexture) -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: texture.width * texture.height * 4)
-        texture.getBytes(&bytes, bytesPerRow: texture.width * 4,
-                         from: MTLRegionMake2D(0, 0, texture.width, texture.height), mipmapLevel: 0)
+        texture.getBytes(
+            &bytes, bytesPerRow: texture.width * 4,
+            from: MTLRegionMake2D(0, 0, texture.width, texture.height), mipmapLevel: 0)
         return bytes
     }
 
     /// RGB at (x, y) of BGRA `bytes`, within JPEG tolerance of `expected`.
-    private func assertColour(_ bytes: [UInt8], width: Int, _ x: Int, _ y: Int, _ expected: [UInt8],
-                              _ message: String, line: UInt = #line) {
+    private func assertColour(
+        _ bytes: [UInt8], width: Int, _ x: Int, _ y: Int, _ expected: [UInt8],
+        _ message: String, line: UInt = #line
+    ) {
         let i = (y * width + x) * 4
         let rgb = [bytes[i + 2], bytes[i + 1], bytes[i]]
         let close = zip(rgb, expected).allSatisfy { abs(Int($0) - Int($1)) <= 24 }
@@ -101,10 +108,11 @@ final class ViewfinderTests: XCTestCase {
     func testOnlyTheNewestWaitingFrameIsDecoded() throws {
         let frames = Frames()
         let release = DispatchSemaphore(value: 0)
-        let decoder = try XCTUnwrap(ViewfinderDecoder(device: device()) { frame in
-            frames.add(frame)
-            if frame.info.frameID == 1 { release.wait() }  // hold the decoder busy after frame 1
-        })
+        let decoder = try XCTUnwrap(
+            ViewfinderDecoder(device: device()) { frame in
+                frames.add(frame)
+                if frame.info.frameID == 1 { release.wait() }  // hold the decoder busy after frame 1
+            })
         let image = try jpeg(width: 16, height: 16)
         decoder.submit(info(1), jpeg: image)
         wait(for: 1, in: frames)
@@ -120,8 +128,10 @@ final class ViewfinderTests: XCTestCase {
     func testUndecodableAndOversizedFramesAreSkippedAndTheNextOneShows() throws {
         let frames = Frames()
         let decoder = try XCTUnwrap(ViewfinderDecoder(device: device()) { frames.add($0) })
-        let bad = [Data("not a jpeg".utf8), Data([0xFF, 0xD8, 0xFF, 0xD9]),  // SOI + EOI, no image
-                   try jpeg(width: ViewfinderDecoder.maxSide + 1, height: 8)]
+        let bad = [
+            Data("not a jpeg".utf8), Data([0xFF, 0xD8, 0xFF, 0xD9]),  // SOI + EOI, no image
+            try jpeg(width: ViewfinderDecoder.maxSide + 1, height: 8),
+        ]
         for (i, data) in bad.enumerated() {
             decoder.submit(info(UInt32(i + 1)), jpeg: data)
             let deadline = Date(timeIntervalSinceNow: 5)
@@ -138,10 +148,12 @@ final class ViewfinderTests: XCTestCase {
         func scale(_ fw: Double, _ fh: Double, _ dw: Double, _ dh: Double) -> SIMD2<Float> {
             ViewfinderLayout.quadScale(frame: CGSize(width: fw, height: fh), drawable: CGSize(width: dw, height: dh))
         }
-        XCTAssertEqual(scale(1920, 1080, 2556, 1179), SIMD2(Float((16.0 / 9) / (2556.0 / 1179)), 1),
-                       "16:9 on a wider phone screen: bars left and right")
-        XCTAssertEqual(scale(960, 540, 2048, 1536), SIMD2(1, Float((2048.0 / 1536) / (16.0 / 9))),
-                       "16:9 on a 4:3 iPad: bars top and bottom")
+        XCTAssertEqual(
+            scale(1920, 1080, 2556, 1179), SIMD2(Float((16.0 / 9) / (2556.0 / 1179)), 1),
+            "16:9 on a wider phone screen: bars left and right")
+        XCTAssertEqual(
+            scale(960, 540, 2048, 1536), SIMD2(1, Float((2048.0 / 1536) / (16.0 / 9))),
+            "16:9 on a 4:3 iPad: bars top and bottom")
         XCTAssertEqual(scale(960, 540, 1920, 1080), SIMD2(1, 1), "same aspect: fills the drawable")
         XCTAssertEqual(scale(0, 540, 1920, 1080), .zero)
         XCTAssertEqual(scale(960, 540, 1920, 0), .zero)
@@ -169,8 +181,9 @@ final class ViewfinderTests: XCTestCase {
             pass.colorAttachments[0].texture = target
             pass.colorAttachments[0].storeAction = .store
             let commandBuffer = try XCTUnwrap(device.makeCommandQueue()?.makeCommandBuffer())
-            renderer.encode(frame, pass: pass, drawableSize: CGSize(width: width, height: height),
-                            into: commandBuffer)
+            renderer.encode(
+                frame, pass: pass, drawableSize: CGSize(width: width, height: height),
+                into: commandBuffer)
             commandBuffer.commit()
             commandBuffer.waitUntilCompleted()
             return pixels(target)
@@ -193,8 +206,9 @@ final class ViewfinderTests: XCTestCase {
 
         // Before any frame: black.
         bytes = try render(nil, width: 8, height: 8)
-        XCTAssertTrue(stride(from: 0, to: bytes.count, by: 4).allSatisfy { bytes[$0..<$0 + 3].allSatisfy { $0 == 0 } },
-                      "no frame yet: black")
+        XCTAssertTrue(
+            stride(from: 0, to: bytes.count, by: 4).allSatisfy { bytes[$0..<$0 + 3].allSatisfy { $0 == 0 } },
+            "no frame yet: black")
     }
 
     /// FR-VF-005: stalled only after more than 250 ms without a frame (from the run's start, then

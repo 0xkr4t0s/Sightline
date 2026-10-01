@@ -1,0 +1,37 @@
+{
+  // Linux container for native/ (Rust), BlenderAddOn/ tests (Python 3.13) and headless Blender.
+  // The iOS app (SightlineIOS/) needs macOS and Xcode and is out of scope here.
+  "name": "Sightline (Rust + Python + Blender)",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      // Blender only has x86-64 Linux builds; it's skipped automatically on arm64 hosts.
+      "INSTALL_BLENDER": "true",
+      "BLENDER_VERSION": "5.2.2",
+      "BLENDER_SERIES": "5.2"
+    }
+  },
+  "remoteUser": "vscode",
+  "containerEnv": {
+    "BLENDER": "/opt/blender/blender",
+    "FAKE_IPHONE": "${containerWorkspaceFolder}/native/target.nosync/debug/vcam-fake-iphone",
+    "CARGO_TERM_COLOR": "always"
+  },
+  // The fake iPhone drives the headless Blender integration tests (tests/blender/).
+  "postCreateCommand": "cargo build --manifest-path native/Cargo.toml --locked -p vcam-fake-iphone",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "tamasfe.even-better-toml"
+      ],
+      "settings": {
+        "rust-analyzer.linkedProjects": ["native/Cargo.toml"],
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["BlenderAddOn/tests"]
+      }
+    }
+  }
+}

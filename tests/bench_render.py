@@ -3,8 +3,8 @@
 
 For each shading mode and resolution: draw the scene camera into a `GPUOffScreen` with
 `draw_view3d`, read the colour texture back, and hand the buffer to `vcam_native`
-(`FrameSlot.submit`, the one-copy hand-off of task 2.1a). The camera moves slightly every frame, like a live VCam, so EEVEE's
-viewport sample accumulation can't make repeat frames artificially cheap.
+(`FrameSlot.submit`, the one-copy hand-off of task 2.1a). The camera moves slightly every frame,
+like a live VCam, so EEVEE's viewport sample accumulation can't make repeat frames artificially cheap.
 
 Headless (no visible 3D view; `gpu.init()` provides the GPU context):
 
@@ -144,7 +144,18 @@ def bench(mode, width, height, args, ctx, out):
     def draw(target, i):
         target.draw_view3d(scene, view_layer, space, region, move_camera(i), proj, do_color_management=True)
 
-    keys = ("draw", "read", "draw_read", "handoff", "copy", "read_deferred", "pipelined", "pipelined_read", "pipelined_draw", "tick_gap")
+    keys = (
+        "draw",
+        "read",
+        "draw_read",
+        "handoff",
+        "copy",
+        "read_deferred",
+        "pipelined",
+        "pipelined_read",
+        "pipelined_draw",
+        "tick_gap",
+    )
     rows = {k: [] for k in keys}
     first_ms = None
     pixels = None

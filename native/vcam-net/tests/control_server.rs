@@ -48,6 +48,18 @@ impl Client {
         self.0.write_all(bytes).unwrap();
     }
 
+    /// Sends `msg` in three pieces with a pause longer than the server's 50 ms read poll between
+    /// them, so every handshake read times out mid-message.
+    fn send_split(&mut self, msg: &ControlMessage) {
+        let frame = msg.encode().unwrap();
+        let third = frame.len() / 3;
+        for piece in frame.chunks(third.max(1)) {
+            self.0.write_all(piece).unwrap();
+            self.0.flush().unwrap();
+            std::thread::sleep(Duration::from_millis(120));
+        }
+    }
+
     fn recv(&mut self) -> ControlMessage {
         let mut header = [0u8; HEADER_LEN];
         self.0.read_exact(&mut header).unwrap();
@@ -169,6 +181,41 @@ fn datagram(keys: &SessionKeys, message: &Message) -> Vec<u8> {
 fn send_pose(tx: &UdpSocket, server: &ControlServer, keys: &SessionKeys, seq: u32) {
     tx.send_to(&datagram(keys, &pose(seq)), server.udp_addr())
         .unwrap();
+}
+
+/// NET-004: HELLO, PAIR_PROOF and SESSION_PROOF that arrive across read-poll timeouts are framed
+/// intact. The server polls readiness instead of using socket timeouts, which can lose bytes
+/// on Windows.
+#[test]
+fn handshake_messages_split_across_read_timeouts_are_framed_intact() {
+    let server = server();
+    let code = server.enable_pairing().unwrap();
+    let mut client = Client::connect(&server);
+
+    let pair_hello = hello(Hello::MODE_PAIR, [0xA1; 16]);
+    client.send_split(&ControlMessage::Hello(pair_hello.clone()));
+    let ControlMessage::PairChallenge(challenge) = client.recv() else {
+        panic!("expected PAIR_CHALLENGE")
+    };
+    let (proof, pending) = device_pair(&code, &pair_hello, &challenge, &[0x5E; 32]).unwrap();
+    client.send_split(&ControlMessage::PairProof(proof));
+    let ControlMessage::PairAccept { m2 } = client.recv() else {
+        panic!("expected PAIR_ACCEPT")
+    };
+    let pk = pending.finish(&m2).unwrap();
+
+    let session_hello = hello(Hello::MODE_SESSION, [0xB2; 16]);
+    client.send_split(&ControlMessage::Hello(session_hello.clone()));
+    let ControlMessage::SessionChallenge(challenge) = client.recv() else {
+        panic!("expected SESSION_CHALLENGE")
+    };
+    let hs = SessionHandshake::new(&pk, &session_hello, &challenge).unwrap();
+    let proof_d = hs.device_proof().unwrap();
+    client.send_split(&ControlMessage::SessionProof { proof: proof_d });
+    let ControlMessage::SessionAccept { proof: proof_h } = client.recv() else {
+        panic!("expected SESSION_ACCEPT")
+    };
+    assert!(hs.verify_host_proof(&proof_d, &proof_h));
 }
 
 #[test]

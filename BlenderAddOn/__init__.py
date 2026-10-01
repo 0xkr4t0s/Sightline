@@ -6,9 +6,10 @@
 
 
 def register():
-    from . import operators, ui, properties
-    from .core import session
+    from . import operators, properties, ui
+    from .core import log, session
 
+    log.configure_from_env()
     session.register(__package__)
     properties.register()
     operators.register()
@@ -16,8 +17,8 @@ def register():
 
 
 def unregister():
-    from . import operators, ui, properties
-    from .core import session
+    from . import operators, properties, ui
+    from .core import log, session
 
     # First: stop threads and close sockets before anything they report to goes away
     # (NFR-REL-002).
@@ -25,3 +26,4 @@ def unregister():
     ui.unregister()
     operators.unregister()
     properties.unregister()
+    log.close_files()

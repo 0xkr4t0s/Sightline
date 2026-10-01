@@ -3,6 +3,7 @@ import AVFoundation
 import Foundation
 import Observation
 import SwiftUI
+import os
 
 /// UI state and start/stop (main actor). The per-frame work runs in `TrackingPipeline` on its own
 /// queue (ARC-005); this object only sees throttled snapshots (≤ 15 Hz) and rare session events.
@@ -42,8 +43,9 @@ final class TrackingSessionController {
     /// The device's thermal state, kept current from `ProcessInfo` notifications (FR-UX-004).
     private(set) var thermal = ThermalStatus(state: ProcessInfo.processInfo.thermalState)
 
-    @ObservationIgnored private let session = ARSession()
     @ObservationIgnored private let pipeline: TrackingPipeline
+    /// ARKit, or a scripted path in simulator QA runs; its frames go straight into `pipeline`.
+    @ObservationIgnored private let poseSource: any PoseSource
     /// Draws the newest decoded viewfinder frame (FR-VF-001/002); nil without Metal.
     @ObservationIgnored let viewfinder: ViewfinderRenderer?
     /// Decodes the pipeline's completed frames for `viewfinder`, off the tracking queue.
@@ -63,8 +65,6 @@ final class TrackingSessionController {
         guard isTracking, let latestPose else { return nil }
         return HorizonLevel.angle(orientation: latestPose.orientation, lockFlags: controls.lockFlags)
     }
-    // ARSession.delegate is weak: this keeps the receiver alive.
-    @ObservationIgnored private var receiver: ARFrameReceiver?
     @ObservationIgnored private var rateMeter = PoseRateMeter()
     @ObservationIgnored private var thermalObserver: (any NSObjectProtocol)?
     @ObservationIgnored private let device = DeviceIdentityStore.load()
@@ -86,6 +86,12 @@ final class TrackingSessionController {
     @ObservationIgnored private var runGeneration: UInt64 = 0
     /// Set when the app leaves the foreground mid-run, so the run restarts when it comes back.
     @ObservationIgnored private var resumeWhenActive = false
+    /// Whether this run has shown a viewfinder frame yet (logged once per run).
+    @ObservationIgnored private var runHasVideo = false
+    #if targetEnvironment(simulator) && DEBUG
+    /// The launch arguments are acted on once, the first time the scene is active.
+    @ObservationIgnored private var qaLaunchHandled = false
+    #endif
 
     init() {
         let settings = TrackingSettings.load()
@@ -94,28 +100,44 @@ final class TrackingSessionController {
         // Newest snapshot wins: the UI never queues stale frames.
         let (snapshots, continuation) = AsyncStream.makeStream(
             of: TrackingSnapshot.self, bufferingPolicy: .bufferingNewest(1))
+        let (events, eventSink) = AsyncStream.makeStream(of: PoseSourceEvent.self)
         let viewfinder = ViewfinderRenderer()
         self.viewfinder = viewfinder
         let decoder = viewfinder.flatMap { renderer in
             ViewfinderDecoder(device: renderer.device) { renderer.show($0) }
         }
         self.decoder = decoder
-        pipeline = TrackingPipeline(publish: { _ = continuation.yield($0) },
-                                    videoFrame: { decoder?.submit($0, jpeg: $1) })
-        let receiver = ARFrameReceiver(pipeline: pipeline) { [weak self] event in
-            Task { @MainActor in self?.handle(event) }
-        }
-        self.receiver = receiver
-        session.delegate = receiver
-        session.delegateQueue = pipeline.queue
+        pipeline = TrackingPipeline(
+            publish: { _ = continuation.yield($0) },
+            videoFrame: { decoder?.submit($0, jpeg: $1) })
+        let onEvent: @Sendable (PoseSourceEvent) -> Void = { _ = eventSink.yield($0) }
+        #if targetEnvironment(simulator) && DEBUG
+        poseSource =
+            QALaunchOptions.current.poseSource(pipeline: pipeline, onEvent: onEvent)
+            ?? ARKitPoseSource(pipeline: pipeline, onEvent: onEvent)
+        #else
+        poseSource = ARKitPoseSource(pipeline: pipeline, onEvent: onEvent)
+        #endif
         reloadPairing()
-        stallWatch.onChange = { [weak self] in self?.videoStalled = $0 }
+        stallWatch.onChange = { [weak self] stalled in
+            guard let self else { return }
+            videoStalled = stalled
+            if stalled {
+                Log.video.notice("Video stalled: no new viewfinder frame for 250 ms")
+            } else if runHasVideo {
+                Log.video.info("Video resumed")
+            }
+        }
         viewfinder?.onShown = { [weak self] in
             guard let self else { return }
             stallWatch.frameShown()
             if let texture = viewfinder?.frame?.texture {
                 let size = CGSize(width: texture.width, height: texture.height)
                 if size != videoFrameSize { videoFrameSize = size }
+                if isTracking, !runHasVideo {
+                    runHasVideo = true
+                    Log.video.notice("First viewfinder frame: \(texture.width)x\(texture.height)")
+                }
             }
         }
         Task { [weak self] in
@@ -124,6 +146,14 @@ final class TrackingSessionController {
                     return
                 }
                 self.apply(snapshot)
+            }
+        }
+        Task { [weak self] in
+            for await event in events {
+                guard let self else {
+                    return
+                }
+                self.handle(event)
             }
         }
         thermalObserver = NotificationCenter.default.addObserver(
@@ -164,8 +194,7 @@ final class TrackingSessionController {
     private func reloadPairing() {
         pairing = nil
         guard let account = pairingAccount else { return }
-        do { pairing = try PairingStore.load(account) }
-        catch { lastError = error.localizedDescription }
+        do { pairing = try PairingStore.load(account) } catch { lastError = error.localizedDescription }
     }
 
     func pair(code: String) async {
@@ -184,9 +213,12 @@ final class TrackingSessionController {
         var channel: VCPControlChannel?
         do {
             if let selectedServiceName {
+                Log.pairing.notice("Pairing with service \(selectedServiceName, privacy: .private)")
                 channel = VCPControlChannel(serviceName: selectedServiceName)
             } else {
                 let destination = try validatedDestination()
+                Log.pairing.notice(
+                    "Pairing with \(destination.host, privacy: .private):\(destination.port, privacy: .public)")
                 channel = try VCPControlChannel(host: destination.host, port: destination.port)
                 TrackingSettings(host: destination.host, port: Int(destination.port)).save()
             }
@@ -208,12 +240,16 @@ final class TrackingSessionController {
             link.close()
             sessionStatus = "Paired"
             lastError = nil
+            Log.pairing.notice("Paired; first session accepted")
         } catch let error as VCPLinkError {
             sessionStatus = pairing == nil ? "Not paired" : "Paired"
             lastError = error.message
+            Log.pairing.error(
+                "Pairing failed: \(error.logSummary, privacy: .public) (\(error.message, privacy: .private))")
         } catch {
             sessionStatus = pairing == nil ? "Not paired" : "Paired"
             lastError = error.localizedDescription
+            Log.pairing.error("Pairing failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -222,9 +258,10 @@ final class TrackingSessionController {
             return
         }
 
-        guard ARWorldTrackingConfiguration.isSupported else {
+        guard poseSource.isAvailable else {
             sessionStatus = "Unsupported"
             lastError = "ARWorldTrackingConfiguration is not supported on this device."
+            Log.tracking.error("Start refused: world tracking is not supported here")
             return
         }
 
@@ -233,12 +270,13 @@ final class TrackingSessionController {
         let generation = runGeneration
         do {
             // An unpaired discovered host can still show local AR poses; it has no UDP destination.
-            let destination: (host: String, port: UInt16) = if selectedServiceName == nil {
-                try validatedDestination()
-            } else {
-                ("", 0)
-            }
-            let granted = await requestCameraAccessIfNeeded()
+            let destination: (host: String, port: UInt16) =
+                if selectedServiceName == nil {
+                    try validatedDestination()
+                } else {
+                    ("", 0)
+                }
+            let granted = poseSource.needsCamera ? await requestCameraAccessIfNeeded() : true
             guard generation == runGeneration else {
                 return  // stopped while the camera prompt was up
             }
@@ -253,18 +291,22 @@ final class TrackingSessionController {
                 host = destination.host
             }
             var link: VCPLiveSession?
-            let target: SessionTarget = if let selectedServiceName {
-                .service(selectedServiceName)
-            } else {
-                .address(host: destination.host, port: destination.port)
-            }
+            let target: SessionTarget =
+                if let selectedServiceName {
+                    .service(selectedServiceName)
+                } else {
+                    .address(host: destination.host, port: destination.port)
+                }
             if let pairing {
                 sessionStatus = "Connecting to Blender"
+                Log.session.notice("Connecting to \(target.logDescription, privacy: .private)")
                 let device = device
                 let connect = Task { () async -> Result<VCPLiveSession, VCPLinkError> in
                     do throws(VCPLinkError) {
-                        return .success(try await target.connect(device: device, pairing: pairing,
-                                                                 timeout: VCPSessionClient.handshakeTimeout))
+                        return .success(
+                            try await target.connect(
+                                device: device, pairing: pairing,
+                                timeout: VCPSessionClient.handshakeTimeout))
                     } catch {
                         return .failure(error)
                     }
@@ -279,25 +321,28 @@ final class TrackingSessionController {
                 switch result {
                 case let .success(session):
                     link = session
+                    Log.session.notice("Session \(session.endpoint.sessionID, privacy: .public) accepted")
                 case let .failure(error):
                     sessionStatus = "Not connected"
                     lastError = error.message
+                    Log.session.error(
+                        "Connect failed: \(error.logSummary, privacy: .public) (\(error.message, privacy: .private))")
                     return
                 }
+            } else {
+                Log.session.notice("Not paired: poses are shown but not sent")
             }
             sessionTarget = target
             // A new session per run: the run's seq and state_seq restart at 1, as a new session's
             // must (vcp.md §8).
             liveSession = link
             sessionEndpoint = link?.endpoint
-            pipeline.start(link?.destination
-                ?? TrackingDestination(host: destination.host, port: destination.port, endpoint: nil))
+            pipeline.start(
+                link?.destination
+                    ?? TrackingDestination(host: destination.host, port: destination.port, endpoint: nil))
             if let link {
                 watch(link)
             }
-
-            let understanding = SceneUnderstanding.forThisDevice()
-            let configuration = understanding.makeConfiguration()
 
             lastError = nil
             packetsSent = 0
@@ -309,14 +354,16 @@ final class TrackingSessionController {
             sendLeg = nil
             stream = nil
             lastReconnectSeconds = nil
-            sceneUnderstanding = understanding
+            runHasVideo = false
             isTracking = true
             stallWatch.start()
             sessionStatus = "Starting"
-            session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+            sceneUnderstanding = poseSource.start()
+            Log.tracking.notice("Tracking started")
         } catch {
             sessionStatus = "Configuration error"
             lastError = error.localizedDescription
+            Log.tracking.error("Start failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -337,6 +384,7 @@ final class TrackingSessionController {
     /// but nothing leaves the device until the new session is up; its `seq` and `state_seq`
     /// restart at 1 and it opens with the complete `CONTROL_STATE` (`TrackingPipeline.start`).
     private func sessionLost(_ reason: String) {
+        Log.session.error("Session lost: \(reason, privacy: .public)")
         guard isTracking, let pairing, let target = sessionTarget else {
             lastError = reason
             stopTracking(reason: "Blender session ended")
@@ -355,9 +403,10 @@ final class TrackingSessionController {
         reconnectTask = Task { [weak self] in
             let result: Result<VCPLiveSession, VCPLinkError>
             do throws(VCPLinkError) {
-                result = .success(try await VCPReconnect.run { () async throws(VCPLinkError) -> VCPLiveSession in
-                    try await target.connect(device: device, pairing: pairing, timeout: VCPReconnect.attemptTimeout)
-                })
+                result = .success(
+                    try await VCPReconnect.run { () async throws(VCPLinkError) -> VCPLiveSession in
+                        try await target.connect(device: device, pairing: pairing, timeout: VCPReconnect.attemptTimeout)
+                    })
             } catch {
                 result = .failure(error)
             }
@@ -383,9 +432,15 @@ final class TrackingSessionController {
             lastReconnectSeconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) * 1e-18
             lastError = nil
             sessionStatus = "Reconnected"
+            let seconds = lastReconnectSeconds ?? 0
+            Log.session.notice(
+                "Reconnected after \(seconds, format: .fixed(precision: 2), privacy: .public) s: session \(link.endpoint.sessionID, privacy: .public)"
+            )
         case let .failure(error):
             // Only a fatal error ends the loop (a stop cancels this task first): pair again.
             lastError = error.message
+            Log.session.error(
+                "Reconnect gave up: \(error.logSummary, privacy: .public) (\(error.message, privacy: .private))")
             stopTracking(reason: "Pairing no longer accepted")
         }
     }
@@ -399,7 +454,10 @@ final class TrackingSessionController {
         reconnectTask = nil
         isReconnecting = false
         sessionTarget = nil
-        session.pause()
+        if isTracking || isStarting {
+            Log.tracking.notice("Tracking stopped: \(reason ?? "by the operator", privacy: .public)")
+        }
+        poseSource.stop()
         pipeline.stop()
         liveSession?.close()
         liveSession = nil
@@ -421,6 +479,12 @@ final class TrackingSessionController {
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            #if targetEnvironment(simulator) && DEBUG
+            if !qaLaunchHandled {
+                qaLaunchHandled = true
+                Task { await runQALaunch(QALaunchOptions.current) }
+            }
+            #endif
             if resumeWhenActive {
                 resumeWhenActive = false
                 Task { await startTracking() }
@@ -467,22 +531,61 @@ final class TrackingSessionController {
         }
     }
 
-    private func handle(_ event: ARFrameReceiver.Event) {
+    private func handle(_ event: PoseSourceEvent) {
         switch event {
         case .trackingState(let description):
+            Log.tracking.info("Tracking state: \(description, privacy: .public)")
             if isTracking, !isReconnecting {
                 sessionStatus = description
             }
         case .failed(let message):
+            Log.tracking.error("AR session failed: \(message, privacy: .public)")
             lastError = message
             stopTracking(reason: "Session failed")
         case .interrupted:
+            Log.tracking.notice("AR session interrupted")
             sessionStatus = "Interrupted"
             lastError = "The AR session was interrupted."
         case .interruptionEnded:
+            Log.tracking.notice("AR session interruption ended")
             sessionStatus = "Interruption ended"
         }
     }
+
+    #if targetEnvironment(simulator) && DEBUG
+    /// Simulator QA mode: points the app at `options.host`, pairs with `options.code` if needed and
+    /// starts, all through the same calls the Settings screen and Start button make.
+    private func runQALaunch(_ options: QALaunchOptions) async {
+        guard options.isActive else { return }
+        let motion = options.motion?.rawValue ?? "arkit"
+        Log.qa.notice("QA launch: motion \(motion, privacy: .public), autostart \(options.autoStart, privacy: .public)")
+        if options.resetPairings {
+            do {
+                try PairingStore.removeAll()
+                Log.qa.notice("Stored pairings deleted")
+            } catch {
+                Log.qa.error("Reset pairings failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        if let qaHost = options.host {
+            selectManual()
+            host = qaHost
+            if let port = options.port { portText = String(port) }
+        }
+        reloadPairing()
+        if let code = options.code, pairing == nil {
+            await pair(code: code)
+        }
+        guard options.autoStart else { return }
+        await startTracking()
+        // A stored pairing the host no longer accepts (a new Blender identity): pair again once.
+        if !isTracking, let code = options.code, !isPairing {
+            Log.qa.notice("Start failed; pairing again with the QA code")
+            await pair(code: code)
+            if pairing != nil { await startTracking() }
+        }
+    }
+    #endif
 
     private func validatedDestination() throws -> (host: String, port: UInt16) {
         let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -515,26 +618,80 @@ nonisolated enum SessionTarget: Sendable {
     case service(String)
     case address(host: String, port: UInt16)
 
-    func connect(device: VCPDeviceIdentity, pairing: VCPHostPairing,
-                 timeout: Double) async throws(VCPLinkError) -> VCPLiveSession {
+    func connect(
+        device: VCPDeviceIdentity, pairing: VCPHostPairing,
+        timeout: Double
+    ) async throws(VCPLinkError) -> VCPLiveSession {
         switch self {
         case let .service(name):
             try await VCPSessionClient.connect(serviceName: name, device: device, pairing: pairing, timeout: timeout)
         case let .address(host, port):
-            try await VCPSessionClient.connect(host: host, port: port, device: device, pairing: pairing, timeout: timeout)
+            try await VCPSessionClient.connect(
+                host: host, port: port, device: device, pairing: pairing, timeout: timeout)
         }
+    }
+
+    /// For private log lines only: it names the host.
+    var logDescription: String {
+        switch self {
+        case let .service(name): "service \(name)"
+        case let .address(host, port): "\(host):\(port)"
+        }
+    }
+}
+
+/// What a pose source reports besides poses; ARKit's session events.
+nonisolated enum PoseSourceEvent: Sendable {
+    case trackingState(String)
+    case failed(String)
+    case interrupted
+    case interruptionEnded
+}
+
+/// Feeds camera poses into `TrackingPipeline.receive` on the pipeline's queue while started:
+/// ARKit (`ARKitPoseSource`), or in simulator QA runs a scripted path. Session events go to the
+/// `onEvent` closure each source is made with.
+@MainActor
+protocol PoseSource: AnyObject {
+    /// False where the source can't run (ARKit world tracking unsupported).
+    var isAvailable: Bool { get }
+    /// Whether starting needs camera permission.
+    var needsCamera: Bool { get }
+    /// Starts a new run from a fresh origin; returns the scene understanding in use, if any.
+    func start() -> SceneUnderstanding?
+    func stop()
+}
+
+/// World tracking with the device's best scene understanding (FR-TRK-004).
+final class ARKitPoseSource: PoseSource {
+    private let session = ARSession()
+    // ARSession.delegate is weak: this keeps the receiver alive.
+    private let receiver: ARFrameReceiver
+
+    init(pipeline: TrackingPipeline, onEvent: @escaping @Sendable (PoseSourceEvent) -> Void) {
+        receiver = ARFrameReceiver(pipeline: pipeline, onEvent: onEvent)
+        session.delegate = receiver
+        session.delegateQueue = pipeline.queue
+    }
+
+    var isAvailable: Bool { ARWorldTrackingConfiguration.isSupported }
+    var needsCamera: Bool { true }
+
+    func start() -> SceneUnderstanding? {
+        let understanding = SceneUnderstanding.forThisDevice()
+        session.run(understanding.makeConfiguration(), options: [.resetTracking, .removeExistingAnchors])
+        return understanding
+    }
+
+    func stop() {
+        session.pause()
     }
 }
 
 /// The ARSession delegate. It runs on the pipeline's queue (`ARSession.delegateQueue`), never the
 /// main thread: frames go straight into the pipeline, and rare session events go to `onEvent`.
 nonisolated final class ARFrameReceiver: NSObject, ARSessionDelegate, Sendable {
-    enum Event: Sendable {
-        case trackingState(String)
-        case failed(String)
-        case interrupted
-        case interruptionEnded
-    }
+    typealias Event = PoseSourceEvent
 
     private let pipeline: TrackingPipeline
     private let onEvent: @Sendable (Event) -> Void
@@ -548,8 +705,9 @@ nonisolated final class ARFrameReceiver: NSObject, ARSessionDelegate, Sendable {
         // Copy the values out: holding the ARFrame would stall ARKit's frame pool. The tracking
         // state travels with every pose (FR-TRK-002).
         let camera = frame.camera
-        pipeline.receive(transform: camera.transform, timestamp: frame.timestamp,
-                         trackingState: VCPTrackingState.code(for: camera.trackingState))
+        pipeline.receive(
+            transform: camera.transform, timestamp: frame.timestamp,
+            trackingState: VCPTrackingState.code(for: camera.trackingState))
     }
 
     func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {

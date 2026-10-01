@@ -75,7 +75,9 @@ nonisolated final class VCPControlChannel: Sendable {
     }
     private let cancellation = OSAllocatedUnfairLock(initialState: Cancellation())
 
-    init(host: String, port: UInt16, callbackQueue: DispatchQueue = DispatchQueue(label: "Sightline.VCPControlChannel")) throws(VCPLinkError) {
+    init(
+        host: String, port: UInt16, callbackQueue: DispatchQueue = DispatchQueue(label: "Sightline.VCPControlChannel")
+    ) throws(VCPLinkError) {
         guard !host.isEmpty, let port = NWEndpoint.Port(rawValue: port), port != .any else {
             throw .network("no host address or port")
         }
@@ -84,8 +86,10 @@ nonisolated final class VCPControlChannel: Sendable {
     }
     init(serviceName: String) {
         queue = DispatchQueue(label: "Sightline.VCPControlChannel")
-        connection = NWConnection(to: .service(name: serviceName, type: DiscoveredHost.serviceType,
-                                                domain: "local.", interface: nil), using: .tcp)
+        connection = NWConnection(
+            to: .service(
+                name: serviceName, type: DiscoveredHost.serviceType,
+                domain: "local.", interface: nil), using: .tcp)
     }
 
     /// Connects. Fails at once, instead of waiting for the network to change, when the host
@@ -94,13 +98,19 @@ nonisolated final class VCPControlChannel: Sendable {
         try await bridge { (done: @escaping @Sendable (Result<Void, VCPLinkError>) -> Void) in
             let once = OSAllocatedUnfairLock(initialState: false)
             connection.stateUpdateHandler = { [self] state in
-                let result: Result<Void, VCPLinkError>? = switch state {
-                case .ready: .success(())
-                case let .waiting(error), let .failed(error): .failure(.network(error.debugDescription))
-                case .cancelled: .failure(cancelReason)
-                default: nil
-                }
-                guard let result, once.withLock({ fired in defer { fired = true }; return !fired }) else {
+                let result: Result<Void, VCPLinkError>? =
+                    switch state {
+                    case .ready: .success(())
+                    case let .waiting(error), let .failed(error): .failure(.network(error.debugDescription))
+                    case .cancelled: .failure(cancelReason)
+                    default: nil
+                    }
+                guard let result,
+                    once.withLock({ fired in
+                        defer { fired = true }
+                        return !fired
+                    })
+                else {
                     return
                 }
                 done(result)
@@ -111,7 +121,8 @@ nonisolated final class VCPControlChannel: Sendable {
 
     /// Runs `body`; if it hasn't finished after `seconds`, cancels the connection so it throws
     /// `.timeout`.
-    func withDeadline<T>(_ seconds: Double, _ body: () async throws(VCPLinkError) -> T) async throws(VCPLinkError) -> T {
+    func withDeadline<T>(_ seconds: Double, _ body: () async throws(VCPLinkError) -> T) async throws(VCPLinkError) -> T
+    {
         let expire = DispatchWorkItem { [self] in cancel(because: .timeout) }
         // A stalled NWConnection callback queue must not extend a reconnect attempt.
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + seconds, execute: expire)
@@ -123,11 +134,15 @@ nonisolated final class VCPControlChannel: Sendable {
 
     func send(_ message: VCPControlMessage) async throws(VCPLinkError) {
         let frame: [UInt8]
-        do { frame = try message.encode() } catch { throw .unexpected("can't encode message \(message.type): \(error)") }
+        do { frame = try message.encode() } catch {
+            throw .unexpected("can't encode message \(message.type): \(error)")
+        }
         try await bridge { (done: @escaping @Sendable (Result<Void, VCPLinkError>) -> Void) in
-            connection.send(content: Data(frame), completion: .contentProcessed { [self] error in
-                done(error.map { .failure(failure($0)) } ?? .success(()))
-            })
+            connection.send(
+                content: Data(frame),
+                completion: .contentProcessed { [self] error in
+                    done(error.map { .failure(failure($0)) } ?? .success(()))
+                })
         }
     }
 
@@ -212,10 +227,16 @@ nonisolated final class VCPControlChannel: Sendable {
     private func bridge<T: Sendable>(
         _ start: (@escaping @Sendable (Result<T, VCPLinkError>) -> Void) -> Void
     ) async throws(VCPLinkError) -> T {
-        let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<T, VCPLinkError>, Never>) in
+        let result = await withCheckedContinuation {
+            (continuation: CheckedContinuation<Result<T, VCPLinkError>, Never>) in
             let once = OSAllocatedUnfairLock(initialState: false)
             let done: @Sendable (Result<T, VCPLinkError>) -> Void = { [self] outcome in
-                guard once.withLock({ fired in defer { fired = true }; return !fired }) else { return }
+                guard
+                    once.withLock({ fired in
+                        defer { fired = true }
+                        return !fired
+                    })
+                else { return }
                 let reason = cancellation.withLock { state in
                     state.pending = nil
                     return state.reason
@@ -251,8 +272,10 @@ nonisolated final class VCPLiveSession: Sendable {
     let udpPort: UInt16
     private let channel: VCPControlChannel
 
-    fileprivate init(channel: VCPControlChannel, hostID: [UInt8], keys: VCPSessionKeys, endpoint: VCPEndpoint,
-                     udpHost: String, udpPort: UInt16) {
+    fileprivate init(
+        channel: VCPControlChannel, hostID: [UInt8], keys: VCPSessionKeys, endpoint: VCPEndpoint,
+        udpHost: String, udpPort: UInt16
+    ) {
         self.channel = channel
         self.hostID = hostID
         self.keys = keys
@@ -292,16 +315,19 @@ nonisolated enum VCPSessionClient {
     /// Pairs with the 6-digit code shown in Blender (§9.3) and returns what to store. The
     /// connection stays open: the host expects `HELLO(mode 1)` on it next (`startSession`).
     /// `nonce` and `a` are parameters only so tests can replay the golden transcript.
-    static func pair(on channel: VCPControlChannel, device: VCPDeviceIdentity, code: String,
-                     nonce: [UInt8] = VCPPairing.randomBytes(16),
-                     a: [UInt8] = VCPPairing.randomSecret()) async throws(VCPLinkError) -> VCPHostPairing {
+    static func pair(
+        on channel: VCPControlChannel, device: VCPDeviceIdentity, code: String,
+        nonce: [UInt8] = VCPPairing.randomBytes(16),
+        a: [UInt8] = VCPPairing.randomSecret()
+    ) async throws(VCPLinkError) -> VCPHostPairing {
         let hello = VCPHello(mode: VCPHello.modePair, deviceID: device.deviceID, nonceD: nonce, deviceName: device.name)
         try await channel.send(.hello(hello))
         guard case let .pairChallenge(challenge) = try await channel.receive() else {
             throw .unexpected("expected PAIR_CHALLENGE")
         }
         let (proof, pending): (VCPPairProof, VCPPendingPair)
-        do { (proof, pending) = try VCPPairing.devicePair(code: code, hello: hello, challenge: challenge, a: a) } catch {
+        do { (proof, pending) = try VCPPairing.devicePair(code: code, hello: hello, challenge: challenge, a: a) } catch
+        {
             throw .pairing(error)
         }
         try await channel.send(.pairProof(proof))
@@ -317,11 +343,14 @@ nonisolated enum VCPSessionClient {
     /// `SESSION_PROOF`, `SESSION_ACCEPT`. `pairingKey` looks up `PK` by the challenge's `host_id`;
     /// without one, nothing is proven and `.unknownHost` is thrown. Nothing may go over UDP
     /// before this returns (§10.2).
-    static func startSession(on channel: VCPControlChannel, device: VCPDeviceIdentity,
-                             pairingKey: (_ hostID: [UInt8]) -> [UInt8]?,
-                             nonce: [UInt8] = VCPPairing.randomBytes(16)) async throws(VCPLinkError) -> VCPLiveSession {
-        let hello = VCPHello(mode: VCPHello.modeSession, deviceID: device.deviceID, nonceD: nonce,
-                             deviceName: device.name)
+    static func startSession(
+        on channel: VCPControlChannel, device: VCPDeviceIdentity,
+        pairingKey: (_ hostID: [UInt8]) -> [UInt8]?,
+        nonce: [UInt8] = VCPPairing.randomBytes(16)
+    ) async throws(VCPLinkError) -> VCPLiveSession {
+        let hello = VCPHello(
+            mode: VCPHello.modeSession, deviceID: device.deviceID, nonceD: nonce,
+            deviceName: device.name)
         try await channel.send(.hello(hello))
         guard case let .sessionChallenge(challenge) = try await channel.receive() else {
             throw .unexpected("expected SESSION_CHALLENGE")
@@ -348,40 +377,51 @@ nonisolated enum VCPSessionClient {
         guard let address = channel.peerAddress else {
             throw .network("no peer address")
         }
-        return VCPLiveSession(channel: channel, hostID: challenge.hostID, keys: keys, endpoint: endpoint,
-                              udpHost: address, udpPort: challenge.udpPort)
+        return VCPLiveSession(
+            channel: channel, hostID: challenge.hostID, keys: keys, endpoint: endpoint,
+            udpHost: address, udpPort: challenge.udpPort)
     }
 
     /// Connects to Blender's control port and starts a session with `pairing`, within `timeout`.
     /// On failure, or if the calling task is cancelled, the connection is closed (cancellation
     /// throws `.closed` at once instead of waiting for the deadline). `nonce` is a parameter only so
     /// tests can replay the golden transcript.
-    static func connect(host: String, port: UInt16, device: VCPDeviceIdentity, pairing: VCPHostPairing,
-                        timeout: Double = handshakeTimeout,
-                        nonce: [UInt8] = VCPPairing.randomBytes(16)) async throws(VCPLinkError) -> VCPLiveSession {
+    static func connect(
+        host: String, port: UInt16, device: VCPDeviceIdentity, pairing: VCPHostPairing,
+        timeout: Double = handshakeTimeout,
+        nonce: [UInt8] = VCPPairing.randomBytes(16)
+    ) async throws(VCPLinkError) -> VCPLiveSession {
         let channel = try VCPControlChannel(host: host, port: port)
         return try await connect(on: channel, device: device, pairing: pairing, timeout: timeout, nonce: nonce)
     }
 
-    static func connect(serviceName: String, device: VCPDeviceIdentity, pairing: VCPHostPairing,
-                        timeout: Double = handshakeTimeout) async throws(VCPLinkError) -> VCPLiveSession {
-        try await connect(on: VCPControlChannel(serviceName: serviceName), device: device,
-                          pairing: pairing, timeout: timeout, nonce: VCPPairing.randomBytes(16))
+    static func connect(
+        serviceName: String, device: VCPDeviceIdentity, pairing: VCPHostPairing,
+        timeout: Double = handshakeTimeout
+    ) async throws(VCPLinkError) -> VCPLiveSession {
+        try await connect(
+            on: VCPControlChannel(serviceName: serviceName), device: device,
+            pairing: pairing, timeout: timeout, nonce: VCPPairing.randomBytes(16))
     }
 
-    private static func connect(on channel: VCPControlChannel, device: VCPDeviceIdentity, pairing: VCPHostPairing,
-                                timeout: Double, nonce: [UInt8]) async throws(VCPLinkError) -> VCPLiveSession {
+    private static func connect(
+        on channel: VCPControlChannel, device: VCPDeviceIdentity, pairing: VCPHostPairing,
+        timeout: Double, nonce: [UInt8]
+    ) async throws(VCPLinkError) -> VCPLiveSession {
         do throws(VCPLinkError) {
             // The operation returns a Result: before Swift 6.3 (Xcode 26), withTaskCancellationHandler
             // only rethrows, so a thrown VCPLinkError would come back as `any Error`.
             let outcome = await withTaskCancellationHandler { () async -> Result<VCPLiveSession, VCPLinkError> in
                 do throws(VCPLinkError) {
-                    return .success(try await channel.withDeadline(timeout) { () async throws(VCPLinkError) -> VCPLiveSession in
-                        try await channel.open()
-                        return try await startSession(on: channel, device: device, pairingKey: {
-                            $0 == pairing.hostID ? pairing.pairingKey : nil
-                        }, nonce: nonce)
-                    })
+                    return .success(
+                        try await channel.withDeadline(timeout) { () async throws(VCPLinkError) -> VCPLiveSession in
+                            try await channel.open()
+                            return try await startSession(
+                                on: channel, device: device,
+                                pairingKey: {
+                                    $0 == pairing.hostID ? pairing.pairingKey : nil
+                                }, nonce: nonce)
+                        })
                 } catch {
                     return .failure(error)
                 }
@@ -426,9 +466,11 @@ nonisolated enum VCPReconnect {
     /// previous one started, or at once if that one took longer. A fatal error (`isFatal`) is
     /// rethrown; any other failure goes to `onFailure` and is retried. Cancelling the calling task
     /// ends the loop with `.closed`, and a session that arrives after that is closed, not returned.
-    static func run(retryInterval: Duration = retryInterval,
-                    attempt: () async throws(VCPLinkError) -> VCPLiveSession,
-                    onFailure: (VCPLinkError) -> Void = { _ in }) async throws(VCPLinkError) -> VCPLiveSession {
+    static func run(
+        retryInterval: Duration = retryInterval,
+        attempt: () async throws(VCPLinkError) -> VCPLiveSession,
+        onFailure: (VCPLinkError) -> Void = { _ in }
+    ) async throws(VCPLinkError) -> VCPLiveSession {
         let clock = ContinuousClock()
         while !Task.isCancelled {
             let started = clock.now

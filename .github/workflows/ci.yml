@@ -36,6 +36,44 @@ jobs:
       - name: cargo fmt --check
         working-directory: native
         run: cargo fmt --check
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete@0.9.2
+      - name: No unused dependencies (cargo machete)
+        run: |
+          (cd native && cargo machete)
+          (cd native/fuzz && cargo machete)
+
+  rust-coverage:
+    if: github.event.pull_request.draft != true
+    # Line coverage of the Rust workspace's tests must stay at or above 80 % (83.5 % when the
+    # gate was added). The summary goes to the job page and the lcov file is kept as an artifact.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7 # pyo3's build script needs an interpreter
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native -> target.nosync
+      - name: Install NASM
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nasm
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      - name: cargo llvm-cov (fail under 80 % lines)
+        working-directory: native
+        run: |
+          rustup component add llvm-tools-preview
+          cargo llvm-cov --workspace --lcov --output-path lcov.info --fail-under-lines 80
+          cargo llvm-cov report --summary-only | tee -a "${GITHUB_STEP_SUMMARY}"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: rust-coverage
+          path: native/lcov.info
+          if-no-files-found: ignore
 
   rust:
     if: github.event.pull_request.draft != true
@@ -278,21 +316,42 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - run: python -m pip install pytest==9.1.1
-      - run: python -m pytest -q -p no:cacheprovider BlenderAddOn/tests
+      # Settings for ruff, mypy, pytest and coverage (fail_under) are in pyproject.toml.
+      - run: python -m pip install pytest==9.1.1 pytest-cov==7.1.0 pytest-randomly==5.0.0 ruff==0.16.9 mypy==2.3.1
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy
+      - run: python -m pytest --cov --cov-report=term-missing --durations=10
       - name: Golden vectors are up to date (testdata/ matches tools/gen_testdata.py)
         run: python tools/gen_testdata.py --check
 
   ios:
     if: github.event.pull_request.draft != true
     runs-on: xcode-27  # GitHub preview image: macOS 27, Xcode 27.0 default (matches local builds)
+    # A healthy run takes 10-13 minutes; a hung simulator would otherwise hold the runner for 6 hours.
+    # Only a backstop: a job-level timeout cancels the job, which skips the `if: failure()` upload.
+    # The xcodebuild steps carry their own timeout so a hang fails the step and keeps its xcresult.
+    timeout-minutes: 45
+    # An explicit bash adds -o pipefail, so `coverage_check.sh ... | tee` fails the step.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
-      - name: xcodebuild test (unit tests; ARKit can't run in the simulator)
+      - name: swift-format lint (.swift-format)
+        run: xcrun swift-format lint --strict --configuration .swift-format -r SightlineIOS
+      # Unit tests plus the UI tests; the UI test that needs a Blender host skips without one.
+      - name: xcodebuild test (unit and UI tests; ARKit can't run in the simulator)
+        timeout-minutes: 25
         run: |
           xcodebuild test -project SightlineIOS/SightlineIOS.xcodeproj -scheme SightlineIOS \
-            -destination 'platform=iOS Simulator,name=iPhone 17' -resultBundlePath xcresult/debug
+            -destination 'platform=iOS Simulator,name=iPhone 17' -resultBundlePath xcresult/debug.xcresult
+      - name: App line coverage at least 75 % (79.6 % when the gate was added)
+        run: |
+          SightlineIOS/scripts/coverage_check.sh xcresult/debug.xcresult 75 | tee coverage.txt
+          { echo '```'; tail -1 coverage.txt; echo '```'; } >> "${GITHUB_STEP_SUMMARY}"
       - name: Pose send path allocates nothing (NFR-LAT-002; needs optimised code)
+        timeout-minutes: 15
         run: |
           xcodebuild test -configuration Release -project SightlineIOS/SightlineIOS.xcodeproj -scheme SightlineIOS \
             -destination 'platform=iOS Simulator,name=iPhone 17' -resultBundlePath xcresult/release \
@@ -308,7 +367,7 @@ jobs:
     # The single required check on main (branch protection). It fails unless every job ran and
     # passed, so a draft (all jobs skipped) can't satisfy it and trigger auto-merge early.
     if: always()
-    needs: [rust-fmt, rust, fuzz, wheels, extension, blender-smoke, python, ios]
+    needs: [rust-fmt, rust-coverage, rust, fuzz, wheels, extension, blender-smoke, python, ios]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed
