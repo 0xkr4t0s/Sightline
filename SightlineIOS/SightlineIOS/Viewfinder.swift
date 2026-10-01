@@ -201,8 +201,9 @@ final class ViewfinderRenderer: NSObject, MTKViewDelegate {
     private let pipelineState: any MTLRenderPipelineState
     private nonisolated let latest = Mutex<ViewfinderFrame?>(nil)
     private weak var view: MTKView?
-    /// Runs on the main thread each time a frame handed to `show` is about to be drawn.
-    var onShown: (() -> Void)?
+    /// Runs on the main thread after a new frame is committed to the display.
+    var onShown: ((ViewfinderFrame) -> Void)?
+    private weak var lastShownFrame: ViewfinderFrame?
 
     /// A centred quad whose half-extent in normalized device coordinates is `scale`
     /// (`ViewfinderLayout`), textured with the frame. Compiled once at launch: a `.metal` file
@@ -254,7 +255,6 @@ final class ViewfinderRenderer: NSObject, MTKViewDelegate {
         latest.withLock { $0 = frame }
         DispatchQueue.main.async { [weak self] in
             self?.view?.setNeedsDisplay()
-            self?.onShown?()
         }
     }
 
@@ -283,6 +283,10 @@ final class ViewfinderRenderer: NSObject, MTKViewDelegate {
         encode(frame, pass: pass, drawableSize: view.drawableSize, into: commandBuffer)
         commandBuffer.present(drawable)
         commandBuffer.commit()
+        if let frame, frame !== lastShownFrame {
+            lastShownFrame = frame
+            onShown?(frame)
+        }
     }
 
     /// Clears `pass` to black and draws `frame` letterboxed into it.

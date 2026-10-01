@@ -14,7 +14,8 @@ import bpy
 
 from ..core import session
 from ..core.apply import camera_status, find_origin
-from ..core.status import code_label, hold_label, locks_label, scale_label, tracking_label, video_labels
+from ..core.render import thermal_stream_settings
+from ..core.status import code_label, hold_label, locks_label, scale_label, thermal_label, tracking_label, video_labels
 
 
 class VCAM_PT_main_panel(bpy.types.Panel):
@@ -90,7 +91,16 @@ class VCAM_PT_main_panel(bpy.types.Panel):
                 col.label(text="Latency: waiting for clock sync")
             else:
                 col.label(text=f"Latency: {state.latency_ms:.1f} ms (clock jitter {state.clock_jitter_ms:.2f} ms)")
-            for line in video_labels(live.video_stats(), props.stream_resolution):
+            video_stats = live.video_stats()
+            adapt = video_stats["adapt"] if video_stats is not None else None
+            resolution, fps = thermal_stream_settings(
+                props.stream_resolution,
+                int(props.stream_fps),
+                adapt["resolution_drop"] if adapt else 0,
+                applier.controls.thermal_state,
+            )
+            col.label(text=thermal_label(applier.controls.thermal_state, resolution, fps))
+            for line in video_labels(video_stats, props.stream_resolution):
                 col.label(text=line)
         samples = len(session.latency_log().pose_leg_ms)
         if samples:  # kept after the device leaves, until the next device session

@@ -528,7 +528,7 @@ mod vcam_native {
         }
 
         /// The newest `CONTROL_STATE` (highest `state_seq`) as a dict, or None (vcp.md §6.2).
-        /// `motion_scale`, `lock_flags` and `origin_epoch` are None when absent from that
+        /// `motion_scale`, `lock_flags`, `origin_epoch` and `thermal_state` are None when absent from that
         /// message: the host keeps their previous values.
         fn latest_control<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
             let Some(sample) = self.with(|s| Ok(s.latest_control()))? else {
@@ -540,6 +540,7 @@ mod vcam_native {
             d.set_item("motion_scale", c.motion_scale)?;
             d.set_item("lock_flags", c.lock_flags)?;
             d.set_item("origin_epoch", c.origin_epoch)?;
+            d.set_item("thermal_state", c.thermal_state)?;
             Ok(Some(d))
         }
 

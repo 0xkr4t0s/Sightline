@@ -106,10 +106,7 @@ impl Endpoint {
                 m.encode(out);
                 Ok(())
             }
-            Message::ControlState(m) => {
-                m.encode(out);
-                Ok(())
-            }
+            Message::ControlState(m) => m.encode(out),
             Message::Clock(m) => {
                 m.encode(out);
                 Ok(())

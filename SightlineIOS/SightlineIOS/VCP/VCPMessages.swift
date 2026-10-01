@@ -17,6 +17,7 @@ nonisolated enum VCPPayloadError: Error, Equatable, Sendable {
     case nonFinite
     case quaternionNorm
     case motionScaleRange
+    case thermalStateRange
     case badName
     /// `VIDEO_FRAGMENT` sizes, counts or index out of range (§6.5).
     case fragmentLayout
@@ -67,17 +68,20 @@ nonisolated struct VCPPose: Equatable, Sendable {
     }
 }
 
-/// `CONTROL_STATE` (0x02), T1 subset, 16 bytes (§6.2). Absent fields are `nil`.
+/// `CONTROL_STATE` (0x02), 16-byte base or 20 bytes with thermal (§6.2).
+/// Absent fields are `nil` and keep their previous value on the host.
 nonisolated struct VCPControlState: Equatable, Sendable {
     static let length = 16
     private static let hasScale: UInt32 = 1 << 0
     private static let hasLocks: UInt32 = 1 << 1
     private static let hasEpoch: UInt32 = 1 << 2
+    private static let hasThermal: UInt32 = 1 << 3
 
     var stateSeq: UInt32
     var motionScale: Float?
     var lockFlags: UInt8?
     var originEpoch: UInt16?
+    var thermalState: UInt8? = nil
 
     static func decode(_ payload: ArraySlice<UInt8>) throws(VCPPayloadError) -> VCPControlState {
         var r = VCPReader(payload)
@@ -86,22 +90,33 @@ nonisolated struct VCPControlState: Equatable, Sendable {
         else { throw .tooShort }
         let motionScale = fields & hasScale != 0 ? scale : nil
         if let s = motionScale, !(s.isFinite && (0.001...1000).contains(s)) { throw .motionScaleRange }
+        var thermalState: UInt8?
+        if fields & hasThermal != 0 {
+            guard let thermal = r.u8(), r.skip(3) else { throw .tooShort }
+            guard thermal <= 3 else { throw .thermalStateRange }
+            thermalState = thermal
+        }
         return VCPControlState(
             stateSeq: seq, motionScale: motionScale,
             lockFlags: fields & hasLocks != 0 ? locks : nil,
-            originEpoch: fields & hasEpoch != 0 ? epoch : nil)
+            originEpoch: fields & hasEpoch != 0 ? epoch : nil,
+            thermalState: thermalState)
     }
 
-    func encode(into out: inout [UInt8]) {
+    func encode(into out: inout [UInt8]) throws(VCPPayloadError) {
+        if let thermalState, thermalState > 3 { throw .thermalStateRange }
         let fields =
             (motionScale == nil ? 0 : Self.hasScale) | (lockFlags == nil ? 0 : Self.hasLocks)
-            | (originEpoch == nil ? 0 : Self.hasEpoch)
+            | (originEpoch == nil ? 0 : Self.hasEpoch) | (thermalState == nil ? 0 : Self.hasThermal)
         out.appendLE(stateSeq)
         out.appendLE(fields)
         out.appendLE((motionScale ?? 0).bitPattern)
         out.append(lockFlags ?? 0)
         out.append(0)
         out.appendLE(originEpoch ?? 0)
+        if let thermalState {
+            out.append(contentsOf: [thermalState, 0, 0, 0])
+        }
     }
 }
 

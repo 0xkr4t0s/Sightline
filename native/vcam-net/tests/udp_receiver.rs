@@ -132,6 +132,7 @@ fn control_state_newest_wins() {
             motion_scale: Some(1.0),
             lock_flags: Some(0),
             origin_epoch: Some(epoch),
+            thermal_state: Some(2),
         });
         tx.send_to(&datagram(&msg), rx.local_addr()).unwrap();
     }
@@ -139,6 +140,7 @@ fn control_state_newest_wins() {
     wait_until("marker pose", || rx.latest_pose().is_some());
     let c = rx.latest_control().unwrap();
     assert_eq!((c.state.state_seq, c.state.origin_epoch), (2, Some(5)));
+    assert_eq!(c.state.thermal_state, Some(2));
 }
 
 fn report(report_seq: u32, newest_frame_id: u32) -> Message<'static> {

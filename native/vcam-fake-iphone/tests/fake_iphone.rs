@@ -169,6 +169,7 @@ fn pairs_streams_the_script_answers_clock_and_reconnects_without_a_code() {
         (c.state_seq, c.motion_scale, c.lock_flags, c.origin_epoch),
         (1, Some(1.0), Some(0), Some(0))
     );
+    assert_eq!(c.thermal_state, Some(0));
     assert!(field(&stdout, "clock_replies") >= 2, "{stdout}");
     let clock = clock.expect("host estimated the clock offset");
     // The fake device clock runs 1000 s ahead of its process start; the host's starts at 0.
@@ -275,6 +276,57 @@ fn scripted_controls_reach_the_host_in_order() {
     );
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("--scale must be in [0.001, 1000]"));
+}
+
+#[test]
+fn thermal_transition_reaches_host_with_new_sequence_and_ack() {
+    let server = server();
+    let scratch = Scratch::new("thermal");
+    let code = server.enable_pairing().unwrap();
+    let child = spawn(
+        &server,
+        &scratch.state(),
+        Some(&code),
+        &[
+            "--rate",
+            "300",
+            "--linger",
+            "1",
+            "--thermal",
+            "2",
+            "--thermal-at",
+            "200:2",
+        ],
+    );
+    let mut states = Vec::new();
+    let out = drive(child, || {
+        if let Some(c) = server.latest_control() {
+            let c = c.state;
+            let seen = (c.state_seq, c.thermal_state);
+            if states.last() != Some(&seen) {
+                states.push(seen);
+            }
+            server
+                .update_status(
+                    server.stats().session_id.unwrap(),
+                    HostStatus {
+                        applied_pose_seq: 0,
+                        control_ack: c.state_seq,
+                        error_code: 0,
+                        camera_name: Some("Cam".into()),
+                    },
+                )
+                .unwrap();
+        }
+    });
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(states, [(1, Some(0)), (2, Some(2))]);
+    assert!(field(&stdout, "control_ack") >= 2, "{stdout}");
 }
 
 #[test]

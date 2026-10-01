@@ -150,6 +150,7 @@ class Controls:
         self.motion_scale = 1.0
         self.lock_flags = 0
         self.origin_epoch: int | None = None
+        self.thermal_state: int | None = None
 
     def update(self, control: Mapping[str, Any] | None) -> tuple[bool, bool]:
         """Merges `control` (a `latest_control()` dict or None): (changed, set_origin)."""
@@ -160,6 +161,9 @@ class Controls:
             self.motion_scale = control["motion_scale"]
         if control["lock_flags"] is not None:
             self.lock_flags = control["lock_flags"]
+        thermal = control.get("thermal_state")
+        if thermal is not None:
+            self.thermal_state = thermal
         set_origin = False
         epoch = control["origin_epoch"]
         if epoch is not None:

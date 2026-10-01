@@ -26,6 +26,8 @@ nonisolated struct QALaunchOptions: Equatable, Sendable {
         static let resetPairings = "SightlineQAResetPairings"
         /// `FROM-TO` (frame numbers): report limited tracking for these scripted frames.
         static let limited = "SightlineQALimited"
+        /// `nominal`, `fair`, `serious` or `critical`; replaces the physical thermal source.
+        static let thermal = "SightlineQAThermal"
     }
 
     var host: String?
@@ -35,6 +37,7 @@ nonisolated struct QALaunchOptions: Equatable, Sendable {
     var autoStart = false
     var resetPairings = false
     var limitedFrames: ClosedRange<Int>?
+    var thermal: ProcessInfo.ThermalState?
 
     /// This launch's options.
     static let current = QALaunchOptions(defaults: .standard)
@@ -57,6 +60,13 @@ nonisolated struct QALaunchOptions: Equatable, Sendable {
         autoStart = defaults.bool(forKey: Key.autoStart)
         resetPairings = defaults.bool(forKey: Key.resetPairings)
         limitedFrames = text(Key.limited).flatMap(Self.parseRange)
+        switch text(Key.thermal)?.lowercased() {
+        case "nominal": thermal = .nominal
+        case "fair": thermal = .fair
+        case "serious": thermal = .serious
+        case "critical": thermal = .critical
+        default: thermal = nil
+        }
     }
 
     var isActive: Bool {
@@ -92,6 +102,16 @@ nonisolated struct QALaunchOptions: Equatable, Sendable {
         else { return nil }
         return from...to
     }
+}
+
+/// QA-only fixed reading; launch arguments never affect device or Release builds.
+@MainActor
+final class QAThermalStateProvider: ThermalStateProvider {
+    let state: ProcessInfo.ThermalState
+    var onChange: ((ProcessInfo.ThermalState) -> Void)?
+
+    init(_ state: ProcessInfo.ThermalState) { self.state = state }
+    func startObserving() {}
 }
 
 /// A smooth, deterministic camera path in ARKit's world frame (y up, the camera looking down its

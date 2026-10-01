@@ -89,6 +89,9 @@ fn check_fields(msg: &Message, f: &Value, name: &str) {
             let want_epoch =
                 (bits & 4 != 0).then(|| u16::try_from(uint(&f["origin_epoch"])).unwrap());
             assert_eq!(c.origin_epoch, want_epoch, "{name}");
+            let want_thermal =
+                (bits & 8 != 0).then(|| u8::try_from(uint(&f["thermal_state"])).unwrap());
+            assert_eq!(c.thermal_state, want_thermal, "{name}");
         }
         Message::Clock(c) => {
             let (t1, t2, t3) = (uint(&f["t1"]), uint(&f["t2"]), uint(&f["t3"]));
@@ -138,7 +141,7 @@ fn udp_messages_decode_and_reencode_byte_exact() {
         assert_eq!(out, bytes, "{name}: re-encoding differs");
         checked += 1;
     }
-    assert_eq!(checked, 8);
+    assert_eq!(checked, 10);
 }
 
 #[test]
@@ -174,7 +177,7 @@ fn receive_rules_match_vectors() {
     let (host, device) = example_endpoints();
     let vectors = load("receive.json");
     let cases = vectors["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 26);
+    assert_eq!(cases.len(), 29);
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let (rx, _) = pair(case["direction"].as_str().unwrap(), &host, &device);
@@ -208,6 +211,7 @@ fn receive_rules_match_vectors() {
                 assert_eq!(c.motion_scale.is_some(), bits & 1 != 0, "{name}");
                 assert_eq!(c.lock_flags.is_some(), bits & 2 != 0, "{name}");
                 assert_eq!(c.origin_epoch.is_some(), bits & 4 != 0, "{name}");
+                assert_eq!(c.thermal_state.is_some(), bits & 8 != 0, "{name}");
             }
             other => panic!("{name}: unexpected {other:?}"),
         }
@@ -241,6 +245,14 @@ fn drop_reasons_follow_rule_order() {
         reason("pose_payload_short"),
         DropReason::Payload(_)
     ));
+    assert_eq!(
+        reason("control_thermal_invalid"),
+        DropReason::Payload(vcam_protocol::PayloadError::ThermalStateRange)
+    );
+    assert_eq!(
+        reason("control_thermal_short"),
+        DropReason::Payload(vcam_protocol::PayloadError::TooShort)
+    );
 }
 
 #[test]
@@ -367,12 +379,26 @@ fn seal_enforces_direction_and_limits() {
         motion_scale: None,
         lock_flags: Some(1),
         origin_epoch: None,
+        thermal_state: None,
     });
     device.seal(&control, &mut out).unwrap();
     assert_eq!(
         host.open(&out[1..]).unwrap(),
         control,
         "a partial CONTROL_STATE round-trips"
+    );
+    let invalid = Message::ControlState(ControlState {
+        state_seq: 2,
+        motion_scale: None,
+        lock_flags: None,
+        origin_epoch: None,
+        thermal_state: Some(4),
+    });
+    assert_eq!(
+        device.seal(&invalid, &mut out),
+        Err(SealError::Payload(
+            vcam_protocol::PayloadError::ThermalStateRange
+        ))
     );
     assert!(
         Endpoint::new(Role::Host, 0, &[0; 32], &[0; 32]).is_none(),

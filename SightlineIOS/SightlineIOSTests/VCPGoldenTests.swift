@@ -60,6 +60,7 @@ final class VCPGoldenTests: XCTestCase {
             XCTAssertEqual(c.motionScale, bits & 1 != 0 ? (f["motion_scale"] as! NSNumber).floatValue : nil, name)
             XCTAssertEqual(c.lockFlags.map(UInt64.init), bits & 2 != 0 ? uint(f["lock_flags"]) : nil, name)
             XCTAssertEqual(c.originEpoch.map(UInt64.init), bits & 4 != 0 ? uint(f["origin_epoch"]) : nil, name)
+            XCTAssertEqual(c.thermalState.map(UInt64.init), bits & 8 != 0 ? uint(f["thermal_state"]) : nil, name)
         case let .clock(c):
             let (t1, t2, t3) = (uint(f["t1"]), uint(f["t2"]), uint(f["t3"]))
             XCTAssertEqual(c, uint(f["mode"]) == 0 ? .request(t1: t1) : .reply(t1: t1, t2: t2, t3: t3), name)
@@ -183,14 +184,14 @@ final class VCPGoldenTests: XCTestCase {
             XCTAssertEqual(try tx.seal(message), bytes, "\(name): re-encoding differs")
             checked += 1
         }
-        XCTAssertEqual(checked, 8)
+        XCTAssertEqual(checked, 10)
     }
 
     func testReceiveRulesMatchVectors() throws {
         let vectors = try load("vcp/receive.json")
         let e = endpoints(vectors["receiver"] as! [String: Any])
         let cases = vectors["cases"] as! [[String: Any]]
-        XCTAssertEqual(cases.count, 26)
+        XCTAssertEqual(cases.count, 29)
         for c in cases {
             let name = c["name"] as! String
             let (rx, _) = pair(c["direction"] as! String, e)
@@ -209,6 +210,23 @@ final class VCPGoldenTests: XCTestCase {
         XCTAssertEqual(reason("wrong_direction_key"), .tag)
         XCTAssertEqual(reason("clock_request_from_device"), .unknownType)
         XCTAssertEqual(reason("pose_quat_norm_1_2"), .payload(.quaternionNorm))
+        XCTAssertEqual(reason("control_thermal_invalid"), .payload(.thermalStateRange))
+        XCTAssertEqual(reason("control_thermal_short"), .payload(.tooShort))
+        XCTAssertNil(reason("control_thermal_absent_ignored"))
+        let absent = try XCTUnwrap(cases.first { $0["name"] as? String == "control_thermal_absent_ignored" })
+        guard
+            case let .controlState(control) = try pair(absent["direction"] as! String, e).0
+                .open(hex(absent["hex"] as! String)).get()
+        else { return XCTFail("expected CONTROL_STATE without thermal presence") }
+        XCTAssertNil(control.thermalState)
+        XCTAssertThrowsError(
+            try e.device.seal(
+                .controlState(
+                    VCPControlState(
+                        stateSeq: 1, motionScale: nil, lockFlags: nil, originEpoch: nil, thermalState: 4)))
+        ) { error in
+            XCTAssertEqual(error as? VCPSealError, .payload(.thermalStateRange))
+        }
     }
 
     func testFreshnessSequences() throws {
@@ -269,6 +287,9 @@ final class VCPGoldenTests: XCTestCase {
         let control = VCPMessage.controlState(
             VCPControlState(stateSeq: 1, motionScale: nil, lockFlags: 1, originEpoch: nil))
         XCTAssertEqual(try e.host.open(e.device.seal(control)).get(), control)
+        let serious = VCPMessage.controlState(
+            VCPControlState(stateSeq: 2, motionScale: nil, lockFlags: nil, originEpoch: nil, thermalState: 2))
+        XCTAssertEqual(try e.host.open(e.device.seal(serious)).get(), serious)
         XCTAssertNil(
             VCPEndpoint(
                 role: .host, sessionID: 0, kD2H: Array(repeating: 0, count: 32), kH2D: Array(repeating: 0, count: 32)))
@@ -283,7 +304,7 @@ final class VCPGoldenTests: XCTestCase {
         for file in ["video/fragments.json", "video/report.json"] {
             cases += (try load(file)["cases"] as! [[String: Any]]).filter { $0["accept"] as! Bool }
         }
-        XCTAssertEqual(cases.count, 8 + 4 + 5)
+        XCTAssertEqual(cases.count, 10 + 4 + 5)
         for c in cases {
             let bytes = hex(c["hex"] as! String)
             let (rx, _) = pair(c["direction"] as! String, e)

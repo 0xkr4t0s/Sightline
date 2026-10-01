@@ -419,8 +419,7 @@ final class TrackingPipelineTests: XCTestCase {
     }
 
     /// vcp.md §6.2: a run opens with its complete state as `state_seq` 1, every real change is the
-    /// next `state_seq` and leaves at once, and the bytes are those of the golden vector the Rust
-    /// host is tested with (`control_state_full`: seq 7, scale 10, lock roll, origin_epoch 3).
+    /// next `state_seq` and leaves at once, with the complete rig and thermal state.
     func testControlChangesAreNumberedAndSentAsTheGoldenControlState() throws {
         let (device, blender) = try goldenSession()
         let host = try LoopbackReceiver()
@@ -428,7 +427,9 @@ final class TrackingPipelineTests: XCTestCase {
         pipeline.start(TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device))
 
         let first = try controlState(next(VCPMessageType.controlState, from: host), blender)
-        XCTAssertEqual(first, VCPControlState(stateSeq: 1, motionScale: 1, lockFlags: 0, originEpoch: 0))
+        XCTAssertEqual(
+            first,
+            VCPControlState(stateSeq: 1, motionScale: 1, lockFlags: 0, originEpoch: 0, thermalState: 0))
 
         var controls = DeviceControls()
         var changes: [DeviceControls] = []
@@ -454,7 +455,9 @@ final class TrackingPipelineTests: XCTestCase {
             last = datagram
         }
         XCTAssertEqual(seen, [1, 2, 3, 4, 5, 6, 7])
-        XCTAssertEqual(last, hex(try goldenHex("control_state_full")))
+        XCTAssertEqual(
+            try controlState(last, blender),
+            VCPControlState(stateSeq: 7, motionScale: 10, lockFlags: 2, originEpoch: 3, thermalState: 0))
         pipeline.stop()
     }
 
@@ -497,6 +500,58 @@ final class TrackingPipelineTests: XCTestCase {
             try controlState(next(VCPMessageType.controlState, from: host, timeout: 1), blender).stateSeq, 2,
             "a new state repeats again until acknowledged")
         pipeline.stop()
+    }
+
+    @MainActor
+    func testThermalProviderChangesSendCompleteStateUntilAcknowledged() throws {
+        let (device, blender) = try goldenSession()
+        let host = try LoopbackReceiver()
+        let pipeline = TrackingPipeline(publish: { _ in })
+        let provider = FakeThermalStateProvider(.nominal)
+        var controls = DeviceControls()
+        controls.thermalState = ThermalStatus(state: provider.state).code
+        provider.onChange = { state in
+            controls.thermalState = ThermalStatus(state: state).code
+            pipeline.setControls(controls)
+        }
+        pipeline.setControls(controls)
+        pipeline.start(TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device))
+        defer { pipeline.stop() }
+        let first = try controlState(next(VCPMessageType.controlState, from: host), blender)
+        XCTAssertEqual(first.stateSeq, 1)
+        XCTAssertEqual(first.thermalState, 0, "the first state must include nominal thermal")
+
+        provider.change(to: .serious)
+        let changed = try controlState(next(VCPMessageType.controlState, from: host, timeout: 0.3), blender)
+        XCTAssertEqual(changed.stateSeq, 2)
+        XCTAssertEqual(changed.thermalState, 2)
+        provider.change(to: .serious)
+        let resent = try controlState(next(VCPMessageType.controlState, from: host, timeout: 1), blender)
+        XCTAssertEqual(resent.stateSeq, 2, "an unchanged reading must not bump the sequence")
+        let status = VCPStatus(
+            statusSeq: 1, appliedPoseSeq: 0, controlAck: 2, errorCode: 0,
+            flags: 3, cameraName: "Camera")
+        host.reply(try blender.seal(.status(status)))
+        XCTAssertNil(
+            next(VCPMessageType.controlState, from: host, timeout: 0.8),
+            "thermal control retransmissions stop after an authenticated acknowledgement")
+    }
+
+    func testDeviceControlsThermalBytesMatchGoldenVectors() throws {
+        let (device, _) = try goldenSession()
+        var controls = DeviceControls()
+        controls.motionScale = 10
+        controls.lockFlags = 2
+        controls.originEpoch = 3
+        for (code, seq, vector) in [
+            (UInt8(2), UInt32(9), "control_state_thermal_serious"),
+            (UInt8(0), UInt32(10), "control_state_thermal_nominal"),
+        ] {
+            controls.thermalState = code
+            XCTAssertEqual(
+                try device.seal(.controlState(controls.message(seq: seq))),
+                hex(try goldenHex(vector)), vector)
+        }
     }
 
     /// vcp.md §6.5/§6.6: authentic `VIDEO_FRAGMENT`s go through newest-frame-wins reassembly, and
@@ -576,71 +631,59 @@ final class TrackingPipelineTests: XCTestCase {
         XCTAssertNil(next(VCPMessageType.videoReport, from: host, timeout: 0.8), "a stopped session reports nothing")
     }
 
-    /// FR-VF-004: the HUD's stream rate and connection quality count only the session's authentic
-    /// host datagrams and appear once a full second of the session has passed; a run without a
-    /// session has none.
-    func testStreamStatsCountOnlyAuthenticHostDatagrams() throws {
+    func testStreamMeterCountsOnlyAuthenticatedLoopbackFragmentsAndResetsPerSession() throws {
         let (device, blender) = try goldenSession()
         let host = try LoopbackReceiver()
         let latest = Latest()
         let pipeline = TrackingPipeline(publish: latest.set)
-        let began = Date()
-        pipeline.start(TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device))
-        defer { pipeline.stop() }
-        _ = try XCTUnwrap(next(VCPMessageType.controlState, from: host))
-        // The meter started before the first CONTROL_STATE was sent, so no later than this.
-        let meterStarted = Date()
-        func fragment(_ id: UInt32, bytes: Int = 1000) throws -> [UInt8] {
+        let destination = TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device)
+        func fragment() throws -> [UInt8] {
             try blender.seal(
                 .videoFragment(
                     VCPVideoFragment(
-                        frame: VCPVideoFrameInfo(
-                            frameID: id, renderTimeNs: 1_000 * UInt64(id), poseSeq: id, quality: 80),
-                        frameLength: UInt32(bytes), fragIndex: 0, fragCount: 1, fragSize: UInt16(bytes),
-                        data: [UInt8](repeating: 7, count: bytes)[...])))
+                        frame: VCPVideoFrameInfo(frameID: 1, renderTimeNs: 1_000, poseSeq: 1, quality: 80),
+                        frameLength: 4, fragIndex: 0, fragCount: 1, fragSize: 4, data: [1, 2, 3, 4][...]
+                    )))
         }
-        func status(_ seq: UInt32) throws -> [UInt8] {
-            try blender.seal(
-                .status(
-                    VCPStatus(
-                        statusSeq: seq, appliedPoseSeq: 0, controlAck: 1, errorCode: 0,
-                        flags: 3, cameraName: "Camera")))
-        }
-        /// Waits until the pipeline has handled every datagram sent before (the CLOCK reply follows them).
-        func barrier() throws {
-            host.reply(try blender.seal(.clock(.request(t1: 1))))
-            _ = try XCTUnwrap(next(VCPMessageType.clock, from: host))
-        }
-
-        host.reply(try status(1))
-        for id in UInt32(1)...10 { host.reply(try fragment(id)) }
-        var forged = try fragment(11, bytes: 100)
+        pipeline.start(destination)
+        defer { pipeline.stop() }
+        _ = try XCTUnwrap(next(VCPMessageType.controlState, from: host))
+        var forged = try fragment()
         forged[forged.count - 1] ^= 1
+        Thread.sleep(forTimeInterval: 0.65)
         host.reply(forged)
-        host.reply(try status(2))
-        try barrier()
-        feed(pipeline, frames: 0..<1, rate: 60)
-        XCTAssertNotNil(latest.snapshot?.pose)
-        XCTAssertNil(latest.snapshot?.stream, "nothing before a full second")
+        // A bad tag cannot reset the silence timer, contribute data, or complete a frame.
+        Thread.sleep(forTimeInterval: 0.5)
+        feed(pipeline, frames: 0..<2, rate: 60)
+        XCTAssertEqual(latest.snapshot?.stream?.framesPerSecond, 0)
+        XCTAssertEqual(latest.snapshot?.stream?.megabitsPerSecond, 0)
+        XCTAssertEqual(latest.snapshot?.stream?.quality, .poor)
 
-        Thread.sleep(forTimeInterval: max(0, 1.05 - Date().timeIntervalSince(meterStarted)))
-        host.reply(try status(3))
-        try barrier()
-        feed(pipeline, frames: 60..<61, rate: 60)
-        let elapsed = Date().timeIntervalSince(began)
-        let stream = try XCTUnwrap(latest.snapshot?.stream)
-        XCTAssertEqual(
-            stream.bitsPerSecond / stream.framesPerSecond, 8_000, accuracy: 1e-6,
-            "ten frames of 1000 bytes; the forged one counts for nothing")
-        XCTAssertLessThanOrEqual(stream.framesPerSecond, 10)
-        XCTAssertGreaterThanOrEqual(stream.framesPerSecond, 10 / elapsed)
-        XCTAssertEqual(stream.quality, .good)
-
+        host.reply(try fragment())
+        Thread.sleep(forTimeInterval: 1.1)
+        feed(pipeline, frames: 2..<8, rate: 60)
+        XCTAssertEqual(try XCTUnwrap(latest.snapshot?.stream?.framesPerSecond), 1, accuracy: 0.3)
+        XCTAssertGreaterThan(latest.snapshot?.stream?.megabitsPerSecond ?? 0, 0)
+        pipeline.start(destination)
+        feed(pipeline, frames: 8..<9, rate: 60)
+        XCTAssertNil(latest.snapshot?.stream, "a replacement session has no previous rates")
+        pipeline.stop()
         pipeline.start(unpaired)
-        Thread.sleep(forTimeInterval: 1.05)
-        feed(pipeline, frames: 0..<1, rate: 60)
-        XCTAssertNotNil(latest.snapshot?.pose)
-        XCTAssertNil(latest.snapshot?.stream, "no session, no stream stats")
+        feed(pipeline, frames: 9..<10, rate: 60)
+        XCTAssertNil(latest.snapshot?.stream, "an unpaired run never exposes stream stats")
+    }
+
+    func testSilentHostPublishesPoorQualityEvenWithoutPoseFrames() throws {
+        let (device, _) = try goldenSession()
+        let host = try LoopbackReceiver()
+        let latest = Latest()
+        let pipeline = TrackingPipeline(publish: latest.set)
+        pipeline.start(TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device))
+        defer { pipeline.stop() }
+        _ = try XCTUnwrap(next(VCPMessageType.controlState, from: host))
+        Thread.sleep(forTimeInterval: 1.3)
+        XCTAssertEqual(latest.snapshot?.stream?.quality, .poor)
+        XCTAssertEqual(latest.snapshot?.stream?.framesPerSecond, 0)
     }
 
     /// CLOCK and STATUS independently renew the deadline; authentication precedes renewal,

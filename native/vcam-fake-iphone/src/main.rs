@@ -11,6 +11,7 @@
 //! vcam-fake-iphone --host 127.0.0.1:47000 --state DIR/fake-iphone.key [--code 123456]
 //!                  --motion testdata/motion/scripted.bin [--rate HZ] [--linger SECONDS]
 //!                  [--name NAME] [--scale S] [--locks FLAGS] [--set-origin-at FRAME]
+//!                  [--thermal N] [--thermal-at FRAME[:N]]
 //!                  [--limited FROM-TO] [--video-out PATH] [--m2p MS]
 //! ```
 //! Prints `FAKE_IPHONE_PAIRED`, `FAKE_IPHONE_SESSION ...` and a final `FAKE_IPHONE_DONE ...`
@@ -67,6 +68,10 @@ struct Args {
     scale: f32,
     /// `CONTROL_STATE.lock_flags`: bit 0 lock height, bit 1 lock roll, bit 2 pan only.
     locks: u8,
+    /// Initial or transition thermal state, 0..=3.
+    thermal: u8,
+    /// Frame index and target value for the thermal transition.
+    thermal_at: Option<(usize, u8)>,
     /// Press Set origin just before sending this frame index (bumps `origin_epoch`).
     set_origin_at: Option<usize>,
     /// Frame indices `FROM..TO` (end exclusive) are sent as `limited(.relocalizing)`.
@@ -88,6 +93,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
         "Fake iPhone".to_owned(),
     );
     let (mut scale, mut locks, mut set_origin_at, mut limited) = (1.0f32, 0u8, None, 0..0);
+    let (mut thermal, mut thermal_at) = (0u8, None);
     let (mut video_out, mut m2p) = (None, 0u16);
     while let Some(flag) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("{flag} needs a value"));
@@ -119,6 +125,16 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
                 }
                 locks = v;
             }
+            "--thermal" => thermal = parse_thermal(&value()?)?,
+            "--thermal-at" => {
+                let v = value()?;
+                let (frame, state) = if let Some((frame, state)) = v.split_once(':') {
+                    (frame.parse()?, Some(parse_thermal(state)?))
+                } else {
+                    (v.parse()?, None)
+                };
+                thermal_at = Some((frame, state));
+            }
             "--set-origin-at" => set_origin_at = Some(value()?.parse()?),
             "--limited" => {
                 let v = value()?;
@@ -133,6 +149,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
             other => return Err(format!("unknown argument {other}").into()),
         }
     }
+    let thermal_at = thermal_at.map(|(frame, state)| (frame, state.unwrap_or(thermal)));
     Ok(Args {
         host: host.ok_or("--host is required")?,
         state: state.ok_or("--state is required")?,
@@ -143,11 +160,21 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args> {
         name,
         scale,
         locks,
+        thermal,
+        thermal_at,
         set_origin_at,
         limited,
         video_out,
         m2p,
     })
+}
+
+fn parse_thermal(value: &str) -> Result<u8> {
+    let state: u8 = value.parse()?;
+    if state > 3 {
+        return Err("--thermal must be in [0, 3]".into());
+    }
+    Ok(state)
 }
 
 /// Canonical frames from a `VCMO` file (format in `tools/gen_testdata.py`).
@@ -344,6 +371,22 @@ impl Stream {
         Ok(())
     }
 
+    fn change_controls_at(&mut self, args: &Args, frame: usize) {
+        if args.set_origin_at == Some(frame) {
+            self.control.state_seq += 1;
+            self.control.origin_epoch = self.control.origin_epoch.map(|e| e.wrapping_add(1));
+            self.last_control = None;
+        }
+        if let Some((at, thermal)) = args.thermal_at
+            && at == frame
+            && self.control.thermal_state != Some(thermal)
+        {
+            self.control.state_seq += 1;
+            self.control.thermal_state = Some(thermal);
+            self.last_control = None;
+        }
+    }
+
     /// Sends this session's `VIDEO_REPORT` every 500 ms once a valid fragment has arrived.
     fn report_due(&mut self) -> Result<()> {
         let report = self.video.report(self.report_seq + 1, self.m2p);
@@ -464,6 +507,11 @@ fn run(args: &Args) -> Result<String> {
             motion_scale: Some(args.scale),
             lock_flags: Some(args.locks),
             origin_epoch: Some(0),
+            thermal_state: Some(if args.thermal_at.is_some() {
+                0
+            } else {
+                args.thermal
+            }),
         },
         video: Reassembler::new(),
         last_video: None,
@@ -476,12 +524,7 @@ fn run(args: &Args) -> Result<String> {
     let mut next = Instant::now();
     for (i, (position_m, orientation)) in motion.frames.iter().enumerate() {
         s.service(next)?;
-        if args.set_origin_at == Some(i) {
-            // Set origin: a new complete state with the next epoch, sent before this frame.
-            s.control.state_seq += 1;
-            s.control.origin_epoch = s.control.origin_epoch.map(|e| e.wrapping_add(1));
-            s.last_control = None;
-        }
+        s.change_controls_at(args, i);
         s.control_due()?;
         s.report_due()?;
         let pose = Pose {
@@ -541,6 +584,12 @@ fn main() -> ExitCode {
         println!("{}", version_line());
         return ExitCode::SUCCESS;
     }
+    if argv.peek().is_some_and(|a| a == "--help") {
+        println!(
+            "vcam-fake-iphone --host HOST --state PATH --motion PATH [--code CODE] [--thermal N (0..3)] [--thermal-at FRAME[:N]] [--rate HZ] [--linger SECONDS]"
+        );
+        return ExitCode::SUCCESS;
+    }
     match parse_args(argv).and_then(|args| run(&args)) {
         Ok(summary) => {
             println!("{summary}");
@@ -566,6 +615,37 @@ mod tests {
         assert!(
             line.contains(&format!("vcam-protocol {}", vcam_protocol::VERSION)),
             "{line}"
+        );
+    }
+
+    #[test]
+    fn thermal_args_start_nominal_for_a_scheduled_change_and_reject_bad_values() {
+        let args = |extra: &[&str]| {
+            parse_args(
+                [
+                    "--host",
+                    "127.0.0.1:47000",
+                    "--state",
+                    "unused",
+                    "--motion",
+                    "unused",
+                ]
+                .into_iter()
+                .chain(extra.iter().copied())
+                .map(str::to_owned),
+            )
+        };
+        let scheduled = args(&["--thermal", "2", "--thermal-at", "60"]).unwrap();
+        assert_eq!(scheduled.thermal_at, Some((60, 2)));
+        let explicit = args(&["--thermal-at", "60:3"]).unwrap();
+        assert_eq!(explicit.thermal_at, Some((60, 3)));
+        assert_eq!(
+            args(&["--thermal", "4"]).unwrap_err().to_string(),
+            "--thermal must be in [0, 3]"
+        );
+        assert_eq!(
+            args(&["--thermal-at", "60:4"]).unwrap_err().to_string(),
+            "--thermal must be in [0, 3]"
         );
     }
 

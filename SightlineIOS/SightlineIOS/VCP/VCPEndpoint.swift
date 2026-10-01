@@ -63,7 +63,8 @@ nonisolated struct VCPEndpoint: Sendable {
         out.appendLE(UInt16(0))  // payload length, filled in below
         switch message {
         case let .pose(m): m.encode(into: &out)
-        case let .controlState(m): m.encode(into: &out)
+        case let .controlState(m):
+            do { try m.encode(into: &out) } catch { throw .payload(error) }
         case let .clock(m): m.encode(into: &out)
         case let .status(m):
             do { try m.encode(into: &out) } catch { throw .payload(error) }

@@ -39,6 +39,14 @@ def adapted_resolution(key: str, drop: int) -> tuple[int, int]:
     return STREAM_RESOLUTIONS[keys[max(keys.index(key) - drop, 0)]]
 
 
+def thermal_stream_settings(
+    key: str, fps: int, adaptive_drop: int, thermal_state: int | None
+) -> tuple[tuple[int, int], int]:
+    """Device thermal reduction is independent of the adapter's own resolution step."""
+    serious = thermal_state is not None and thermal_state >= 2
+    return adapted_resolution(key, adaptive_drop + int(serious)), min(fps, 24) if serious else fps
+
+
 class FramePacer:
     """Skip frames after an over-budget draw/read, without catching up missed frames.
 

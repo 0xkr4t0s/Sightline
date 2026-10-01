@@ -36,6 +36,8 @@ final class SightlineUITests: XCTestCase {
         XCTAssertTrue(status.waitForExistence(timeout: 20), "status strip")
         XCTAssertTrue(app.staticTexts["status.connection"].exists)
         XCTAssertTrue(app.staticTexts["status.rate"].exists)
+        XCTAssertFalse(element(app, "hud.stream").exists, "without a session there is no stream meter")
+        XCTAssertFalse(element(app, "hud.quality").exists)
         let startStop = app.buttons["control.startStop"]
         XCTAssertTrue(startStop.exists)
         XCTAssertEqual(startStop.label, "Start")
@@ -95,6 +97,35 @@ final class SightlineUITests: XCTestCase {
         // A frame is on screen once the viewfinder reports its size instead of "No video".
         let viewfinder = element(app, "viewfinder")
         expect(viewfinder, NSPredicate(format: "value MATCHES %@", "^[0-9]+x[0-9]+; .*"), timeout: 30)
+        let stream = element(app, "hud.stream")
+        expect(
+            stream, NSPredicate(format: "value MATCHES %@", "^[1-9][0-9]* fps · [0-9]+\\.[0-9] Mbit/s$"), timeout: 15)
+        let quality = element(app, "hud.quality")
+        wait(for: quality, value: "Good", timeout: 15)
+        let level = element(app, "hud.level")
+        expect(level, NSPredicate(format: "value MATCHES %@", "^q[0-9]+ · [0-9]+×[0-9]+$"), timeout: 15)
+        for id in [
+            "hud.tracking", "hud.connection", "hud.stream", "hud.quality", "hud.level",
+            "hud.lens", "hud.m2p", "hud.recording", "hud.thermal",
+        ] {
+            let item = element(app, id)
+            XCTAssertTrue(item.exists, "\(id) must be accessible")
+            XCTAssertFalse(
+                item.frame.intersects(
+                    viewfinder.frame.insetBy(
+                        dx: viewfinder.frame.width / 4, dy: viewfinder.frame.height / 4)),
+                "\(id) covers picture centre: \(item.frame), viewfinder \(viewfinder.frame)"
+            )
+        }
+        let panel = element(app, "hud.panel")
+        XCTAssertTrue(panel.exists, "panel background must have a measurable frame")
+        XCTAssertFalse(
+            panel.frame.intersects(
+                viewfinder.frame.insetBy(dx: viewfinder.frame.width / 4, dy: viewfinder.frame.height / 4)),
+            "HUD panel background covers picture centre: \(panel.frame), viewfinder \(viewfinder.frame)")
+        XCTAssertEqual(element(app, "hud.lens").value as? String, "Focal — · Focus — · f/—")
+        XCTAssertEqual(element(app, "hud.m2p").value as? String, "—")
+        XCTAssertEqual(element(app, "hud.recording").value as? String, "Recording: not available (T3)")
         // Frames keep coming: no stall once they arrive (FR-VF-005).
         sleep(2)
         XCTAssertFalse(app.descendants(matching: .any)["video.stalled"].exists, "video stalled while streaming")
@@ -127,9 +158,52 @@ final class SightlineUITests: XCTestCase {
         showControls(app)
         let startStop = app.buttons["control.startStop"]
         XCTAssertEqual(startStop.label, "Stop")
+        let lastFrameDescription = viewfinder.value as? String
         startStop.tap()
         wait(for: status, label: "Stopped")
+        wait(for: element(app, "hud.tracking"), value: "Stopped")
+        XCTAssertFalse(stream.exists, "a stopped session must not show old stream measurements")
+        XCTAssertEqual(
+            viewfinder.value as? String,
+            lastFrameDescription,
+            "the still-visible last frame must keep its framing guides and accessibility size")
         attachScreenshot(app, "5 stopped")
+    }
+
+    func testThermalOverrideReducesStreamAndNominalRestoresIt() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let host = env["SIGHTLINE_QA_HOST"], !host.isEmpty else {
+            throw XCTSkip("requires the Blender QA host")
+        }
+        continueAfterFailure = false
+        let app = landscapeApp()
+        let base =
+            [
+                "-SightlineQAHost", host,
+                "-SightlineQACode", env["SIGHTLINE_QA_CODE"] ?? "",
+                "-SightlineQAMotion", "orbit",
+                "-SightlineQAAutoStart", "YES",
+            ] + Self.framingOff
+
+        app.launchArguments = base + ["-SightlineQAThermal", "serious"]
+        app.launch()
+        let viewfinder = element(app, "viewfinder")
+        wait(for: element(app, "status.connection"), label: "Sending to Blender", timeout: 45)
+        wait(for: element(app, "hud.thermal"), value: "Stream reduced (thermal)", timeout: 15)
+        wait(for: app.staticTexts["status.thermal"], label: "Thermal: Serious", timeout: 15)
+        expect(viewfinder, NSPredicate(format: "value BEGINSWITH '640x360'"), timeout: 35)
+        expect(element(app, "hud.level"), NSPredicate(format: "value CONTAINS '640×360'"), timeout: 15)
+        attachScreenshot(app, "1 thermal serious, stream reduced")
+
+        app.terminate()
+        app.launchArguments = base + ["-SightlineQAThermal", "nominal"]
+        app.launch()
+        wait(for: element(app, "status.connection"), label: "Sending to Blender", timeout: 45)
+        wait(for: app.staticTexts["status.thermal"], label: "Thermal: Normal", timeout: 15)
+        wait(for: element(app, "hud.thermal"), value: "Thermal: Normal", timeout: 15)
+        expect(viewfinder, NSPredicate(format: "value BEGINSWITH '960x540'"), timeout: 35)
+        expect(element(app, "hud.level"), NSPredicate(format: "value CONTAINS '960×540'"), timeout: 15)
+        attachScreenshot(app, "2 thermal nominal, stream restored")
     }
 
     // MARK: - Helpers

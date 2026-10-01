@@ -206,8 +206,9 @@ def pose_payload(seq, t_ns, pos, quat, state, flags=0) -> bytes:
     return struct.pack("<IQ3f4fBB", seq, t_ns, *pos, *quat, state, flags)
 
 
-def control_payload(state_seq, fields, scale, locks, epoch) -> bytes:
-    return struct.pack("<IIfBBH", state_seq, fields, scale, locks, 0, epoch)
+def control_payload(state_seq, fields, scale, locks, epoch, thermal=None) -> bytes:
+    payload = struct.pack("<IIfBBH", state_seq, fields, scale, locks, 0, epoch)
+    return payload if thermal is None else payload + struct.pack("<B3x", thermal)
 
 
 def clock_payload(mode, t1, t2, t3) -> bytes:
@@ -375,6 +376,23 @@ def build_messages() -> tuple[dict, dict[str, bytes]]:
         {"state_seq": 8, "fields": 4, "motion_scale": 0.0, "lock_flags": 0, "origin_epoch": 65535},
         "only origin_epoch present; motion_scale/lock_flags bytes are present but must be ignored",
     )
+    for name, seq, thermal in (("serious", 9, 2), ("nominal", 10, 0)):
+        add(
+            f"control_state_thermal_{name}",
+            "udp",
+            "d2h",
+            0x02,
+            control_payload(seq, 0b1111, 10.0, 0b010, 3, thermal),
+            {
+                "state_seq": seq,
+                "fields": 15,
+                "motion_scale": 10.0,
+                "lock_flags": 2,
+                "origin_epoch": 3,
+                "thermal_state": thermal,
+            },
+            f"vcp.md §6.2 thermal {name}",
+        )
     add(
         "clock_request",
         "udp",
@@ -559,6 +577,25 @@ def build_receive() -> dict:
         True,
         "§6.2 (motion_scale not present, so its bytes are ignored)",
         fields={"state_seq": 1, "fields": 6},
+    )
+    case(
+        "control_thermal_invalid",
+        udp(0x02, SID, control_payload(9, 0b1000, 0.0, 0, 0, 4), K_D2H),
+        False,
+        "§6.2 thermal_state outside 0..3",
+    )
+    case(
+        "control_thermal_short",
+        udp(0x02, SID, control_payload(9, 0b1000, 0.0, 0, 0), K_D2H),
+        False,
+        "§6.2 bit 3 requires offset 16",
+    )
+    case(
+        "control_thermal_absent_ignored",
+        udp(0x02, SID, control_payload(9, 0, 0.0, 0, 0, 4), K_D2H),
+        True,
+        "§6.2 bit 3 clear ignores thermal byte",
+        fields={"state_seq": 9, "fields": 0},
     )
     return {
         "receiver": {

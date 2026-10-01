@@ -38,12 +38,13 @@ final class TrackingSessionController {
     private(set) var poseRate: Double?
     /// NFR-LAT-002's send leg over this run's sent poses, nil until one has been sent.
     private(set) var sendLeg: SendLegSummary?
-    /// Viewfinder stream rate and connection quality (FR-VF-004), nil until known and without a session.
+    /// Stream rate and link quality, shown only during a paired session.
     private(set) var stream: StreamStats?
-    /// The device's thermal state, kept current from `ProcessInfo` notifications (FR-UX-004).
+    /// The device's thermal state, kept current by the injected provider (FR-UX-004).
     private(set) var thermal = ThermalStatus(state: ProcessInfo.processInfo.thermalState)
 
     @ObservationIgnored private let pipeline: TrackingPipeline
+    @ObservationIgnored private let thermalProvider: any ThermalStateProvider
     /// ARKit, or a scripted path in simulator QA runs; its frames go straight into `pipeline`.
     @ObservationIgnored private let poseSource: any PoseSource
     /// Draws the newest decoded viewfinder frame (FR-VF-001/002); nil without Metal.
@@ -53,8 +54,10 @@ final class TrackingSessionController {
     /// No new viewfinder frame for more than 250 ms during a run (FR-VF-005).
     private(set) var videoStalled = false
     @ObservationIgnored private let stallWatch = VideoStallWatch()
-    /// Pixel size of the frame on screen, for placing the framing guides; nil before the first.
+    /// Pixel size of the frame on screen, retained across stops/reconnects while Metal shows it.
     private(set) var videoFrameSize: CGSize?
+    /// Quality and decoded dimensions of the newest frame actually submitted to the drawable.
+    private(set) var videoLevel: String?
     /// Framing guides over the viewfinder (FR-VF-003), saved on every change.
     var framing = FramingSettings.load() {
         didSet { framing.save() }
@@ -66,7 +69,6 @@ final class TrackingSessionController {
         return HorizonLevel.angle(orientation: latestPose.orientation, lockFlags: controls.lockFlags)
     }
     @ObservationIgnored private var rateMeter = PoseRateMeter()
-    @ObservationIgnored private var thermalObserver: (any NSObjectProtocol)?
     @ObservationIgnored private let device = DeviceIdentityStore.load()
     /// The session of the current run; its TCP connection stays open until the run stops.
     @ObservationIgnored private var liveSession: VCPLiveSession?
@@ -93,7 +95,18 @@ final class TrackingSessionController {
     @ObservationIgnored private var qaLaunchHandled = false
     #endif
 
-    init() {
+    init(thermalProvider: (any ThermalStateProvider)? = nil) {
+        #if targetEnvironment(simulator) && DEBUG
+        let source: any ThermalStateProvider =
+            thermalProvider ?? QALaunchOptions.current.thermal.map { QAThermalStateProvider($0) }
+            ?? ProcessThermalStateProvider()
+        if QALaunchOptions.current.thermal != nil, thermalProvider == nil {
+            Log.qa.notice("QA thermal override: \(ThermalStatus(state: source.state).label, privacy: .public)")
+        }
+        #else
+        let source: any ThermalStateProvider = thermalProvider ?? ProcessThermalStateProvider()
+        #endif
+        self.thermalProvider = source
         let settings = TrackingSettings.load()
         host = settings.host
         portText = String(settings.port)
@@ -118,6 +131,7 @@ final class TrackingSessionController {
         #else
         poseSource = ARKitPoseSource(pipeline: pipeline, onEvent: onEvent)
         #endif
+        updateThermal(source.state)
         reloadPairing()
         stallWatch.onChange = { [weak self] stalled in
             guard let self else { return }
@@ -128,16 +142,16 @@ final class TrackingSessionController {
                 Log.video.info("Video resumed")
             }
         }
-        viewfinder?.onShown = { [weak self] in
+        viewfinder?.onShown = { [weak self] frame in
             guard let self else { return }
             stallWatch.frameShown()
-            if let texture = viewfinder?.frame?.texture {
-                let size = CGSize(width: texture.width, height: texture.height)
-                if size != videoFrameSize { videoFrameSize = size }
-                if isTracking, !runHasVideo {
-                    runHasVideo = true
-                    Log.video.notice("First viewfinder frame: \(texture.width)x\(texture.height)")
-                }
+            guard isTracking else { return }
+            let size = CGSize(width: frame.texture.width, height: frame.texture.height)
+            if size != videoFrameSize { videoFrameSize = size }
+            videoLevel = HUDFields.level(quality: frame.info.quality, size: size)
+            if isTracking, !runHasVideo {
+                runHasVideo = true
+                Log.video.notice("First viewfinder frame: \(frame.texture.width)x\(frame.texture.height)")
             }
         }
         Task { [weak self] in
@@ -156,13 +170,15 @@ final class TrackingSessionController {
                 self.handle(event)
             }
         }
-        thermalObserver = NotificationCenter.default.addObserver(
-            forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.thermal = ThermalStatus(state: ProcessInfo.processInfo.thermalState)
-            }
+        source.onChange = { [weak self] state in
+            self?.updateThermal(state)
         }
+        source.startObserving()
+    }
+
+    private func updateThermal(_ state: ProcessInfo.ThermalState) {
+        thermal = ThermalStatus(state: state)
+        controls.thermalState = thermal.code
     }
 
     private var pairingAccount: String? {
@@ -393,6 +409,7 @@ final class TrackingSessionController {
         liveSession?.close()
         liveSession = nil
         sessionEndpoint = nil
+        stream = nil
         pipeline.start(TrackingDestination(host: "", port: 0, endpoint: nil))
         lastError = reason
         sessionStatus = "Reconnecting to Blender"
@@ -425,6 +442,7 @@ final class TrackingSessionController {
         case let .success(link):
             liveSession = link
             sessionEndpoint = link.endpoint
+            stream = nil
             pipeline.start(link.destination)
             watch(link)
             controlSeq = 0
@@ -462,11 +480,11 @@ final class TrackingSessionController {
         liveSession?.close()
         liveSession = nil
         sessionEndpoint = nil
+        stream = nil
         isTracking = false
         stallWatch.stop()
         sceneUnderstanding = nil
         poseRate = nil
-        stream = nil
         if let reason {
             sessionStatus = reason
         } else if lastError == nil {

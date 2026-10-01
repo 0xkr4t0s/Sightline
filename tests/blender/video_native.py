@@ -63,6 +63,7 @@ frame[HEIGHT // 2 :] = RED
 
 with tempfile.TemporaryDirectory() as tmp:
     session = vcam_native.Session.start(0, tmp, os.urandom(16), bind="127.0.0.1")
+    assert session.latest_control() is None
     slot = vcam_native.FrameSlot()
     assert session.video_stats() is None
     raises(ValueError, session.start_video, slot, quality=0)
@@ -89,6 +90,8 @@ with tempfile.TemporaryDirectory() as tmp:
             os.path.join(ROOT, "testdata", "motion", "scripted.bin"),
             "--rate",
             "60",
+            "--thermal",
+            "2",
             "--linger",
             "1",
             "--video-out",
@@ -100,6 +103,8 @@ with tempfile.TemporaryDirectory() as tmp:
     )
     try:
         wait_for("no authenticated device source", lambda: session.stats()["source"] is not None, timeout=20)
+        wait_for("no thermal control", lambda: session.latest_control() is not None)
+        assert session.latest_control()["thermal_state"] == 2, session.latest_control()
         deadline = time.monotonic() + 20
         while session.video_stats()["sent"] < 40:
             assert time.monotonic() < deadline and child.poll() is None, session.video_stats()
