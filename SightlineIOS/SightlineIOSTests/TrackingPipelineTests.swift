@@ -736,6 +736,66 @@ final class TrackingPipelineTests: XCTestCase {
         XCTAssertNil(next(VCPMessageType.videoReport, from: host, timeout: 0.8), "a stopped session reports nothing")
     }
 
+    /// NFR-LAT-003: a shown frame's `pose_seq` finds its pose's capture time in the run's ring, and
+    /// the next `VIDEO_REPORT` carries the p95 of the frames shown in its interval; then 0 again
+    /// while none are shown. Frames of an earlier run and unknown poses give no M2P; the session's
+    /// legs reach the snapshot.
+    func testShownFramesGiveTheReportsMotionToPhoton() throws {
+        let (device, blender) = try goldenSession()
+        let host = try LoopbackReceiver()
+        let latest = Latest()
+        let pipeline = TrackingPipeline(publish: latest.set)
+        let beforeRun = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        pipeline.start(TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device))
+        defer { pipeline.stop() }
+        _ = try XCTUnwrap(next(VCPMessageType.controlState, from: host))
+        feed(pipeline, frames: 0..<10, rate: 60)  // poses 1...10 at 100 s + i/60
+        func capture(_ seq: Int) -> UInt64 { UInt64(((100 + Double(seq - 1) / 60) * 1e9).rounded()) }
+        func report() throws -> VCPVideoReport {
+            guard
+                case let .videoReport(report) = try blender.open(
+                    XCTUnwrap(next(VCPMessageType.videoReport, from: host, timeout: 1))
+                ).get()
+            else { throw POSIXError(.EBADMSG) }
+            return report
+        }
+        host.reply(
+            try blender.seal(
+                .videoFragment(
+                    VCPVideoFragment(
+                        frame: VCPVideoFrameInfo(frameID: 1, renderTimeNs: 1_000, poseSeq: 5, quality: 80),
+                        frameLength: 4, fragIndex: 0, fragCount: 1, fragSize: 4, data: [1, 2, 3, 4][...]))))
+        let submitted = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        func frame(_ poseSeq: UInt32, m2pMS: UInt64, submittedNs: UInt64) -> PresentedFrame {
+            PresentedFrame(
+                poseSeq: poseSeq, submittedNs: submittedNs, decodedNs: submittedNs + 3_000_000,
+                presentedNs: capture(Int(min(poseSeq, 10))) + m2pMS * 1_000_000)
+        }
+        pipeline.framePresented(frame(5, m2pMS: 85, submittedNs: submitted))
+        pipeline.framePresented(frame(3, m2pMS: 900, submittedNs: beforeRun))  // an earlier run's frame
+        pipeline.framePresented(frame(42, m2pMS: 900, submittedNs: submitted))  // no such pose this run
+        XCTAssertEqual(try report().m2pP95Ms, 85, "the first report carries the shown frame's M2P")
+        XCTAssertEqual(try report().m2pP95Ms, 0, "nothing shown since: not measured")
+
+        feed(pipeline, frames: 10..<14, rate: 60)  // frame 12 publishes the latency with its snapshot
+        let latency = try XCTUnwrap(latest.snapshot?.latency)
+        XCTAssertEqual(latency.m2p?.count, 1)
+        XCTAssertEqual(latency.m2p?.max, 85_000_000)
+        XCTAssertEqual(latency.receive?.count, 1, "the frame's reassembly")
+        XCTAssertEqual(latency.decode?.count, 2, "both frames of this run were decoded")
+        XCTAssertEqual(latency.framesWithoutCaptureTime, 1)
+        XCTAssertEqual(latency.reportedM2PMs, 0)
+
+        pipeline.start(TrackingDestination(host: "127.0.0.1", port: host.port, endpoint: device))
+        feed(pipeline, frames: 14..<15, rate: 60)
+        XCTAssertEqual(
+            latest.snapshot?.latency, DeviceLatencySummary(), "a new session starts without the old one's latency")
+        pipeline.framePresented(frame(5, m2pMS: 85, submittedNs: submitted))
+        pipeline.queue.sync {}
+        feed(pipeline, frames: 15..<19, rate: 60)
+        XCTAssertEqual(latest.snapshot?.latency?.decode?.count, nil, "a frame submitted in the old session is ignored")
+    }
+
     func testStreamMeterCountsOnlyAuthenticatedLoopbackFragmentsAndResetsPerSession() throws {
         let (device, blender) = try goldenSession()
         let host = try LoopbackReceiver()

@@ -69,6 +69,16 @@ struct ContentView: View {
                             }
                             .offset(x: layout.dataPanel.minX, y: layout.dataPanel.minY)
                             .allowsHitTesting(false)
+                        if controller.showsLatencyOverlay, controller.latency != nil {
+                            latencyOverlay
+                                .frame(
+                                    width: layout.latencyOverlay.width, height: layout.latencyOverlay.height,
+                                    alignment: .topLeading
+                                )
+                                .clipped()
+                                .offset(x: layout.latencyOverlay.minX, y: layout.latencyOverlay.minY)
+                                .allowsHitTesting(false)
+                        }
                         if let notice = controller.inputNotice {
                             noticeFlash(notice.text)
                                 .frame(width: proxy.size.width)
@@ -224,8 +234,8 @@ struct ContentView: View {
                 Text(controller.videoLevel ?? "q— · —")
                     .accessibilityValue(controller.videoLevel ?? "—")
                     .accessibilityIdentifier("hud.level")
-                Text("M2P \(HUDFields.m2p)")
-                    .accessibilityValue(HUDFields.m2p)
+                Text("M2P p95 \(HUDFields.m2p(controller.latency))")
+                    .accessibilityValue(HUDFields.m2p(controller.latency))
                     .accessibilityIdentifier("hud.m2p")
             }
             Text(HUDFields.lens(controller.appliedLens))
@@ -248,6 +258,26 @@ struct ContentView: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    }
+
+    /// The device legs and M2P (NFR-LAT-004) under the status strip, when turned on in Settings.
+    private var latencyOverlay: some View {
+        let lines = HUDFields.latency(controller.latency)
+        return VStack(alignment: .leading, spacing: 1) {
+            ForEach(lines, id: \.self) { Text($0) }
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 4))
+        .padding(.leading, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Latency")
+        .accessibilityValue(lines.joined(separator: "; "))
+        .accessibilityIdentifier("hud.latency")
     }
 
     /// Centred over the stale frame; taps go through to the viewfinder.

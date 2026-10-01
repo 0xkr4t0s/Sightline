@@ -358,12 +358,13 @@ jobs:
         run: |
           SightlineIOS/scripts/coverage_check.sh xcresult/debug.xcresult 75 | tee coverage.txt
           { echo '```'; tail -1 coverage.txt; echo '```'; } >> "${GITHUB_STEP_SUMMARY}"
-      - name: Pose send path allocates nothing (NFR-LAT-002; needs optimised code)
+      - name: Pose send path and M2P recording allocate nothing (NFR-LAT-002/003; needs optimised code)
         timeout-minutes: 15
         run: |
           xcodebuild test -configuration Release -project SightlineIOS/SightlineIOS.xcodeproj -scheme SightlineIOS \
             -destination 'platform=iOS Simulator,name=iPhone 17' -resultBundlePath xcresult/release \
-            -only-testing:SightlineIOSTests/TrackingPipelineTests/testPoseSendPathAllocatesNothing
+            -only-testing:SightlineIOSTests/TrackingPipelineTests/testPoseSendPathAllocatesNothing \
+            -only-testing:SightlineIOSTests/DeviceLatencyTests/testRecordingPosesAndFramesAllocatesNothing
       # Crash logs of a test process that died live only in the result bundle.
       - uses: actions/upload-artifact@v7
         if: failure()

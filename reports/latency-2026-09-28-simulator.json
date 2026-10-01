@@ -1,0 +1,164 @@
+{
+ "kind": "vcam-latency-m2p",
+ "format": 1,
+ "date": "2026-09-28",
+ "environment": "simulator",
+ "requirements": [
+  "NFR-LAT-003",
+  "NFR-LAT-004"
+ ],
+ "run": {
+  "platform": "darwin-arm64",
+  "blender": "5.2.2 LTS",
+  "duration_s": 60.0,
+  "motion": "orbit",
+  "session_id": 3427003744,
+  "host_report_date": "2026-09-28T03:48:40+1000",
+  "device_report_date": "2026-09-27T17:48:42Z"
+ },
+ "stream": {
+  "width": 960,
+  "height": 540,
+  "quality": 80,
+  "codec": "JPEG",
+  "fps_cap": 30
+ },
+ "order": [
+  "pose_leg_ms",
+  "render_readback_ms",
+  "encode_ms",
+  "send_ms",
+  "network_ms",
+  "receive_ms",
+  "decode_ms",
+  "display_ms",
+  "m2p_ms"
+ ],
+ "legs": {
+  "pose_leg_ms": {
+   "count": 3050,
+   "p50": 8.490438,
+   "p95": 16.032875,
+   "p99": 16.805417,
+   "max": 18.419792,
+   "source": "host"
+  },
+  "render_readback_ms": {
+   "count": 1517,
+   "p50": 2.183583,
+   "p95": 3.194583,
+   "p99": 9.068583,
+   "max": 36.881041,
+   "source": "host"
+  },
+  "encode_ms": {
+   "count": 1516,
+   "p50": 37.752542,
+   "p95": 39.013333,
+   "p99": 39.499,
+   "max": 41.165208,
+   "source": "host"
+  },
+  "send_ms": {
+   "count": 1516,
+   "p50": 0.694583,
+   "p95": 0.765667,
+   "p99": 0.807958,
+   "max": 2.105916,
+   "source": "host"
+  },
+  "network_ms": {
+   "count": null,
+   "source": "derived",
+   "p50": 49.573,
+   "p95": 40.059,
+   "p99": 29.227,
+   "max": null,
+   "clamped": []
+  },
+  "receive_ms": {
+   "count": 1566,
+   "p50": 0.7,
+   "p95": 1.9,
+   "p99": 2.1,
+   "max": 2.93,
+   "source": "device"
+  },
+  "decode_ms": {
+   "count": 1566,
+   "p50": 2.4,
+   "p95": 5.7,
+   "p99": 6.1,
+   "max": 16.617,
+   "source": "device"
+  },
+  "display_ms": {
+   "count": 1566,
+   "p50": 0.9,
+   "p95": 14.1,
+   "p99": 17.2,
+   "max": 20.29,
+   "source": "device"
+  },
+  "m2p_ms": {
+   "count": 1566,
+   "p50": 102.0,
+   "p95": 120.0,
+   "p99": 120.0,
+   "max": 224.941,
+   "source": "device"
+  }
+ },
+ "methods": {
+  "pose_leg_ms": "host: host clock after the apply minus the device capture time mapped through the CLOCK offset",
+  "render_readback_ms": "host: main-thread draw_view3d of a frame plus its texture read and FrameSlot copy on the next tick (perf_counter), per submitted frame",
+  "encode_ms": "host: JPEG encode on the native encoder thread (last_sent.encode_ns), sampled once per poll",
+  "send_ms": "host: VIDEO_FRAGMENT send of all the frame's fragments (last_sent.send_ns), sampled once per poll",
+  "network_ms": "derived, not timed: the host and device clocks differ, so a fragment's flight time can't be read from either side. At each percentile q, network = M2P(q) - (pose_leg + render_readback + encode + receive + decode + display)(q); send is not subtracted because it overlaps receive. Percentiles don't add, so this is an estimate, clamped at 0 (`clamped` lists where). The residual holds the downlink flight of the first fragment plus the host waits no leg times (apply -> the next render tick, draw -> readback on the following tick, readback -> encoder start), so it is an upper bound on the network time. `crosscheck.clock_one_way_ms` (half the CLOCK round trip, symmetric-path assumption) shows how much of it is flight.",
+  "receive_ms": "device: tracking queue: first VIDEO_FRAGMENT of a frame read -> its last fragment read (reassembly; the network transit before the first fragment needs the host clock)",
+  "decode_ms": "device: complete frame handed to the decoder -> ImageIO JPEG decode into the Metal texture done (includes the wait behind a decode in progress)",
+  "display_ms": "device: texture ready -> display time of the first drawable showing it",
+  "m2p_ms": "device: display time - capture time of the frame's pose_seq (pose ring on the tracking queue); frames not presented or without a capture time give no sample",
+  "display_time": "device: MTLCommandBuffer.GPUEndTime (the simulator SDK has no MTLDrawable.presentedTime; excludes the wait for the next display refresh)",
+  "device_clock": "device: CLOCK_UPTIME_RAW (mach_absolute_time) in ns; ARFrame.timestamp and the Metal display time (CACurrentMediaTime base) are seconds on the same clock, converted by x 1e9 with no offset",
+  "percentiles": "host legs: nearest rank over every sample; device legs: nearest rank, reported as the upper edge of the histogram bin (0.1 ms for receive/decode/display, 1 ms for M2P), so they never understate"
+ },
+ "crosscheck": {
+  "clock_one_way_ms": 0.029,
+  "clock_one_way_method": "half the round trip delay of the host's newest CLOCK estimate (vcp.md \u00a76.3)",
+  "video_report_m2p_p95_ms": {
+   "count": 134,
+   "p50": 110.0,
+   "p95": 121.0,
+   "p99": 122.0,
+   "max": 225.0,
+   "source": "host"
+  },
+  "video_report_method": "the VIDEO_REPORT.m2p_p95_ms values the host received (each the device's p95 over ~500 ms), summarised by the host"
+ },
+ "counts": {
+  "poses_without_clock": 0,
+  "poses_not_applied": 997,
+  "frames_not_sampled": 0,
+  "frames_not_presented": 0,
+  "frames_without_capture_time": 0
+ },
+ "verdict": {
+  "requirement": "NFR-LAT-003",
+  "limit_m2p_p95_ms": 120.0,
+  "m2p_p95_ms": 120.0,
+  "stream": "960x540",
+  "environment": "simulator",
+  "meets": true,
+  "reason": "M2P p95 120.0 ms <= 120.0 ms",
+  "scope": "simulator only: the iPhone simulator on the same Mac as Blender, over loopback. The display time is the command buffer's GPUEndTime (the simulator SDK has no presentedTime), a lower bound that leaves out the wait for the next display refresh. Says nothing about a real iPhone on Wi-Fi."
+ },
+ "notes": [
+  "Blender runs the debug vcam_native wheel tools/mission/setup.sh builds (local release wheels can fail to load, docs/LOOP_LOG.md), so encode_ms and M2P include debug-build JPEG encoding; SRS \u00a713.2 (S-2a) has release encode times near 1 ms at 960x540.",
+  "The simulator and Blender share one Mac (CPU, GPU and loopback network); the pose leg and network leg include no Wi-Fi."
+ ],
+ "needs_owner": [
+  "M2P and every leg on a real iPhone over 5 GHz Wi-Fi (NFR-LAT-003, NFR-LAT-004)",
+  "the display leg from MTLDrawable.presentedTime on a device (the simulator has only GPUEndTime)"
+ ]
+}

@@ -394,7 +394,7 @@ fn send(sender: &mut VideoSender, shared: &Shared, frame: &EncodedFrame) -> Outc
 mod tests {
     use std::net::SocketAddr;
 
-    use vcam_net::{ControlServer, MemoryStore, ServerConfig};
+    use vcam_net::{AdaptReason, ControlServer, MemoryStore, ServerConfig};
     use vcam_video::FrameMeta;
 
     use super::*;
@@ -523,6 +523,46 @@ mod tests {
         a.sent(sent(12, 1)).unwrap();
         assert!(matches!(a.set_quality(101), Err(EncodeError::Quality(101))));
         assert_eq!((a.quality, level(&a)), (90, (90, 0)));
+    }
+
+    /// NET-VID-005 with the device's measured motion-to-photon (NFR-LAT-003): lossless intervals
+    /// whose reports carry a p95 above 120 ms lower the stream; 0 (not measured) never does, and
+    /// the saturated 65535 counts as slow. The host keeps the device's value, as reported.
+    #[test]
+    fn the_devices_m2p_report_drives_the_session_adapter() {
+        let run = |m2p_p95_ms: u16| {
+            let mut a = Adaptation {
+                quality: 80,
+                max_resolution_drop: 1,
+                session: None,
+                report: None,
+            };
+            for seq in 1..=2 {
+                for id in seq * 15 - 14..=seq * 15 {
+                    a.sent(sent(7, id)).unwrap();
+                }
+                let report = VideoReport {
+                    report_seq: seq,
+                    newest_frame_id: seq * 15,
+                    frames_complete: seq * 15,
+                    m2p_p95_ms,
+                };
+                a.report(7, report).unwrap();
+            }
+            a
+        };
+        let slow = run(150);
+        assert_eq!(slow.level().quality, 70);
+        let info = slow.info().unwrap();
+        assert_eq!(info.stats.lost, 0, "no loss: the step is the M2P's");
+        assert_eq!(info.report.map(|r| r.m2p_p95_ms), Some(150));
+        assert_eq!(
+            info.stats.last_change.map(|c| c.reason),
+            Some(AdaptReason::MotionToPhoton { m2p_p95_ms: 150 })
+        );
+        assert_eq!(run(120).level().quality, 80, "the limit itself is fine");
+        assert_eq!(run(0).level().quality, 80, "0 = not measured");
+        assert_eq!(run(u16::MAX).level().quality, 70, "saturated is slow");
     }
 
     #[test]

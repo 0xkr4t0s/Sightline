@@ -612,6 +612,37 @@ Flag (no requirement changed): §1.4 lists the Network framework (`NetworkConnec
 - `BlenderAddOn/` stays **GPL-3.0-or-later** (`BlenderAddOn/LICENSE`, manifest). The `vcam_native` wheel it bundles is Apache-2.0 source, which is GPL-3.0 compatible, so C-1 holds.
 - `SightlineIOS/` stays **Apache-2.0**. Because `vcam-protocol` is now Apache-2.0, ARC-007 (sharing it with iOS through UniFFI) is licence-clear. No requirement text changed.
 
+### 13.7 Motion-to-photon measurement note — 2026-09-28 (task 2.6, **simulator numbers**: iPhone 17 simulator and headless Blender on one Apple M4 Pro, loopback)
+
+Setup: `tools/latency/run_simulator.sh` runs the QA host (Blender 5.2.2, QA scene) and the real app in the simulator's QA mode (scripted `orbit` poses instead of ARKit) at 960×540 JPEG (quality 80 at the end of the run), 30 fps cap, for 60 s after an 8 s warm-up. It saves the host report (`vcam-latency` format 2) and the app's `latency-device.json`, and `tools/latency/merge_report.py` merges them into `reports/latency-2026-09-28-simulator.json` (`"environment": "simulator"`).
+
+Method:
+
+- **M2P** is measured on the device as NFR-LAT-003 defines it: display time − capture time of the frame's `pose_seq`, both on the device's mach clock. The simulator SDK has no `MTLDrawable.presentedTime`, so the simulator's display time is the frame's `MTLCommandBuffer.GPUEndTime`. That is a **lower bound**: it leaves out the wait for the next display refresh (up to one refresh interval). The display leg has the same limit.
+- **Host legs** (pose leg, render/readback, encode, send) are timed on the host; the pose leg crosses clocks through the `CLOCK` offset (§13.4). **Device legs** (receive/reassembly, decode, display) are timed on the device.
+- **Network leg:** the two clocks differ, so a fragment's flight can't be timed from either side. The report derives it at each percentile as M2P − (pose leg + render/readback + encode + receive + decode + display). Send isn't subtracted because it overlaps receive. Percentiles don't add, so the value is an estimate, clamped at 0. It also holds the host waits that no leg times (apply → next render tick, draw → readback on the next tick, readback → encoder), so it is an upper bound on network time. As a cross-check the report gives half the `CLOCK` round trip: 0.03 ms on loopback. Almost all of the residual is therefore host waiting, not network.
+
+Results (p50 / p95 / p99, ms; 60 s, 1566 frames shown):
+
+| Leg | p50 | p95 | p99 |
+|---|---|---|---|
+| Pose leg (host) | 8.49 | 16.03 | 16.81 |
+| Render/readback (host) | 2.18 | 3.19 | 9.07 |
+| Encode (host, debug wheel) | 37.75 | 39.01 | 39.50 |
+| Send (host) | 0.69 | 0.77 | 0.81 |
+| Network (derived, upper bound) | 49.6 | 40.1 | 29.2 |
+| Receive/reassembly (device) | 0.7 | 1.9 | 2.1 |
+| Decode (device) | 2.4 | 5.7 | 6.1 |
+| Display (device, GPUEndTime) | 0.9 | 14.1 | 17.2 |
+| **M2P (device, lower bound)** | **102** | **120** | **120** |
+
+Findings (no requirement changed):
+
+- **Verdict: NFR-LAT-003 Stage A met in the simulator only, at the limit.** M2P p95 = 120 ms against ≤ 120 ms. Device percentiles are the upper edges of 1 ms bins. Two other runs of the same setup gave M2P p95 108 ms (60 s) and 112 ms (15 s). The host's summary of the device's `VIDEO_REPORT` values (p95 over each ~500 ms) was p50 110 / p95 121 ms over 134 reports.
+- **The encode leg is a debug build.** Local release wheels can fail to load on macOS 27 (docs/LOOP_LOG.md), so Blender runs the debug `vcam_native` wheel. Its JPEG encode takes ~38 ms, against ~1 ms for the release encoder at 960×540 in §13.2. A release host should therefore show a much lower M2P, but that is not measured here.
+- NFR-LAT-004's artefact is written as `reports/latency-<date>-<environment>.json`, so simulator and device numbers can't be confused.
+- **Not verified, needs owner:** M2P and every leg on a real iPhone over 5 GHz Wi-Fi; the display leg from `presentedTime` on a device.
+
 ---
 
 ## Appendix A — What changed

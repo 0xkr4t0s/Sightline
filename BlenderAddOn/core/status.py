@@ -5,9 +5,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from .latency import M2P_P95_LIMIT_MS
 from .lens import FocusRack, effective_fit, fov_and_equivalent
 from .render import adapted_resolution
 from .rig import LOCK_HEIGHT, LOCK_ROLL, PAN_ONLY
+
+# vcp.md §6.6: VIDEO_REPORT.m2p_p95_ms saturates at the u16 maximum.
+M2P_SATURATED_MS = 65535
 
 # vcp.md §6.1 tracking_state.
 TRACKING = {
@@ -122,6 +126,19 @@ def _level_label(quality: int, resolution_key: str, drop: int, aspect: float | N
     return f"q{quality} {width}×{height}"
 
 
+def m2p_label(report: dict[str, Any] | None) -> str:
+    """NFR-LAT-003: the motion-to-photon p95 the device measured, from its newest `VIDEO_REPORT`
+    (vcp.md §6.6: 0 = not measured, 65535 = saturated)."""
+    if report is None:
+        return "Device M2P: no report yet"
+    m2p = report["m2p_p95_ms"]
+    if m2p == 0:
+        return "Device M2P: not measured yet"
+    if m2p == M2P_SATURATED_MS:
+        return f"Device M2P p95: ≥ {m2p} ms (saturated)"
+    return f"Device M2P p95: {m2p} ms" + (f" (over {M2P_P95_LIMIT_MS} ms)" if m2p > M2P_P95_LIMIT_MS else "")
+
+
 def adapt_labels(stats: dict[str, Any], resolution_key: str, aspect: float | None = None) -> list[str]:
     """NET-VID-005: the level the stream adapted to, the link's loss and the last change, with
     resolution steps shown as sizes below the user's `resolution_key` (fitted to the render
@@ -134,11 +151,8 @@ def adapt_labels(stats: dict[str, Any], resolution_key: str, aspect: float | Non
         lines = [f"Adaptive: full, {level}"]
     else:
         lines = [f"Adaptive: lowered to {level}"]
-    link = f"Link: {adapt['lost']} of {adapt['expected']} frames lost"
-    report = adapt["report"]
-    if report is not None and report["m2p_p95_ms"]:
-        link += f", M2P p95 {report['m2p_p95_ms']} ms"
-    lines.append(link)
+    lines.append(f"Link: {adapt['lost']} of {adapt['expected']} frames lost")
+    lines.append(m2p_label(adapt["report"]))
     change = adapt["last_change"]
     if change is not None:
         reason = {

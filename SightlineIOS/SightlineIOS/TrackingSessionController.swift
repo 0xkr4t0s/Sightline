@@ -48,6 +48,14 @@ final class TrackingSessionController {
     private(set) var sendLeg: SendLegSummary?
     /// Stream rate and link quality, shown only during a paired session.
     private(set) var stream: StreamStats?
+    /// Motion-to-photon and the device legs of the current session (NFR-LAT-003/004), nil
+    /// without one.
+    private(set) var latency: DeviceLatencySummary?
+    /// The latency details over the viewfinder (receive, decode, display, M2P), saved.
+    var showsLatencyOverlay = UserDefaults.standard.bool(forKey: TrackingSessionController.latencyOverlayKey) {
+        didSet { UserDefaults.standard.set(showsLatencyOverlay, forKey: Self.latencyOverlayKey) }
+    }
+    nonisolated static let latencyOverlayKey = "viewfinder.latencyOverlay"
     /// The Blender camera's lens as the host last reported it (vcp.md §6.4), shown instead of the
     /// phone's own request; nil without a session or before the host sends it.
     private(set) var appliedLens: VCPAppliedLens?
@@ -67,6 +75,10 @@ final class TrackingSessionController {
     /// No new viewfinder frame for more than 250 ms during a run (FR-VF-005).
     private(set) var videoStalled = false
     @ObservationIgnored private let stallWatch = VideoStallWatch()
+    /// The device latency report in Documents, for the NFR-LAT-004 harness.
+    @ObservationIgnored private let latencyReport = DeviceLatencyReportWriter { message in
+        Log.video.error("Latency report not written: \(message, privacy: .public)")
+    }
     /// Pixel size of the frame on screen, retained across stops/reconnects while Metal shows it.
     private(set) var videoFrameSize: CGSize?
     /// Quality and decoded dimensions of the newest frame actually submitted to the drawable.
@@ -162,6 +174,8 @@ final class TrackingSessionController {
                 Log.video.info("Video resumed")
             }
         }
+        let frames = self.pipeline
+        viewfinder?.onPresented = { frames.framePresented($0) }
         viewfinder?.onShown = { [weak self] frame in
             guard let self else { return }
             stallWatch.frameShown()
@@ -433,6 +447,7 @@ final class TrackingSessionController {
             poseRate = nil
             sendLeg = nil
             stream = nil
+            latency = nil
             appliedLens = nil
             lastReconnectSeconds = nil
             runHasVideo = false
@@ -475,6 +490,8 @@ final class TrackingSessionController {
         liveSession = nil
         sessionEndpoint = nil
         stream = nil
+        latency = nil
+        latencyReport.flush()
         pipeline.start(TrackingDestination(host: "", port: 0, endpoint: nil))
         lastError = reason
         sessionStatus = "Reconnecting to Blender"
@@ -508,6 +525,7 @@ final class TrackingSessionController {
             liveSession = link
             sessionEndpoint = link.endpoint
             stream = nil
+            latency = nil
             pipeline.start(link.destination)
             watch(link)
             controlSeq = 0
@@ -546,6 +564,8 @@ final class TrackingSessionController {
         liveSession = nil
         sessionEndpoint = nil
         stream = nil
+        latency = nil
+        latencyReport.flush()
         appliedLens = nil
         isTracking = false
         stallWatch.stop()
@@ -651,6 +671,12 @@ final class TrackingSessionController {
         packetsSent = snapshot.packetsSent
         sendLeg = snapshot.sendLeg
         stream = snapshot.stream
+        if snapshot.latency != latency {
+            latency = snapshot.latency
+        }
+        if let measured = snapshot.latency {
+            latencyReport.update(measured, sessionID: snapshot.sessionID)
+        }
         controlSeq = snapshot.controlSeq
         controlAck = snapshot.controlAck
         if snapshot.appliedLens != appliedLens {

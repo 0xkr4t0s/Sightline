@@ -20,6 +20,8 @@ nonisolated struct TrackingSnapshot: Equatable, Sendable {
     var sendLeg: SendLegSummary?
     /// Viewfinder rate and authenticated host link, absent without an active session.
     var stream: StreamStats?
+    /// Device legs and motion-to-photon of this session (NFR-LAT-003/004); nil without one.
+    var latency: DeviceLatencySummary?
 }
 
 /// Where poses go: the host's UDP address and the session that authenticates them (vcp.md §4).
@@ -205,6 +207,12 @@ actor TrackingPipeline {
     private var lastPosePublishNs: UInt64 = 0
     private var reportSeq: UInt32 = 0
     private var reportTimer: DispatchSourceTimer?
+    /// This run's poses by `seq`, so a shown frame's `pose_seq` gives its capture time (NFR-LAT-003).
+    private var captureTimes = PoseCaptureRing()
+    private var latency = DeviceLatencyMeter()
+    /// When the run started and when the newest frame's first fragment was read (CLOCK_UPTIME_RAW).
+    private var runStartNs: UInt64 = 0
+    private var frameStartNs: UInt64 = 0
     /// Bumped by every start and stop, so a host name resolved after its run ended is ignored.
     private var run: UInt64 = 0
 
@@ -256,6 +264,9 @@ actor TrackingPipeline {
                     ? nil : StreamMeter(startNs: clock_gettime_nsec_np(CLOCK_UPTIME_RAW))
                 pipeline.lastPosePublishNs = 0
                 pipeline.reportSeq = 0
+                pipeline.captureTimes = PoseCaptureRing()
+                pipeline.latency = DeviceLatencyMeter()
+                pipeline.runStartNs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
                 pipeline.connect()
                 pipeline.sendNewControlState()
                 pipeline.startLivenessTimer()
@@ -323,6 +334,7 @@ actor TrackingPipeline {
             position: canonical.position, orientation: canonical.orientation,
             trackingState: trackingState)
         snapshot.pose = pose
+        captureTimes.record(seq: seq, captureTimeNs: pose.captureTimeNs)
         if send(.pose(pose)) {
             sendLeg.add(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) &- arrived)
         }
@@ -333,9 +345,24 @@ actor TrackingPipeline {
                 snapshot.stream = meter.snapshot(
                     atNs: arrived, complete: video.stats.complete, lost: video.stats.lost)
                 streamMeter = meter
+                snapshot.latency = latency.summary
             }
             publish(snapshot)
         }
+    }
+
+    /// A viewfinder frame reached the screen (or Metal gave up on it). Callable from any thread
+    /// (Metal's presented handler); frames submitted before this run started are ignored, as
+    /// their `pose_seq` belongs to another run.
+    nonisolated func framePresented(_ frame: PresentedFrame) {
+        queue.async { [weak self] in
+            self?.assumeIsolated { $0.presented(frame) }
+        }
+    }
+
+    private func presented(_ frame: PresentedFrame) {
+        guard destination?.endpoint != nil, frame.submittedNs >= runStartNs else { return }
+        latency.framePresented(frame, captureTimeNs: captureTimes.captureTimeNs(of: frame.poseSeq))
     }
 
     /// Opens the socket for a paired run. An address connects at once; a host name is resolved off
@@ -470,6 +497,7 @@ actor TrackingPipeline {
                     atNs: nowNs,
                     complete: pipeline.video.stats.complete, lost: pipeline.video.stats.lost)
                 pipeline.streamMeter = meter
+                pipeline.snapshot.latency = pipeline.latency.summary
                 if pipeline.snapshot.stream != prior,
                     nowNs - pipeline.lastPosePublishNs >= 100_000_000
                 {
@@ -487,7 +515,8 @@ actor TrackingPipeline {
     }
 
     /// §6.6: every 500 ms from the first valid `VIDEO_FRAGMENT` until the session ends; the totals
-    /// make retransmission unnecessary. Motion-to-photon isn't measured yet (0, task 2.6).
+    /// make retransmission unnecessary. Each carries the motion-to-photon p95 of the frames shown
+    /// since the previous one (0 if none were), which the host's adaptive quality acts on.
     private func startReportTimer() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + Self.videoReportInterval, repeating: Self.videoReportInterval)
@@ -500,7 +529,7 @@ actor TrackingPipeline {
 
     private func sendVideoReport() {
         reportSeq &+= 1
-        _ = send(.videoReport(video.report(seq: reportSeq, m2pP95Ms: 0)))
+        _ = send(.videoReport(video.report(seq: reportSeq, m2pP95Ms: latency.nextReportM2PMs())))
     }
 
     private func cancelReportTimer() {
@@ -540,7 +569,11 @@ actor TrackingPipeline {
             streamMeter?.fragment(dataBytes: fragment.data.count)
             // Stale, duplicate and inconsistent fragments still count as the stream arriving.
             // A completed frame is copied out, as the reassembler reuses its buffer (FR-VF-001).
-            if video.push(fragment) == .complete, let frame = video.frame {
+            let newest = video.newest
+            let outcome = video.push(fragment)
+            if video.newest != newest { frameStartNs = received }
+            if outcome == .complete, let frame = video.frame {
+                latency.frameReceived(firstFragmentNs: frameStartNs, completeNs: received)
                 videoFrame(frame.info, Data(frame.data))
             }
             if reportTimer == nil { startReportTimer() }

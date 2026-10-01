@@ -13,6 +13,7 @@ from core.status import (  # noqa: E402
     frame_label,
     lens_labels,
     locks_label,
+    m2p_label,
     pose_latency_ms,
     scale_label,
     thermal_label,
@@ -96,7 +97,11 @@ def test_adaptation_shows_the_level_as_a_size_below_the_users_and_why_it_changed
         "last_sent": None,
         "adapt": adapt,
     }
-    assert video_labels(stats, '720p')[1:] == ["Adaptive: full, q80 1280×720", "Link: 0 of 0 frames lost"]
+    assert video_labels(stats, '720p')[1:] == [
+        "Adaptive: full, q80 1280×720",
+        "Link: 0 of 0 frames lost",
+        "Device M2P: no report yet",
+    ]
     # At the user's quality but one size down is still lowered.
     adapt.update(
         quality=50,
@@ -119,22 +124,42 @@ def test_adaptation_shows_the_level_as_a_size_below_the_users_and_why_it_changed
     assert video_labels(stats, '720p')[1:] == [
         "Adaptive: lowered to q50 960×540",
         "Link: 40 of 300 frames lost",
+        "Device M2P: not measured yet",
         "Last change: q50 1280×720 → q50 960×540 (5/15 lost)",
     ]
     adapt["report"] = {"m2p_p95_ms": 140}
     adapt["last_change"].update(reason="m2p", lost=None, expected=None, m2p_p95_ms=140)
     assert video_labels(stats, '720p')[2:] == [
-        "Link: 40 of 300 frames lost, M2P p95 140 ms",
+        "Link: 40 of 300 frames lost",
+        "Device M2P p95: 140 ms (over 120 ms)",
         "Last change: q50 1280×720 → q50 960×540 (M2P 140 ms)",
     ]
     adapt["last_change"].update(reason="recovered", m2p_p95_ms=None, from_resolution_drop=2, to_resolution_drop=1)
-    assert video_labels(stats, '720p')[3] == "Last change: q50 640×360 → q50 960×540 (link clear)"
+    assert video_labels(stats, '720p')[4] == "Last change: q50 640×360 → q50 960×540 (link clear)"
+    # The newest report replaces the value (no stale M2P).
+    adapt["report"] = {"m2p_p95_ms": 62}
     # LNS-003: the levels are the frame sizes actually streamed at the render aspect (2.39:1).
     assert video_labels(stats, '720p', 2048 / 858)[1:] == [
         "Adaptive: lowered to q50 960×402",
-        "Link: 40 of 300 frames lost, M2P p95 140 ms",
+        "Link: 40 of 300 frames lost",
+        "Device M2P p95: 62 ms",
         "Last change: q50 640×268 → q50 960×402 (link clear)",
     ]
+
+
+@pytest.mark.parametrize(
+    ("report", "expected"),
+    [
+        (None, "Device M2P: no report yet"),
+        ({"m2p_p95_ms": 0}, "Device M2P: not measured yet"),
+        ({"m2p_p95_ms": 1}, "Device M2P p95: 1 ms"),
+        ({"m2p_p95_ms": 120}, "Device M2P p95: 120 ms"),
+        ({"m2p_p95_ms": 121}, "Device M2P p95: 121 ms (over 120 ms)"),
+        ({"m2p_p95_ms": 65535}, "Device M2P p95: ≥ 65535 ms (saturated)"),
+    ],
+)
+def test_device_m2p_line_follows_the_newest_video_report(report, expected):
+    assert m2p_label(report) == expected
 
 
 def test_lens_labels_show_the_camera_values_and_derived_fov():

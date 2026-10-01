@@ -2,12 +2,14 @@
 """The stream skips GPU work when draw or readback exhausts the main-thread budget."""
 
 import sys
+import types
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from core import render as stream_render  # noqa: E402
 from core.lens import render_aspect  # noqa: E402
 from core.render import (  # noqa: E402
     STREAM_RESOLUTIONS,
@@ -185,3 +187,32 @@ def test_adaptive_steps_keep_the_render_aspect_through_the_boxes():
 )
 def test_thermal_step_keeps_the_render_aspect(key, drop, thermal, expected):
     assert thermal_stream_settings(key, 30, drop, thermal, SCOPE) == expected
+
+
+class FakeOffScreen:
+    def __init__(self, width, height, format):
+        self.texture_color = types.SimpleNamespace(read=lambda: b"pixels")
+
+    def free(self):
+        pass
+
+
+def test_render_readback_leg_is_the_submitted_frames_own_draw_plus_read(monkeypatch):
+    """NFR-LAT-004: pipelined, a frame is drawn on one tick and read on the next; its leg adds both."""
+    fake_gpu = types.SimpleNamespace(types=types.SimpleNamespace(GPUOffScreen=FakeOffScreen))
+    monkeypatch.setitem(sys.modules, "gpu", fake_gpu)
+    # perf_counter_ns readings in call order: draw 1 (4 ms); read 1 (1 ms), draw 2 (6 ms); read 2 (2 ms).
+    clock = iter([0, 4_000_000, 10_000_000, 11_000_000, 11_000_000, 17_000_000, 20_000_000, 22_000_000])
+    monkeypatch.setattr(stream_render.time, "perf_counter_ns", lambda: next(clock))
+    slot = types.SimpleNamespace(submit=lambda pixels, seq, drawn_ns: seq * 10)
+    renderer = stream_render.StreamRenderer(slot)
+    monkeypatch.setattr(renderer, "_draw", lambda *args: None)
+    camera = object()
+    assert renderer.tick(None, None, None, camera, 1, 100) is None
+    assert renderer.frame_render_ns is None  # drawn, nothing submitted yet
+    assert renderer.tick(None, None, None, camera, 2, 200) == 10
+    assert renderer.frame_render_ns == 4_000_000 + 1_000_000
+    assert (renderer.draw_ns, renderer.read_ns) == (6_000_000, 1_000_000)  # this tick's cost, for the pacer
+    assert renderer.tick(None, None, None, None, 0, 300) == 20
+    assert renderer.frame_render_ns == 6_000_000 + 2_000_000
+    assert renderer.tick(None, None, None, None, 0, 400) is None and renderer.frame_render_ns is None

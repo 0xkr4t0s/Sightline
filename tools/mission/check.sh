@@ -14,7 +14,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 cd "${ROOT}"
 
 # The CI blender-smoke scripts plus the two GPU-only render checks (CI runners have no GPU).
-BLENDER_TESTS="${BLENDER_TESTS:-smoke_native session_native addon_session addon_apply addon_lens addon_focus addon_panel addon_robust pose_leg_latency video_native render_offscreen render_session render_thermal}"
+BLENDER_TESTS="${BLENDER_TESTS:-smoke_native session_native addon_session addon_apply addon_lens addon_focus addon_panel addon_robust pose_leg_latency video_native render_offscreen render_session render_latency render_thermal}"
 
 suite_rust() {
   (cd native && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test) || return 1
@@ -63,7 +63,8 @@ suite_ios() {
     SightlineIOS/scripts/coverage_check.sh "${bundle}/debug.xcresult" 75 | tail -1 &&
     xcodebuild test -configuration Release -project SightlineIOS/SightlineIOS.xcodeproj -scheme SightlineIOS \
       -destination "${IOS_DESTINATION}" -resultBundlePath "${bundle}/release" \
-      -only-testing:SightlineIOSTests/TrackingPipelineTests/testPoseSendPathAllocatesNothing
+      -only-testing:SightlineIOSTests/TrackingPipelineTests/testPoseSendPathAllocatesNothing \
+      -only-testing:SightlineIOSTests/DeviceLatencyTests/testRecordingPosesAndFramesAllocatesNothing
 }
 
 suites=("$@")

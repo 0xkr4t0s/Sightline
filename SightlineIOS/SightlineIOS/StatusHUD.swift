@@ -151,10 +151,33 @@ nonisolated struct ThermalStatus: Equatable, Sendable {
 
 /// FR-VF-004: display only facts from the decoded frame that was handed to Metal, not the
 /// requested stream setting, and the lens Blender reports, not the one the phone asked for.
-/// Latency stays unknown until its later milestone.
+/// Motion-to-photon is what the device measured and last reported to Blender.
 nonisolated enum HUDFields {
     static let noLens = "Focal — · Focus — · f/— · FOV —"
-    static let m2p = "—"
+    static let unknown = "—"
+
+    /// `hud.m2p`: the p95 of the latest `VIDEO_REPORT` (NFR-LAT-003), "—" while not measured.
+    static func m2p(_ latency: DeviceLatencySummary?) -> String {
+        guard let ms = latency?.reportedM2PMs, ms > 0 else { return unknown }
+        return ms == UInt16.max ? "≥ 65535 ms" : "\(ms) ms"
+    }
+
+    /// The latency overlay (NFR-LAT-004): the session's device legs and M2P as p50/p95/p99 in ms,
+    /// two lines.
+    static func latency(_ latency: DeviceLatencySummary?) -> [String] {
+        func leg(_ name: String, _ summary: LatencySummary?, decimals: Int) -> String {
+            guard let summary else { return "\(name) \(unknown)" }
+            let values = [summary.p50, summary.p95, summary.p99].map {
+                String(format: "%.\(decimals)f", Double($0) / 1e6)
+            }
+            return "\(name) \(values.joined(separator: "/"))"
+        }
+        return [
+            "p50/p95/p99 ms · " + leg("Receive", latency?.receive, decimals: 1) + " · "
+                + leg("Decode", latency?.decode, decimals: 1),
+            leg("Display", latency?.display, decimals: 1) + " · " + leg("M2P", latency?.m2p, decimals: 0),
+        ]
+    }
 
     /// The applied lens (vcp.md §6.4) with the horizontal FOV and 35 mm-equivalent focal length
     /// (LNS-002), which are unknown unless Blender fits the sensor horizontally. C formatting, so
@@ -245,6 +268,8 @@ nonisolated struct HUDLayout: Equatable, Sendable {
     let controlRail: CGRect
     let lensPanel: CGRect
     let dataPanel: CGRect
+    /// Under the status strip, above `centre` and left of the lens panel: the latency details.
+    let latencyOverlay: CGRect
     let centre: CGRect
 
     /// Both rectangles use the safe-area reader's coordinates, not global screen coordinates.
@@ -269,5 +294,8 @@ nonisolated struct HUDLayout: Equatable, Sendable {
         dataPanel = CGRect(
             x: 0, y: size.height - panelHeight,
             width: min(430, size.width - railWidth), height: panelHeight)
+        latencyOverlay = CGRect(
+            x: 0, y: stripHeight, width: max(0, size.width - lensWidth),
+            height: max(0, centre.minY - Self.centreMargin - stripHeight))
     }
 }
